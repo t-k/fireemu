@@ -422,5 +422,90 @@ class WrapperTest(unittest.TestCase):
         self.assertEqual(self.root.read_text(), "not a directory")
 
 
+class VoltaShimTest(unittest.TestCase):
+    """A Volta shim run without a Volta install respawns itself without limit (2026-11-12, about
+    9,500 processes). The wrapper drops such a PATH entry before the test starts and never runs it."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+        self.marker = self.base / "shim-was-executed"
+        self.shim_dir = self.base / ".volta" / "bin"
+        self.shim_dir.mkdir(parents=True)
+        shim = self.shim_dir / "node"
+        shim.write_text(f"#!/bin/sh\necho ran >> '{self.marker}'\nexit 99\n")
+        shim.chmod(0o755)
+        self.other = self.base / "other"
+        self.other.mkdir()
+
+    def run_wrapped(self, env, script='printf "%s" "$PATH"'):
+        parent = self.base / "tmp"
+        parent.mkdir(exist_ok=True)
+        environment = {"PATH": env["PATH"], "TMPDIR": f"{parent}/"}
+        environment.update({key: value for key, value in env.items() if key != "PATH"})
+        return subprocess.run(
+            [SHELL, str(WRAPPER), SHELL, "-c", script],
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+    def test_a_shim_without_an_install_is_dropped_and_never_run(self):
+        empty_home = self.base / "empty-home"
+        empty_home.mkdir()
+        for env in (
+            {"HOME": str(empty_home)},
+            {"HOME": str(empty_home), "VOLTA_HOME": str(self.base / "no-volta")},
+        ):
+            path = f"{self.shim_dir}:{self.other}:/usr/bin:/bin"
+            result = self.run_wrapped({"PATH": path, **env}, 'printf "%s" "$PATH"; command -v node || true')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(result.stdout.startswith(f"{self.other}:/usr/bin:/bin"), result.stdout)
+            self.assertNotIn(str(self.shim_dir), result.stdout)
+            self.assertFalse(self.marker.exists(), "the shim was executed")
+
+    def test_a_shim_symlinked_to_volta_shim_outside_a_dot_volta_directory_is_dropped(self):
+        store = self.base / "store"
+        store.mkdir()
+        target = store / "volta-shim"
+        target.write_text(f"#!/bin/sh\necho ran >> '{self.marker}'\nexit 99\n")
+        target.chmod(0o755)
+        link_dir = self.base / "links"
+        link_dir.mkdir()
+        (link_dir / "node").symlink_to(target)
+        result = self.run_wrapped(
+            {"PATH": f"{link_dir}:{self.other}:/usr/bin:/bin", "HOME": str(self.base / "empty"), "VOLTA_HOME": str(self.base / "none")}
+        )
+        self.assertEqual(result.stdout, f"{self.other}:/usr/bin:/bin", result.stderr)
+        self.assertFalse(self.marker.exists())
+
+    def test_a_shim_with_a_volta_install_is_kept(self):
+        volta = self.base / "volta"
+        for root in (volta, self.base / ".volta"):
+            (root / "tools/image/node/22.1.0/bin").mkdir(parents=True)
+            (root / "tools/image/node/22.1.0/bin/node").write_text("#!/bin/sh\n")
+        path = f"{self.shim_dir}:{self.other}:/usr/bin:/bin"
+        for env in ({"VOLTA_HOME": str(volta)}, {"HOME": str(self.base), "VOLTA_HOME": ""}):
+            result = self.run_wrapped({"PATH": path, **env})
+            self.assertEqual(result.stdout, path, result.stderr)
+        self.assertFalse(self.marker.exists())
+
+    def test_a_directory_with_a_real_node_is_kept_and_order_is_preserved(self):
+        real = self.base / "real"
+        real.mkdir()
+        (real / "node").write_text("#!/bin/sh\nexit 0\n")
+        (real / "node").chmod(0o755)
+        path = f"{real}:{self.shim_dir}:{self.other}:/usr/bin:/bin:"
+        result = self.run_wrapped({"PATH": path, "HOME": str(self.base / "empty")})
+        self.assertEqual(result.stdout, f"{real}:{self.other}:/usr/bin:/bin:", result.stderr)
+
+    def test_a_path_without_a_shim_is_unchanged(self):
+        path = f"{self.other}:/usr/bin:/bin"
+        result = self.run_wrapped({"PATH": path, "HOME": str(self.base / "empty")})
+        self.assertEqual(result.stdout, path)
+
+
 if __name__ == "__main__":
     unittest.main()

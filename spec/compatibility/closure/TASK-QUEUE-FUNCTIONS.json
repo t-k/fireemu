@@ -1613,8 +1613,8 @@
     "Two production recordings (stage 1) back the verified conditions; the parent stays IMPLEMENTING until an independent review approves the record.",
     "The in-memory Cloud Tasks of the recorder's tests is a model of documented rules, not an observation; no judge accepts a shape from it.",
     "A queue id cannot be created again for days after a delete (400 'existed too recently', measured 2026-11-07), so each attempt of a recording needs new function ids and a failed attempt costs a deploy.",
-    "The reuse window of a task id is refused for 3600 seconds under strict productionExact (documented as about one hour); its expiry was not observed.",
-    "The production default queue retries 100 times; fireemu's strict profile keeps the retry configuration the function declares and the official emulator's default for one that declares none (a known difference, not a claim)."
+    "The reuse window of a task id is refused for 3600 seconds under strict productionExact (`functions.taskNameReuse` `production`, documented as about one hour); its expiry was not observed. The default profile frees a finished name at once, and an explicit key wins over productionExact.",
+    "Production's default queue retry config comes from a recording: the default queue of a function that declared no retry options read back (getQueue, both runs) with maxAttempts 100, minBackoff 0.100 s, maxBackoff 3600 s and maxDoublings 16 and no maxRetryDuration, the Cloud Tasks documentation's defaults. `functions.taskRetryDefaults` `production` (selected by productionExact) fills maxAttempts 100 for a field the function does not declare; the default profile keeps the official emulator's 3 attempts, and a declared value is always kept."
   ],
   "outOfScope": [
     "Production deployment parity of task queue functions beyond the queue settings.",

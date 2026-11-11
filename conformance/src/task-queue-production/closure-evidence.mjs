@@ -173,8 +173,8 @@ export function derive(record) {
 
 const ADDED_LIMITATIONS = Object.freeze([
   "Two production recordings (stage 1) back the verified conditions; the parent stays IMPLEMENTING until an independent review approves the record.",
-  "The reuse window of a task id is refused for 3600 seconds under strict productionExact (documented as about one hour); its expiry was not observed.",
-  "The production default queue retries 100 times; fireemu's strict profile keeps the retry configuration the function declares and the official emulator's default for one that declares none (a known difference, not a claim).",
+  "The reuse window of a task id is refused for 3600 seconds under strict productionExact (`functions.taskNameReuse` `production`, documented as about one hour); its expiry was not observed. The default profile frees a finished name at once, and an explicit key wins over productionExact.",
+  "Production's default queue retry config comes from a recording: the default queue of a function that declared no retry options read back (getQueue, both runs) with maxAttempts 100, minBackoff 0.100 s, maxBackoff 3600 s and maxDoublings 16 and no maxRetryDuration, the Cloud Tasks documentation's defaults. `functions.taskRetryDefaults` `production` (selected by productionExact) fills maxAttempts 100 for a field the function does not declare; the default profile keeps the official emulator's 3 attempts, and a declared value is always kept.",
 ]);
 
 export const applyEvidence = (record) => {
@@ -182,7 +182,9 @@ export const applyEvidence = (record) => {
   const kept = record.limitations.filter(
     (text) =>
       !ADDED_LIMITATIONS.includes(text) &&
-      !/No production observation exists yet|task reuse window is documented/.test(text),
+      !/No production observation exists yet|task reuse window is documented|^The reuse window of a task id is refused|^The production default queue retries 100 times|^Production's default queue retry config/.test(
+        text,
+      ),
   );
   return {
     ...record,

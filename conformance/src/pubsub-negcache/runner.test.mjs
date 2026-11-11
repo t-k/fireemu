@@ -1003,6 +1003,49 @@ for (const cellName of ["p1", "p2", "p3"]) {
   }
 }
 
+for (const cellName of ["p1", "p2", "p3"]) {
+  for (const [status, code] of [
+    [429, "RESOURCE_EXHAUSTED"],
+    [400, "INVALID_ARGUMENT"],
+  ]) {
+    for (const params of [{}, { positiveExempt: false, ttl: 12000 }]) {
+      test(`S1 of the m1 delta review: a ${status} on the ${cellName} snapshot re-create (${JSON.stringify(params)}) leaves the name open until the cleanup LIST reads it`, async () => {
+        let puts = 0;
+        const { run, world, recorder } = record({
+          params,
+          wrap: async (base, req, meta, clock) => {
+            if (req.method === "PUT" && req.path.includes(`-nc-${cellName}-y`)) {
+              puts += 1;
+              if (puts === 2) {
+                await clock.sleep(300);
+                const t = clock.now();
+                return {
+                  startedAt: t - 300,
+                  headersAt: t,
+                  completedAt: t,
+                  status,
+                  bodyText: JSON.stringify({
+                    error: { code: status, message: "refused", status: code },
+                  }),
+                };
+              }
+            }
+            return base(req, meta);
+          },
+        });
+        const out = await run();
+        assert.equal(puts, 2, "the re-create was sent once");
+        const name = nameOf("y", cellName);
+        // never "never-created": the earlier incarnation's state is back, so the cleanup read it
+        assert.notEqual(recorder.ledger.status(name), "never-created");
+        if (out.closureReady) assert.equal(world.state.snapshot.size, 0, JSON.stringify(out.open));
+        assert.equal(world.state.snapshot.size, 0);
+        assert.ok(out.closureReady, JSON.stringify(out.open));
+      });
+    }
+  }
+}
+
 for (const [cell, role, op, kind] of [
   ["a2", "x", "subscriptions", "sub"],
   ["a8", "y", "snapshots", "snap"],

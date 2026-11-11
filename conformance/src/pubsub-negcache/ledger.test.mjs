@@ -172,7 +172,7 @@ test("a new incarnation answered 2xx or a known error is judged on its own, a 40
   for (const [result, status] of [
     ["ok", "live"],
     ["conflict", "delete-present"],
-    ["notfound", "never-created"],
+    ["notfound", "deleted"],
   ]) {
     const ledger = createLedger();
     create(ledger, "ok");
@@ -358,4 +358,44 @@ test("M1 of the v4 delta review: a 409 after an absence read never reads deleted
   // only a later absence (a complete LIST) closes it again
   ledger.read(N, "absent", "list");
   assert.equal(ledger.status(N), "deleted");
+});
+
+test("S1 of the m1 delta review: a known refusal of a re-create restores the earlier incarnation, and only a 409 proves presence", () => {
+  for (const result of ["notfound", "error"]) {
+    // never read: the cleanup LIST settles it
+    const unread = createLedger();
+    create(unread, "ok");
+    del(unread, "ok");
+    create(unread, result);
+    assert.equal(unread.status(N), "delete-unread", result);
+    assert.ok(!unread.closureReady(), result);
+    unread.read(N, "absent", "list");
+    assert.equal(unread.status(N), "deleted", result);
+    // read absent before the refusal: the refusal created nothing, the absence still stands
+    const absent = createLedger();
+    create(absent, "ok");
+    del(absent, "ok");
+    absent.read(N, "absent", "get");
+    create(absent, result);
+    assert.equal(absent.status(N), "deleted", result);
+    // read present before the refusal stays present
+    const present = createLedger();
+    create(present, "ok");
+    del(present, "ok");
+    present.read(N, "present", "list");
+    create(present, result);
+    assert.equal(present.status(N), "delete-present", result);
+    assert.deepEqual(present.deletable(), [N], result);
+  }
+  // a refusal of a fresh name (no earlier incarnation) is still a rejected create
+  const fresh = createLedger();
+  create(fresh, "error");
+  assert.equal(fresh.status(N), "never-created");
+  // a refusal after an unknown re-create does not undo it
+  const lost = createLedger();
+  create(lost, "ok");
+  del(lost, "ok");
+  create(lost, "unknown");
+  create(lost, "error");
+  assert.equal(lost.status(N), "unconfirmed-create");
 });

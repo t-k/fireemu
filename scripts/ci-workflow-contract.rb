@@ -151,6 +151,8 @@ assert(latest_jobs.dig("published-light", "if") == "(github.event_name == 'sched
 assert(latest_jobs.dig("published-broad", "if") == "(github.event_name == 'schedule' && github.event.schedule == '0 3 * * 2') || (github.event_name == 'workflow_dispatch' && inputs.suite == 'broad')", "broad must run only on weekly schedule or broad dispatch")
 assert(latest_jobs.dig("latest-sdk-under-exec", "if") == "github.event_name != 'schedule' || github.event.schedule == '0 3 * * 2'", "source build must skip the daily schedule")
 assert(latest_jobs.dig("published-broad", "steps").find { |step| step["name"] == "run published package smokes" }.fetch("run").lines.map(&:strip).include?("./node_modules/.bin/fireemu exec --firebase-json listener-replacement.firebase.json --only firestore --project demo-app --hub-port 0 -- node listener-replacement.mjs"), "broad must run the Firestore listener smoke with its Firebase configuration")
+broad_run_lines = latest_jobs.dig("published-broad", "steps").find { |step| step["name"] == "run published package smokes" }.fetch("run").lines.map(&:strip)
+assert(broad_run_lines.include?("./node_modules/.bin/fireemu exec --project demo-app --hub-port 0 -- node firestore-contention.mjs") && broad_run_lines.include?("./node_modules/.bin/fireemu exec --project demo-app --hub-port 0 -- node txn-order.mjs") && broad_run_lines.last == "./node_modules/.bin/fireemu exec --config fireemu.smoke.json --project demo-app --functions functions-project --functions-port 5001 --hub-port 0 -- node functions.mjs", "broad must run both transaction smokes and run functions last")
 
 sdk = load_workflow("functions-sdk-discovery.yml")
 sdk_trigger = sdk["on"] || sdk[true]

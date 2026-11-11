@@ -9,7 +9,7 @@ name: sdk-latest
 # The source job runs on pull requests, pushes, dispatches, and the weekly schedule.
 # published-light runs npm packages on the daily schedule and light dispatch with Storage and client smokes.
 # published-broad runs weekly and on broad dispatch with Storage, client, functions, auth,
-# Firestore listener, and transaction smokes.
+# Firestore listener, and Admin and client transaction smokes.
 # Both published jobs record passing combinations as artifacts only; they never write a cache,
 # push, or open a pull request.
 
@@ -211,7 +211,7 @@ jobs:
         run: |
           set -eu
           dir="$RUNNER_TEMP/sdk-latest-published"
-          cp tools/sdk-smoke/storage.mjs tools/sdk-smoke/client.mjs tools/sdk-smoke/functions.mjs tools/sdk-smoke/auth.mjs tools/sdk-smoke/server-timestamp-transaction-query.mjs tools/sdk-smoke/fireemu.auth.json tools/sdk-smoke/fireemu.smoke.json "$dir/"
+          cp tools/sdk-smoke/storage.mjs tools/sdk-smoke/client.mjs tools/sdk-smoke/functions.mjs tools/sdk-smoke/auth.mjs tools/sdk-smoke/firestore-contention.mjs tools/sdk-smoke/txn-order.mjs tools/sdk-smoke/fireemu.auth.json tools/sdk-smoke/fireemu.smoke.json "$dir/"
           cp tools/sdk-smoke/listener-replacement.mjs tools/sdk-smoke/listener-runtime-compat.mjs tools/sdk-smoke/listener-replacement.firebase.json tools/sdk-smoke/listener-replacement.rules "$dir/"
           cp -R tools/sdk-smoke/functions-project "$dir/functions-project"
           cd "$dir"
@@ -227,10 +227,11 @@ jobs:
           cd "$RUNNER_TEMP/sdk-latest-published"
           ./node_modules/.bin/fireemu exec --project demo-app --hub-port 0 -- node storage.mjs
           ./node_modules/.bin/fireemu exec --project demo-app --hub-port 0 -- node client.mjs
-          ./node_modules/.bin/fireemu exec --config fireemu.smoke.json --project demo-app --functions functions-project --functions-port 5001 --hub-port 0 -- node functions.mjs
           ./node_modules/.bin/fireemu exec --config fireemu.auth.json --project demo-app --only auth -- node auth.mjs
-          ./node_modules/.bin/fireemu exec --project demo-app --hub-port 0 -- node server-timestamp-transaction-query.mjs
+          ./node_modules/.bin/fireemu exec --project demo-app --hub-port 0 -- node firestore-contention.mjs
+          ./node_modules/.bin/fireemu exec --project demo-app --hub-port 0 -- node txn-order.mjs
           ./node_modules/.bin/fireemu exec --firebase-json listener-replacement.firebase.json --only firestore --project demo-app --hub-port 0 -- node listener-replacement.mjs
+          ./node_modules/.bin/fireemu exec --config fireemu.smoke.json --project demo-app --functions functions-project --functions-port 5001 --hub-port 0 -- node functions.mjs
       - name: record passing combination
         run: |
           set -eu

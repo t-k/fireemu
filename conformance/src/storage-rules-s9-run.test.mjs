@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
 
-import { createProductionDeps, createRehearsalDeps, fetchNet } from "./storage-rules-s9/deps.mjs";
+import { createProductionDeps, fetchNet } from "./storage-rules-s9/deps.mjs";
 import { observe, readback } from "./storage-rules-s9/observe.mjs";
 import { BUCKET, ESTIMATED_USD, PROJECT, S9_PLAN } from "./storage-rules-s9/plan.mjs";
 import {

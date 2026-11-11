@@ -2207,6 +2207,101 @@ async fn a_callable_served_as_an_onrequest_function_passes_the_strict_bearer_che
     h.stop().await;
 }
 
+/// The credentials the strict daemon refuses itself for a callable (`strict_callable_bearer_unverified`:
+/// a single Bearer that is not a user of the project). The names are those of the FUNCTIONS-HTTP-CALLABLE-INGRESS
+/// corpus, so that a recorded answer is filled in by case name.
+const INGRESS_SHAPES: [(&str, &str); 3] = [
+    ("malformed-bearer", "Bearer malformed"),
+    ("lowercase-scheme", "bearer malformed"),
+    (
+        "unsigned-jwt",
+        "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ4In0.c2ln",
+    ),
+];
+
+/// A production answer as the observation records it: status, content-type and the body's exact bytes.
+struct RecordedAnswer {
+    status: u16,
+    content_type: &'static str,
+    body: &'static str,
+}
+
+/// The production answer of a callable's code deployed as a plain onRequest function (the `wrapper` run
+/// of FUNCTIONS-HTTP-CALLABLE-INGRESS) to `case`. Fill this from the recording; `None` keeps the tests
+/// below ignored-by-design until then.
+fn recorded_wrapper_answer(_case: &str) -> Option<RecordedAnswer> {
+    None
+}
+
+/// The production answer of a real callable (the `callable` run) to `case`.
+fn recorded_callable_answer(_case: &str) -> Option<RecordedAnswer> {
+    None
+}
+
+fn assert_recorded(
+    response: &fireemu_adapter_functions::http::ProxiedResponse,
+    case: &str,
+    recorded: &RecordedAnswer,
+) {
+    assert_eq!(response.status, recorded.status, "{case}: status");
+    assert_eq!(
+        response_header(response, "content-type"),
+        Some(recorded.content_type),
+        "{case}: content-type"
+    );
+    assert_eq!(
+        response.body,
+        recorded.body.as_bytes(),
+        "{case}: body bytes"
+    );
+}
+
+/// FUNCTIONS-HTTP-CALLABLE-INGRESS, `wrapper` run: production hands these credentials to the function, so
+/// the callable's wrapper refuses them with its own answer. The strict daemon refuses them before the
+/// runner for a code-level callable served as onRequest, and today it answers the front end's page there.
+/// Once the recording is filled in, strict answers the wrapper's recorded refusal instead.
+#[tokio::test]
+#[ignore = "fill recorded_wrapper_answer from the FUNCTIONS-HTTP-CALLABLE-INGRESS wrapper run"]
+async fn strict_callable_served_as_onrequest_answers_the_recorded_wrapper_refusal() {
+    use fireemu_adapter_functions::http::FunctionsHttpProfile::Strict;
+    let h = start_with_env_marking(
+        false,
+        vec![("FIREEMU_FAKE_CONSUME".to_owned(), "disabled".to_owned())],
+        Strict,
+        false,
+        &["echo"],
+    )
+    .await;
+    for (case, authorization) in INGRESS_SHAPES {
+        let recorded = recorded_wrapper_answer(case)
+            .unwrap_or_else(|| panic!("{case}: the wrapper run has not been recorded"));
+        let response = h
+            .request("POST", "echo", &[("authorization", authorization)])
+            .await;
+        assert_recorded(&response, case, &recorded);
+    }
+    h.stop().await;
+}
+
+/// FUNCTIONS-HTTP-CALLABLE-INGRESS, `callable` run: the answer of a real callable to the same credentials.
+/// This guards the unmarked callable path (stage 3 recorded the front end's page for it) against being
+/// changed together with the marked path above.
+#[tokio::test]
+#[ignore = "fill recorded_callable_answer from the FUNCTIONS-HTTP-CALLABLE-INGRESS callable run"]
+async fn strict_real_callable_answers_the_recorded_control_refusal() {
+    use fireemu_adapter_functions::http::FunctionsHttpProfile::Strict;
+    let h = start_with_consume_profile(false, "disabled", Strict).await;
+    for (case, authorization) in INGRESS_SHAPES {
+        let recorded = recorded_callable_answer(case)
+            .unwrap_or_else(|| panic!("{case}: the callable run has not been recorded"));
+        let response = h
+            .request("POST", "add", &[("authorization", authorization)])
+            .await;
+        assert_recorded(&response, case, &recorded);
+    }
+    h.stop().await;
+}
+
 #[tokio::test]
 async fn default_functions_http_entry_serves_requests_with_the_emulator_profile() {
     let h = start_with_serve_entry(

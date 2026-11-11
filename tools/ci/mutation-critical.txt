@@ -1,0 +1,4 @@
+# The owner chooses this short set of files that the critical run mutates whole.
+# Patterns use fnmatch syntax on repository-relative paths.
+crates/fireemu-core-rules/src/eval.rs
+crates/fireemu-core-session/src/fault.rs

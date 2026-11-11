@@ -4,6 +4,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import random
 import tempfile
 import unittest
 from pathlib import Path
@@ -494,6 +495,109 @@ class MergeTest(unittest.TestCase):
         merged = summary.merge(self.root, 1)
         (problem,) = merged["problems"]
         self.assertIn("do not match", problem)
+
+
+class SurvivorsTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name) / "shards"
+        self.root.mkdir()
+        self.out = Path(self.tmp.name) / "out"
+        self.survivors = Path(self.tmp.name) / "survivors"
+        self.critical = Path(self.tmp.name) / "critical"
+        self.survivors.write_text("# No accepted survivors\n")
+        self.critical.write_text("# Critical files\ncritical/*.rs\n")
+
+    def run_summary(self, *flags):
+        args = ["--expected-shards", "1", "--survivors", str(self.survivors),
+                "--critical", str(self.critical), *flags, str(self.root), str(self.out)]
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            code = summary.main(args)
+        return code, stderr.getvalue()
+
+    def written(self):
+        return json.loads((self.out / "summary.json").read_text())
+
+    def test_survivor_key_removes_location_only(self):
+        expected = "dir/f.rs: replace foo -> bool with true"
+        self.assertEqual(summary.survivor_key("dir/f.rs:12:9: replace foo -> bool with true"), expected)
+        self.assertEqual(summary.survivor_key("dir/f.rs:200:9: replace foo -> bool with true"), expected)
+        self.assertEqual(summary.survivor_key("unrecognized name"), "unrecognized name")
+
+    def test_survivor_key_random_locations(self):
+        rng = random.Random(1247)
+        for _ in range(200):
+            line, column = rng.randrange(1, 100000), rng.randrange(1, 100000)
+            self.assertEqual(summary.survivor_key(f"dir/f.rs:{line}:{column}: replace foo"), "dir/f.rs: replace foo")
+
+    def test_accepted_survivor_does_not_fail(self):
+        name = "critical/a.rs:12:9: replace foo"
+        self.survivors.write_text("# Reason\ncritical/a.rs: replace foo   \n")
+        write_shard(self.root, 0, [mutant(name, "MissedMutant")])
+        self.assertEqual(self.run_summary("--fail-on-new-critical")[0], 0)
+        self.assertEqual(self.written()["accepted_survivors"], 1)
+        self.assertEqual(self.written()["new_survivors"], [])
+        self.assertIn("1 accepted", (self.out / "summary.md").read_text())
+
+    def test_new_critical_and_noncritical_survivors(self):
+        names = ["critical/sub/a.rs:1:2: replace foo", "other/a.rs:3:4: replace bar"]
+        write_shard(self.root, 0, [mutant(name, "MissedMutant") for name in names])
+        code, stderr = self.run_summary("--fail-on-new-critical")
+        self.assertEqual(code, 2)
+        self.assertIn("critical/sub/a.rs: replace foo", stderr)
+        self.assertEqual(self.written()["new_survivors"], ["critical/sub/a.rs: replace foo", "other/a.rs: replace bar"])
+        self.assertEqual(self.written()["new_critical_survivors"], ["critical/sub/a.rs: replace foo"])
+        self.assertIn("critical", (self.out / "summary.md").read_text())
+        self.critical.write_text("other/no-match.rs\n")
+        self.assertEqual(self.run_summary("--fail-on-new-critical")[0], 0)
+        self.assertEqual(len(self.written()["new_survivors"]), 2)
+
+    def test_old_flag_still_fails_on_new_critical(self):
+        write_shard(self.root, 0, [mutant("critical/a.rs:1:2: replace foo", "MissedMutant")])
+        self.assertEqual(self.run_summary("--fail-on-missed")[0], 2)
+        self.assertEqual(self.run_summary("--fail-on-missed", "--fail-on-new-critical")[0], 2)
+
+    def test_missing_shard_takes_precedence_even_when_accepted(self):
+        self.survivors.write_text("critical/a.rs: replace foo\n")
+        write_shard(self.root, 0, [mutant("critical/a.rs:1:2: replace foo", "MissedMutant")])
+        args = ["--expected-shards", "2", "--survivors", str(self.survivors),
+                "--critical", str(self.critical), "--fail-on-new-critical", str(self.root), str(self.out)]
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(summary.main(args), 1)
+        self.assertEqual(self.written()["accepted_survivors"], 1)
+
+    def test_missing_and_unreadable_lists_fail_closed(self):
+        write_shard(self.root, 0, [mutant("a.rs:1:2: replace foo", "MissedMutant")])
+        for path in (self.survivors, self.critical):
+            saved = path.read_text()
+            path.unlink()
+            code, stderr = self.run_summary()
+            self.assertEqual(code, 1)
+            self.assertTrue(stderr)
+            path.write_text(saved)
+            with mock.patch.object(Path, "read_text", side_effect=PermissionError("denied")):
+                self.assertEqual(self.run_summary()[0], 1)
+        self.assertEqual(self.run_summary()[0], 0)
+        self.assertEqual(self.written()["new_survivors"], ["a.rs: replace foo"])
+
+    def test_hostile_new_survivor_cannot_forge_markdown(self):
+        name = "critical/a.rs:1:2: replace\n### forged `heading`"
+        write_shard(self.root, 0, [mutant(name, "MissedMutant")])
+        self.assertEqual(self.run_summary()[0], 0)
+        self.assertEqual(self.written()["new_survivors"], ["critical/a.rs: replace\n### forged `heading`"])
+        md = (self.out / "summary.md").read_text()
+        self.assertFalse(any(line.startswith("### forged") for line in md.splitlines()))
+        self.assertNotIn("`heading`", md)
+        self.assertIn("\\u000a### forged", md)
+
+    def test_keys_use_raw_names_and_preserve_leading_spaces(self):
+        key = " critical/a.rs: " + "x" * 350
+        self.survivors.write_text(key + "\n")
+        write_shard(self.root, 0, [mutant(" critical/a.rs:12:3: " + "x" * 350, "MissedMutant")])
+        self.assertEqual(self.run_summary()[0], 0)
+        self.assertEqual(self.written()["accepted_survivors"], 1)
 
 
 if __name__ == "__main__":

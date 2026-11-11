@@ -513,10 +513,14 @@ async function readSources() {
   };
 }
 
+/** The source upload requests the budget still allows (the helper stops sending at zero). */
+export const uploadRequestsLeft = (caps, budget) => caps.upload - budget.snapshot().upload;
+
 /** The real effects. `ledger` and `privateRoot` are the private sandbox ledger and directory (a test points them elsewhere). */
 export function productionDeps({
   ledger = join(PRIVATE_ROOT, "runs/sandbox-ledger.jsonl"),
   privateRoot = PRIVATE_ROOT,
+  caps = CAPS,
 } = {}) {
   const git = (args) => execFileAsync("git", args, { cwd: CONFORMANCE });
   return {
@@ -538,7 +542,7 @@ export function productionDeps({
     },
     writeRunFile: (dir, name, text) =>
       writeFile(join(dir, name), text, { mode: 0o600, flag: "wx" }),
-    createBudget: () => createBudget(CAPS),
+    createBudget: () => createBudget(caps),
     createControl: (adcFile, budget) =>
       createControl(adcFile, budget, { extraHosts: [CLOUDBUILD_HOST] }),
     openUploads: ({ runDir, projectNumber, control, budget }) =>
@@ -548,7 +552,7 @@ export function productionDeps({
         projectNumber,
         region: REGION,
         send: storageSend(control),
-        requestsLeft: () => CAPS.upload - budget.snapshot().upload,
+        requestsLeft: () => uploadRequestsLeft(caps, budget),
       }),
     run: undefined,
     fetchImpl: fetch,

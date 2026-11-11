@@ -9,7 +9,7 @@ import { test } from "node:test";
 import { gzipSync } from "node:zlib";
 
 import { forAll, pick, between } from "../../src/fs-ent-pipeline/test-support.mjs";
-import { admit } from "../bearer-observation.mjs";
+import { admit, uploadRequestsLeft } from "../bearer-observation.mjs";
 import { createBudget } from "../harness.mjs";
 import { FAKE_RECEIPT_SCRIPT, deployWorld } from "../production.fake.mjs";
 import { MASKED_TOKEN, PROGRAMS, SLOTS, classOf, judgeRerecord } from "./rerecord-judge.mjs";
@@ -1505,6 +1505,19 @@ test("productionDeps writes the run files and ledger lines of this recorder byte
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("the source upload helper is allowed the requests of both deployments, not of one", () => {
+  const budget = createBudget(CAPS);
+  assert.equal(uploadRequestsLeft(CAPS, budget), 30);
+  for (let i = 0; i < 20; i += 1) budget.take("upload");
+  assert.equal(uploadRequestsLeft(CAPS, budget), 10);
+  assert.equal(uploadRequestsLeft({ upload: 15 }, budget), -5);
+  const { deps, close } = productionDeps();
+  const fromDeps = deps.createBudget();
+  for (let i = 0; i < 30; i += 1) fromDeps.take("upload");
+  assert.throws(() => fromDeps.take("upload"));
+  close();
 });
 
 test("productionDeps reads the reviewed sources", async () => {

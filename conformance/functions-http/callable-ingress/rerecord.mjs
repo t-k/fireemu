@@ -486,14 +486,13 @@ export async function readSources({ directory = HERE, conformance = CONFORMANCE 
 
 /** The real effects of bearer-observation.mjs, with this observation's sources, caps, transport and facts. */
 export function productionDeps({ ledger, privateRoot } = {}) {
-  const base = bearerProductionDeps({ ledger, privateRoot });
+  const base = bearerProductionDeps({ ledger, privateRoot, caps: CAPS });
   const transport = createTransport();
   const collector = createFactsCollector();
   return {
     deps: {
       ...base,
       readSources: () => readSources(),
-      createBudget: () => createBudget(CAPS),
       createControl: (adcFile, budget) => collector.watch(base.createControl(adcFile, budget)),
       fetchImpl: transport.fetchImpl,
     },

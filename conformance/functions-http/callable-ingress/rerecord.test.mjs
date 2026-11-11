@@ -1016,6 +1016,7 @@ async function fakeRun({
   const ledger = [];
   const files = {};
   const waits = [];
+  const authCalls = [];
   const restControl = async (method, url, body, kind = "control", allowed = [200]) => {
     if (url === CLOUDBUILD) {
       world.budget.take(kind);
@@ -1131,10 +1132,13 @@ async function fakeRun({
       readKey: async () => JSON.stringify({ keyString: "k".repeat(24) }),
       createUser: async (_key, budget, _runDir, programId) => {
         budget.take("auth");
+        authCalls.push(["createUser", programId]);
         if (failProgram === programId) throw new Error("Auth signUp returned 400");
         return { ...user, idToken: `${FAKE_JWT}x` };
       },
-      waitForExpiry: async () => {},
+      waitForExpiry: async (token) => {
+        authCalls.push(["waitForExpiry", token]);
+      },
     },
     installSignals: () => {},
     log: () => {},
@@ -1143,7 +1147,7 @@ async function fakeRun({
   const result = await recordRerecord({}, deps, collector);
   transport?.close();
   loopback?.close();
-  return { world, result, ledger, files, sent, waits, collector };
+  return { world, result, ledger, files, sent, waits, collector, authCalls };
 }
 
 test("fake world: the whole path records twelve answers over two deployments, cleans up and writes two ledger lines", async () => {
@@ -1236,6 +1240,60 @@ test("fake world: the whole path records twelve answers over two deployments, cl
     }
   } finally {
     await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("fake world: a user is made for each program, the wait for expiry is only for auth-refusal, and the user is deleted and read back", async () => {
+  const { world, files, authCalls } = await fakeRun();
+  try {
+    assert.deepEqual(authCalls, [
+      ["createUser", "functions-http/callable/auth-context"],
+      ["createUser", "functions-http/callable/auth-refusal"],
+      ["waitForExpiry", `${FAKE_JWT}x`],
+    ]);
+    const actions = files["changes.jsonl"]
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line).action);
+    assert.equal(
+      actions.filter((a) => a === "auth-user-deleted").length,
+      2,
+      "each user is deleted through the run's own log",
+    );
+    assert.equal(actions.filter((a) => a === "function-deleted").length, 2);
+    assert.equal(actions.filter((a) => a === "function-deployed").length, 2);
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("createUser logs through the log it is given and never writes the sandbox ledger", async () => {
+  const { createUser } = await import("../production.mjs");
+  const dir = await mkdtemp(join(tmpdir(), "rerecord-user-"));
+  const original = globalThis.fetch;
+  try {
+    const payload = Buffer.from(
+      JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 }),
+    ).toString("base64url");
+    const token = `e30.${payload}.sig`;
+    globalThis.fetch = async (url) => {
+      assert.match(String(url), /accounts:signUp/);
+      return Response.json({ localId: "l1", idToken: token, email: "x@example.com" });
+    };
+    const logged = [];
+    const user = await createUser(
+      "k".repeat(24),
+      createBudget(CAPS),
+      dir,
+      "program-x",
+      async (action, detail) => logged.push([action, detail]),
+    );
+    assert.equal(user.localId, "l1");
+    assert.deepEqual(logged, [["auth-user-created", "program-x; owned user journaled privately"]]);
+    assert.match(await readFile(join(dir, "owned-users.jsonl"), "utf8"), /signup-accepted/);
+  } finally {
+    globalThis.fetch = original;
+    await rm(dir, { recursive: true, force: true });
   }
 });
 

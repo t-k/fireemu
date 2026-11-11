@@ -118,7 +118,10 @@ fn check(candidate: usize) {
             wrong.push(row.id);
         }
     }
-    assert!(wrong.is_empty(), "rows answered against the candidate: {wrong:?}");
+    assert!(
+        wrong.is_empty(),
+        "rows answered against the candidate: {wrong:?}"
+    );
 }
 
 #[test]

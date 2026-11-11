@@ -315,3 +315,15 @@ test("the pairwise table covers every pair of values of the four axes, with the 
     assert.equal(isNotDelivered(spec.key), ["limit29d", "over31d"].includes(row[1]));
   }
 });
+
+test("the shape keeps the form of a time: the digits of the fraction, the zone, and whether it is text at all", () => {
+  const shape = (key) => shapeOf(materializeCreate(PROGRAM.find((s) => s.key === key), ctx()).json);
+  const scheduled = (key) => JSON.parse(shape(key)).task.scheduleTime;
+  assert.equal(scheduled("sch-20s"), "T.f3Z");
+  assert.equal(scheduled("sch-nanos"), "T.f9Z");
+  assert.equal(scheduled("sch-offset"), "T.f3offset");
+  assert.equal(scheduled("sch-text"), "tomorrow");
+  assert.equal(scheduled("sch-no-zone"), "2026-11-12T00:00:00");
+  assert.equal(scheduled("sch-leap-second"), "TZ");
+  assert.equal(JSON.parse(shape("env-named")).task.scheduleTime, undefined);
+});

@@ -532,7 +532,7 @@ export function shapeOf(json) {
     task.scheduleTime = TIME_LIKE.test(task.scheduleTime)
       ? task.scheduleTime
           .replace(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d/, "T")
-          .replace(/\.\d+/, ".fraction")
+          .replace(/\.(\d+)/, (_, digits) => ".f" + digits.length)
           .replace(/(Z|[+-]\d\d:\d\d)$/, (z) => (z === "Z" ? "Z" : "offset"))
       : task.scheduleTime;
   return JSON.stringify(copy);

@@ -4253,7 +4253,10 @@ mod config_reload_tests {
         let state = build(&cfg);
         assert!(path.is_dir());
         release_storage_spill(&state);
-        assert!(!path.exists(), "shutdown must remove the spill directory while the state is still alive");
+        assert!(
+            !path.exists(),
+            "shutdown must remove the spill directory while the state is still alive"
+        );
         drop(state);
     }
 

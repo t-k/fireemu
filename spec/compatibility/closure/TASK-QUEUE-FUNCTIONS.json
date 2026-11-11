@@ -12,7 +12,7 @@
     ],
     "runtime": "nodejs22"
   },
-  "authority": "owner ledger 2417 (closure parent approved), 2459 (start); coordinator rulings of 2026-11-11 (docs.local/runs/task-queue-parent/coordinator-rulings.md)",
+  "authority": "owner ledger 2417 (closure parent approved), 2459 (start); coordinator rulings of 2026-11-11",
   "scopeDecisions": [
     {
       "id": "TQ-SCOPE",

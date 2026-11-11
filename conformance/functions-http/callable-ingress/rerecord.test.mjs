@@ -10,6 +10,7 @@ import { deflateSync, gzipSync } from "node:zlib";
 
 import { forAll, pick, between } from "../../src/fs-ent-pipeline/test-support.mjs";
 import { admit, captureFetch, uploadRequestsLeft } from "../bearer-observation.mjs";
+import { guardedModules } from "../send-guard.mjs";
 import { createBudget } from "../harness.mjs";
 import { FAKE_RECEIPT_SCRIPT, deployWorld } from "../production.fake.mjs";
 import { MASKED_TOKEN, PROGRAMS, SLOTS, classOf, judgeRerecord } from "./rerecord-judge.mjs";
@@ -850,7 +851,7 @@ test("an https request goes through the https module with ALPN limited to http/1
       };
       const transport = createTransport({
         delayMs: 0,
-        modules: { "https:": fakeHttps, "http:": http },
+        modules: { "https:": fakeHttps, "http:": guardedModules["http:"] },
       });
       const response = await transport.fetchImpl(
         "https://service-123456789012.us-central1.run.app/",
@@ -1149,6 +1150,7 @@ async function fakeRun({
   ledgerText = `${ledgerClosed}\n`,
   useTransport = false,
   failProgram = null,
+  failStatus = null,
   vanishAtLastRequest = false,
   numberHost = false,
 } = {}) {
@@ -1249,7 +1251,7 @@ async function fakeRun({
     transport = createTransport({
       delayMs: 60_000,
       sleep: async (ms) => waits.push([counter - 1, ms]),
-      modules: { "https:": fakeHttps, "http:": http },
+      modules: { "https:": fakeHttps, "http:": guardedModules["http:"] },
     });
     const inner = transport.fetchImpl;
     transport.fetchImpl = (url, requestInit) => {
@@ -1287,7 +1289,13 @@ async function fakeRun({
       createUser: async (_key, budget, _runDir, programId) => {
         budget.take("auth");
         authCalls.push(["createUser", programId]);
-        if (failProgram === programId) throw new Error("Auth signUp returned 400");
+        if (failProgram === programId)
+          throw failStatus
+            ? Object.assign(new Error(`Auth signUp returned ${failStatus}`), {
+                signUpStatus: failStatus,
+                definiteRefusal: failStatus === 400 || failStatus === 403,
+              })
+            : new Error("Auth signUp returned 400");
         return { ...user, idToken: `${FAKE_JWT}x` };
       },
       waitForExpiry: async (token) => {
@@ -1330,7 +1338,7 @@ test("fake world: the whole path records twelve answers over two deployments, cl
     assert.equal(terminal.requests.auth, 6, "a user per program: created, deleted, looked up");
     assert.deepEqual(terminal.requests, {
       invocation: 12,
-      control: 21,
+      control: 23,
       cleanup: 27,
       auth: 6,
       cliDeploy: 2,
@@ -1435,13 +1443,12 @@ test("fake world: a user is made for each program, the wait for expiry is only f
 test("createUser logs through the log it is given and never writes the sandbox ledger", async () => {
   const { createUser } = await import("../production.mjs");
   const dir = await mkdtemp(join(tmpdir(), "rerecord-user-"));
-  const original = globalThis.fetch;
   try {
     const payload = Buffer.from(
       JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 }),
     ).toString("base64url");
     const token = `e30.${payload}.sig`;
-    globalThis.fetch = async (url) => {
+    const send = async (url) => {
       assert.match(String(url), /accounts:signUp/);
       return Response.json({ localId: "l1", idToken: token, email: "x@example.com" });
     };
@@ -1452,12 +1459,12 @@ test("createUser logs through the log it is given and never writes the sandbox l
       dir,
       "program-x",
       async (action, detail) => logged.push([action, detail]),
+      send,
     );
     assert.equal(user.localId, "l1");
     assert.deepEqual(logged, [["auth-user-created", "program-x; owned user journaled privately"]]);
     assert.match(await readFile(join(dir, "owned-users.jsonl"), "utf8"), /signup-accepted/);
   } finally {
-    globalThis.fetch = original;
     await rm(dir, { recursive: true, force: true });
   }
 });
@@ -1574,6 +1581,139 @@ test("fake world: a program that fails stops the run, and the next program is no
     assert.equal(ledger[1].requests.invocation, 0);
   } finally {
     await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("fake world: captures.json keeps neither the owned user's uid nor its email, and still digests the raw bytes", async () => {
+  const echoed = JSON.stringify({ result: { uid: "local-1", email: "u@example.com" } });
+  const { world, files } = await fakeRun({
+    rule: (slot) =>
+      slot.caseId === "valid-project-id-token"
+        ? { ...answers.valid, bodyText: echoed }
+        : standard(answers.envelope)(slot),
+  });
+  try {
+    const raw = files["captures.json"];
+    assert.doesNotMatch(raw, /local-1|u@example\.com/);
+    const captures = JSON.parse(raw);
+    const valid = captures.filter((entry) => entry.caseId === "valid-project-id-token");
+    assert.equal(valid.length, 2);
+    for (const recorded of valid) {
+      assert.equal(
+        recorded.bodyText,
+        JSON.stringify({ result: { uid: "{{uid}}", email: "{{email}}" } }),
+      );
+      assert.equal(recorded.bodyBytes, Buffer.byteLength(echoed));
+      assert.equal(recorded.bodySha256, createHash("sha256").update(echoed).digest("hex"));
+    }
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("fake world: a definite 400/403 sign-up refusal is a plain failure with its status, not needs-recovery", async () => {
+  for (const status of [400, 403]) {
+    const { world, result, ledger } = await fakeRun({
+      failProgram: "functions-http/callable/auth-context",
+      failStatus: status,
+    });
+    try {
+      assert.notEqual(result.outcome, "needs-recovery", String(status));
+      assert.equal(ledger[1].closureReady, true);
+      assert.equal(ledger[1].requests.cliDeploy, 0);
+      assert.match(ledger[1].reason, new RegExp(`Auth signUp returned ${status}`));
+      assert.doesNotMatch(ledger[1].reason, /cleanup requires review/);
+    } finally {
+      await rm(world.dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("fake world: any other sign-up failure (5xx) keeps the run open for review and names the status", async () => {
+  for (const status of [500, 502, 401]) {
+    const { world, result, ledger } = await fakeRun({
+      failProgram: "functions-http/callable/auth-context",
+      failStatus: status,
+    });
+    try {
+      assert.equal(result.outcome, "needs-recovery", String(status));
+      assert.equal(ledger[1].closureReady, false);
+      assert.match(
+        ledger[1].reason,
+        new RegExp(`cleanup requires review \\(after: Auth signUp returned ${status}\\)`),
+      );
+    } finally {
+      await rm(world.dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("createUser journals a refused sign-up as signup-refused with its status, and an unknown one as signup-unknown", async () => {
+  const { createUser } = await import("../production.mjs");
+  const cases = [
+    [400, "signup-refused", true],
+    [403, "signup-refused", true],
+    [401, "signup-unknown", false],
+    [429, "signup-unknown", false],
+    [500, "signup-unknown", false],
+    [503, "signup-unknown", false],
+  ];
+  for (const [status, state, definite] of cases) {
+    const dir = await mkdtemp(join(tmpdir(), "rerecord-user-"));
+    try {
+      await assert.rejects(
+        createUser(
+          "k".repeat(24),
+          createBudget(CAPS),
+          dir,
+          "program-x",
+          async () => {},
+          async () => Response.json({ error: { message: "x" } }, { status }),
+        ),
+        (error) =>
+          error.message === `Auth signUp returned ${status}` &&
+          error.signUpStatus === status &&
+          error.definiteRefusal === definite,
+        String(status),
+      );
+      const rows = (await readFile(join(dir, "owned-users.jsonl"), "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      assert.deepEqual(
+        rows.map((entry) => entry.state),
+        ["signup-attempted", state],
+      );
+      assert.equal(rows[1].status, status);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+  // a transport failure (timeout, reset) is unknown; the send guard's refusal sent nothing
+  for (const [message, state] of [
+    ["The operation was aborted due to timeout", "signup-unknown"],
+    ["x: refused; FIREEMU_PRODUCTION_SEND=1 is set by a launch script only", "signup-not-sent"],
+  ]) {
+    const dir = await mkdtemp(join(tmpdir(), "rerecord-user-"));
+    try {
+      await assert.rejects(
+        createUser(
+          "k".repeat(24),
+          createBudget(CAPS),
+          dir,
+          "program-x",
+          async () => {},
+          async () => {
+            throw new Error(message);
+          },
+        ),
+        new RegExp(message.slice(0, 12)),
+      );
+      const rows = (await readFile(join(dir, "owned-users.jsonl"), "utf8")).trim().split("\n");
+      assert.equal(JSON.parse(rows.at(-1)).state, state);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   }
 });
 

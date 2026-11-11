@@ -905,7 +905,7 @@ test("fake world: the wrapper run records twelve answers, cleans up and writes t
     assert.equal(terminal.requests.cliDelete, 1);
     assert.deepEqual(terminal.requests, {
       invocation: 12,
-      control: 13,
+      control: 14,
       cleanup: 14,
       auth: 0,
       cliDeploy: 1,

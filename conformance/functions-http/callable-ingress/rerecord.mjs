@@ -28,8 +28,6 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
-import http from "node:http";
-import https from "node:https";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gunzipSync, inflateSync } from "node:zlib";
@@ -50,7 +48,7 @@ import {
   expectedFunctionName,
 } from "../harness.mjs";
 import { invalidSignatureToken, localExpiredToken } from "../harness.mjs";
-import { assertProductionSend, isLoopbackUrl } from "../send-guard.mjs";
+import { assertNotNativeRequest, guardedFetch, guardedModules } from "../send-guard.mjs";
 import { runCases } from "../session.mjs";
 import { MASKED_TOKEN, PROGRAMS, SLOTS, judgeRerecord } from "./rerecord-judge.mjs";
 
@@ -223,17 +221,17 @@ function headText(method, path, ordered) {
  * @param {() => number} options.now
  * @param {number} options.delayMs pause before the first request of every second pass
  * @param {readonly object[]} options.slots the frozen order of the requests
- * @param {object} options.modules the `http` and `https` modules (a test replaces them)
+ * @param {object} options.modules `{ "https:", "http:" }`, each with an Agent and a request; the default checks the
+ *   send flag. A replacement must not be the real request function (a test double only).
  */
-const defaultModules = Object.freeze({ "https:": https, "http:": http });
-
 export function createTransport({
   sleep = (ms) => new Promise((done) => setTimeout(done, ms)),
   now = Date.now,
   delayMs = PASS_DELAY_MS,
   slots = SLOTS,
-  modules = defaultModules,
+  modules = guardedModules,
 } = {}) {
+  assertNotNativeRequest(modules);
   const agents = {
     "https:": new modules["https:"].Agent({ keepAlive: true, maxSockets: 1 }),
     "http:": new modules["http:"].Agent({ keepAlive: true, maxSockets: 1 }),
@@ -247,9 +245,6 @@ export function createTransport({
       await sleep(delayMs);
     }
     const target = new URL(url);
-    // The real http(s) modules reach the network: only for a launch script's send, or this machine.
-    if (modules === defaultModules && !isLoopbackUrl(url))
-      assertProductionSend(`request ${target.host}`);
     const body = Buffer.from(init.body ?? "");
     const ordered = requestHeaders({
       host: target.host,
@@ -514,7 +509,7 @@ const LOCAL_PROJECT = "demo-functions-http";
 async function localAuth(method, body) {
   const host = process.env.FIREBASE_AUTH_EMULATOR_HOST;
   if (!/^127\.0\.0\.1:\d+$/.test(host ?? "")) throw new Error("local Auth host is not loopback");
-  const response = await fetch(
+  const response = await guardedFetch(
     `http://${host}/identitytoolkit.googleapis.com/v1/${method}?key=local-fixture-key`,
     {
       method: "POST",

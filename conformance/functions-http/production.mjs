@@ -3,8 +3,9 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { appendFile, mkdir, open, readFile, stat, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { realpathSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -24,7 +25,7 @@ import {
   withPublicInvoker,
   withoutPublicInvoker,
 } from "./harness.mjs";
-import { assertProductionSend, guardedFetch } from "./send-guard.mjs";
+import { assertPrivatePathAllowed, assertProductionSend, guardedFetch } from "./send-guard.mjs";
 import { runCases } from "./session.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -36,6 +37,8 @@ const COMMON_GIT = execFileSync(
   { cwd: ROOT, encoding: "utf8" },
 ).trim();
 export const PRIVATE_ROOT = join(dirname(COMMON_GIT), "docs.local");
+// While the mutation harness runs, the private root must be the work copy's own (an empty directory).
+assertPrivatePathAllowed(PRIVATE_ROOT);
 const LEDGER = join(PRIVATE_ROOT, "runs/sandbox-ledger.jsonl");
 const LOCK = `${LEDGER}.lock`;
 const OWNER_DECISIONS = join(PRIVATE_ROOT, "instructions/owner-decisions.md");
@@ -469,6 +472,7 @@ export async function ownerAdc() {
     process.env.FIREEMU_OWNER_ADC ||
       join(homedir(), ".config/gcloud/application_default_credentials.json"),
   );
+  assertPrivatePathAllowed(path);
   const file = JSON.parse(await readFile(path, "utf8"));
   if (
     file.type !== "authorized_user" ||
@@ -489,6 +493,7 @@ export async function ownerAdc() {
 }
 
 export async function readPrivateProjectIdentity(path, expectedSha) {
+  assertPrivatePathAllowed(path);
   const metadata = await stat(path);
   if (metadata.size > 256 || (metadata.mode & 0o077) !== 0)
     throw new Error("private project identity file is not bounded and owner-only");
@@ -591,9 +596,9 @@ export async function readThirdRecoveryReadbacks(
   return { first, build };
 }
 
-export async function acquireToken(adc, budget, kind) {
+export async function acquireToken(adc, budget, kind, send = guardedFetch) {
   budget.take(kind);
-  const response = await guardedFetch("https://oauth2.googleapis.com/token", {
+  const response = await send("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -639,7 +644,7 @@ function safeJsonResponse(body) {
 }
 
 // `extraHosts` are further hosts a second recorder may reach (exact `https://host` strings).
-export function createControl(adc, budget, { extraHosts = [] } = {}) {
+export function createControl(adc, budget, { extraHosts = [], send = guardedFetch } = {}) {
   if (
     !Array.isArray(extraHosts) ||
     extraHosts.some((host) => !/^https:\/\/[a-z0-9.-]+$/u.test(host))
@@ -662,10 +667,11 @@ export function createControl(adc, budget, { extraHosts = [] } = {}) {
     if (!hosts.some((host) => url.startsWith(`${host}/`))) {
       throw new Error("unreviewed REST host");
     }
-    if (!token || Date.now() >= token.expiresAt) token = await acquireToken(adc, budget, "token");
+    if (!token || Date.now() >= token.expiresAt)
+      token = await acquireToken(adc, budget, "token", send);
     if (method === "GET" && body !== undefined) throw new Error("GET request cannot have a body");
     budget.take(kind);
-    const response = await guardedFetch(url, {
+    const response = await send(url, {
       method,
       headers: {
         authorization: `Bearer ${token.value}`,
@@ -730,6 +736,20 @@ export function cliEnvironment(adcPath, isolatedConfig, base = process.env) {
   return environment;
 }
 
+/**
+ * Whether a command is a test's harmless child: this node running `-e` code, or a script in the temp directory.
+ * Anything else (the real Firebase CLI, another binary) reaches production on its own and needs the flag.
+ */
+export function isHarmlessCommand(command) {
+  if (!Array.isArray(command) || command[0] !== process.execPath) return false;
+  if (command[1] === "-e") return true;
+  try {
+    return realpathSync(command[1]).startsWith(`${realpathSync(tmpdir())}${sep}`);
+  } catch {
+    return false;
+  }
+}
+
 // `deployTrack` is set for a deploy: the CLI then runs with --debug so that the generateUploadUrl
 // answer (the source upload receipt) is seen even when the deploy fails afterwards. Receipts go to
 // `deployTrack.onEvent` as they arrive, `deployTrack.exited` tells whether the CLI ended by itself
@@ -745,8 +765,7 @@ export async function cli(
   { cwd = HERE } = {},
 ) {
   // The real CLI reaches production on its own; a test passes a harmless command instead.
-  if (command[0] === process.execPath && command[1] === CLI)
-    assertProductionSend("the Firebase CLI");
+  if (!isHarmlessCommand(command)) assertProductionSend("the Firebase CLI");
   // The directory holds the firebase.json of the codebase the CLI deploys; a second recorder has its own.
   if (
     typeof cwd !== "string" ||
@@ -870,10 +889,18 @@ export function targetResources(target) {
     imagePrefix: `${spec.region}-docker.pkg.dev/${spec.project}/gcf-artifacts/${packageId(target)}`,
     deployArgs: ["deploy", "--only", `functions:${spec.codebase}:${spec.functionName}`],
     // Only the named fixture functions are deleted by the CLI. A bare `functions:delete <name>` also
-    // deletes a codebase of that name and every `<name>-*` function, so a spec is deleted by its exact
+    // deletes a codebase of that name and every `<name>-*` function, so the named fixture is deleted by
+    // its codebase-qualified id (`<codebase>:<name>`: only that codebase, and the preflight has shown that
+    // no function of the region is named like it or like `<name>-*`), and a spec is deleted by its exact
     // resource (deleteFunctionExact) and has no CLI delete at all.
     deleteArgs: spec.named
-      ? ["functions:delete", spec.functionName, "--region", spec.region, "--force"]
+      ? [
+          "functions:delete",
+          `${spec.codebase}:${spec.functionName}`,
+          "--region",
+          spec.region,
+          "--force",
+        ]
       : null,
   };
 }
@@ -1093,7 +1120,14 @@ async function publicInvoker(control, target, enabled, kind, log = logChange) {
   );
 }
 
-export async function createUser(key, budget, runDir, programId, log = logChange) {
+export async function createUser(
+  key,
+  budget,
+  runDir,
+  programId,
+  log = logChange,
+  send = guardedFetch,
+) {
   const email = `fireemu-fh-${randomBytes(8).toString("hex")}@example.com`;
   await appendFile(
     join(runDir, "owned-users.jsonl"),
@@ -1101,9 +1135,15 @@ export async function createUser(key, budget, runDir, programId, log = logChange
     { mode: 0o600 },
   );
   budget.take("auth");
-  const response = await guardedFetch(
-    `${AUTH_HOST}/v1/accounts:signUp?key=${encodeURIComponent(key)}`,
-    {
+  const journal = (state, extra = {}) =>
+    appendFile(
+      join(runDir, "owned-users.jsonl"),
+      `${JSON.stringify({ ts: now(), programId, email, state, ...extra })}\n`,
+      { mode: 0o600 },
+    );
+  let response;
+  try {
+    response = await send(`${AUTH_HOST}/v1/accounts:signUp?key=${encodeURIComponent(key)}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -1113,9 +1153,25 @@ export async function createUser(key, budget, runDir, programId, log = logChange
       }),
       redirect: "manual",
       signal: AbortSignal.timeout(30_000),
-    },
-  );
-  if (response.status !== 200) throw new Error(`Auth signUp returned ${response.status}`);
+    });
+  } catch (caught) {
+    // A refusal by the send guard stopped before any byte left; anything else (a timeout, a reset) may have created the user.
+    await journal(
+      /refused; FIREEMU_PRODUCTION_SEND/u.test(caught.message)
+        ? "signup-not-sent"
+        : "signup-unknown",
+    );
+    throw caught;
+  }
+  if (response.status !== 200) {
+    // A definite 400/403 means production refused the sign-up: no user exists. Any other status is unknown.
+    const definite = response.status === 400 || response.status === 403;
+    await journal(definite ? "signup-refused" : "signup-unknown", { status: response.status });
+    throw Object.assign(new Error(`Auth signUp returned ${response.status}`), {
+      signUpStatus: response.status,
+      definiteRefusal: definite,
+    });
+  }
   const user = safeJsonResponse(await readBoundedText(response));
   await appendFile(
     join(runDir, "owned-users.jsonl"),
@@ -1383,7 +1439,9 @@ export async function assertTargetAbsent(control, target) {
   ) {
     throw new Error("reserved function, service or image package already exists");
   }
-  if (!spec.named) await assertNoNameCollisions(control, spec);
+  // The CLI deletes by a name filter, which also matches `<name>-*` and a codebase of that name: nothing else
+  // in the region may match, for a named fixture as for a spec.
+  await assertNoNameCollisions(control, spec);
 }
 
 /** Reads the deployed function, its service and its one owned image version into `state`. */
@@ -1447,7 +1505,7 @@ export async function observeProgram(
   recordings,
   abort,
   uploads,
-  { run = cli, log = logChange, fetchImpl, auth = {} } = {},
+  { run = cli, log = logChange, fetchImpl, auth = {}, registerPrivate } = {},
 ) {
   const targets = programTargets(program);
   const states = Object.fromEntries(
@@ -1464,7 +1522,13 @@ export async function observeProgram(
       if (typeof key !== "string" || key.length < 20)
         throw new Error("restricted Auth key is missing");
       userAttempted = true;
-      user = await (auth.createUser ?? createUser)(key, budget, runDir, program.id, log);
+      try {
+        user = await (auth.createUser ?? createUser)(key, budget, runDir, program.id, log);
+      } catch (refused) {
+        // A definite refusal (400/403) created no user: a plain failure, not a cleanup to review.
+        if (refused?.definiteRefusal === true) userAttempted = false;
+        throw refused;
+      }
       if (program.id.endsWith("auth-refusal"))
         await (auth.waitForExpiry ?? waitForExpiry)(user.idToken, abort);
     }
@@ -1490,6 +1554,7 @@ export async function observeProgram(
       targets.map((target) => [target.key, states[target.key].url]),
     );
     const replacements = user ? { [user.localId]: "{{uid}}", [user.email]: "{{email}}" } : {};
+    registerPrivate?.(replacements);
     const tokens = user
       ? {
           idToken: user.idToken,
@@ -1542,7 +1607,7 @@ export async function observeProgram(
     error?.indeterminate;
   if (incomplete) {
     const failure = new Error(
-      `${program.id}: cleanup requires review; ${JSON.stringify(states, (key, value) => (key === "url" || key === "upload" || key === "target" ? undefined : value))}`,
+      `${program.id}: cleanup requires review${error ? ` (after: ${error.message})` : ""}; ${JSON.stringify(states, (key, value) => (key === "url" || key === "upload" || key === "target" ? undefined : value))}`,
     );
     failure.residual = true;
     throw failure;

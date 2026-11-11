@@ -212,6 +212,16 @@ export async function deployWorld({
       url === "https://firebase.googleapis.com/v1beta1/projects/fireemu-oracle-query/adminSdkConfig"
     ) {
       result = reply(200, { projectId: "fireemu-oracle-query" });
+    } else if (
+      url.startsWith(
+        "https://cloudfunctions.googleapis.com/v2/projects/fireemu-oracle-query/locations/us-central1/functions?",
+      )
+    ) {
+      // the region's function list (the name-collision preflight): this world holds only its own function
+      result = reply(
+        200,
+        deployed.present ? { functions: [recordedGen2Record(functionName)] } : {},
+      );
     } else if (url === `https://cloudfunctions.googleapis.com/v2/${names.FUNCTION}`) {
       result = deployed.present ? reply(200, recordedGen2Record(functionName)) : reply(404);
     } else if (url === `https://run.googleapis.com/v2/${names.SERVICE}`) {

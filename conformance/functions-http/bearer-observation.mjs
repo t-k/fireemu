@@ -158,7 +158,8 @@ async function readCapped(response) {
  * caseId }` for every request of a run with several programs). Neither the host nor a credential value is
  * recorded unless `enrich` adds it: `enrich(record, source)` is called with the response (or, for a failed
  * request, the error) and may copy what the transport knows into the record; the Authorization values sent
- * are the corpus literals.
+ * are the corpus literals. `maskText(text)` rewrites the stored body text (the owned user's uid and email become
+ * placeholders); `bodySha256` and `bodyBytes` stay those of the raw bytes.
  */
 export function captureFetch({
   fetchImpl = guardedFetch,
@@ -169,6 +170,7 @@ export function captureFetch({
   slots,
   enrich,
   maskAuthorization = (value) => value,
+  maskText = (text) => text,
 }) {
   let index = 0;
   return async (url, init) => {
@@ -207,7 +209,8 @@ export function captureFetch({
       record.latencyMs = now() - started;
       record.bodyBytes = bytes.length;
       record.bodySha256 = sha256(bytes);
-      if (bytes.length <= 4096) record.bodyText = bytes.toString("utf8");
+      // The digest and the byte count are of the raw bytes; the stored text hides the owned user's values.
+      if (bytes.length <= 4096) record.bodyText = maskText(bytes.toString("utf8"));
       enrich?.(record, response);
       await onCapture(record);
       const nullBody = [101, 204, 205, 304].includes(response.status);
@@ -368,6 +371,10 @@ export async function recordObservation(env, deps, spec) {
     changes.push({ ts: new Date(deps.now()).toISOString(), action, detail });
   };
   const captures = [];
+  // The uid and email of an owned Auth user, registered when it exists: captures.json must not keep them.
+  const privateValues = new Map();
+  const maskText = (text) =>
+    [...privateValues].reduce((masked, [value, name]) => masked.split(value).join(name), text);
   const recordings = [{}, {}];
   const reasons = [];
   let residual = false;
@@ -387,12 +394,17 @@ export async function recordObservation(env, deps, spec) {
         spec.enrichCapture &&
         ((record, source) => spec.enrichCapture(record, source, { projectNumber })),
       maskAuthorization: spec.maskAuthorization,
+      maskText,
     });
     // The programs run one after the other, each with its own deployment; a program that fails stops the run.
     for (const program of programs) {
       await observeProgram(program, control, adc.path, budget, runDir, recordings, abort, uploads, {
         ...(deps.run ? { run: deps.run } : {}),
         ...(deps.auth ? { auth: deps.auth } : {}),
+        registerPrivate: (replacements) => {
+          for (const [value, name] of Object.entries(replacements))
+            if (value) privateValues.set(value, name);
+        },
         log,
         fetchImpl,
       });
@@ -556,7 +568,7 @@ export function productionDeps({
         requestsLeft: () => uploadRequestsLeft(caps, budget),
       }),
     run: undefined,
-    fetchImpl: fetch,
+    fetchImpl: guardedFetch,
     installSignals(handler) {
       for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, handler);
     },

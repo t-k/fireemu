@@ -11,6 +11,10 @@ mod scratch;
 #[path = "../../../tests/support/trusted_temp.rs"]
 mod trusted_temp;
 
+#[cfg(unix)]
+#[path = "../../../tests/support/real_node.rs"]
+mod real_node;
+
 use scratch::Scratch;
 
 use std::path::{Path, PathBuf};
@@ -43,6 +47,9 @@ fn run_in(dir: &Path, args: &[&str], input: Option<&str>) -> Output {
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // A scenario that runs `node` by name gets the real Node, never the Volta shim.
+    #[cfg(unix)]
+    real_node::use_real_node(&mut command);
     match input {
         None => command.stdin(Stdio::null()).output().unwrap(),
         Some(input) => {

@@ -1,0 +1,60 @@
+name: storage-spill-memory
+
+# Manual-only measurement of Storage spill memory on the Linux runner (the canonical RSS source).
+# It writes no caches and is never part of the PR or release gates.
+on:
+  workflow_dispatch:
+    inputs:
+      objects:
+        type: number
+        default: 20
+        description: Number of single-shot uploads per run (1 to 200)
+      size_mib:
+        type: number
+        default: 50
+        description: Size of each object in MiB (1 to 256)
+
+permissions:
+  contents: read
+
+concurrency:
+  group: storage-spill-memory-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_TARGET_DIR: target/spill-memory
+      RUSTC_WRAPPER: ''
+      RUSTUP_TOOLCHAIN: '1.94.0'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: '1.94.0' # Keep in sync with rust-toolchain.toml.
+      - name: Build the release daemon (not measured)
+        run: cargo build --release -p fireemu --bin fireemu
+      - name: Measure stored objects with spill off and on
+        env:
+          OBJECTS: ${{ inputs.objects }}
+          SIZE_MIB: ${{ inputs.size_mib }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/spill-memory"
+          mkdir -p "$out"
+          for mode in off on; do
+            python3 tools/bench/spill_memory.py \
+              --fireemu "$CARGO_TARGET_DIR/release/fireemu" \
+              --mode "$mode" --objects "$OBJECTS" --size-mib "$SIZE_MIB" \
+              --out "$out/$mode.json"
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: storage-spill-memory
+          path: ${{ runner.temp }}/spill-memory/
+          if-no-files-found: warn

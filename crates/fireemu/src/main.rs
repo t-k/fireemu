@@ -2974,6 +2974,15 @@ fn spill_root() -> std::path::PathBuf {
     std::env::temp_dir().join("fireemu")
 }
 
+/// Releases this process's spill directory at shutdown. The Storage state also lives on in the
+/// managed-storage bridge held by the Firestore backend, so dropping the daemon's handle alone does
+/// not remove the directory; clearing the store's spill configuration drops its owner handle.
+pub(crate) fn release_storage_spill(storage: &fireemu_adapter_http::storage::StorageState) {
+    if let Ok(mut store) = storage.store.lock() {
+        store.set_spill(None);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn storage_state(
     cfg: &RuntimeConfig,
@@ -4181,6 +4190,71 @@ mod config_reload_tests {
         drop(state);
         assert!(!path.exists());
         std::fs::remove_dir(spill_root()).unwrap();
+    }
+
+    #[test]
+    fn storage_spill_directory_is_released_at_shutdown_while_the_state_lives() {
+        use fireemu_core_types::determinism::SplitMix64;
+
+        let mut cfg = RuntimeConfig::default();
+        let clock = Arc::new(Mutex::new(VirtualClock::new(cfg.clock_start)));
+        let auth = Arc::new(Mutex::new(fireemu_core_auth::store::AuthStore::new(
+            &cfg.auth_project,
+            SplitMix64::new(cfg.seed),
+            cfg.auth_totp.unwrap_or_default(),
+        )));
+        let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+            &cfg.auth_project,
+            auth,
+        ));
+        let tenancy = Arc::new(RwLock::new(fireemu_core_session::tenancy::Tenancy::new(
+            &cfg.auth_project,
+        )));
+        let rules = Arc::new(fireemu_adapter_http::storage::StorageRulesRegistry::global(
+            Arc::new(RulesetSlot::default()),
+        ));
+        let gateway = Gateway {
+            enforce_limits: cfg.enforce_limits,
+            ctx: PlanningContext {
+                edition: cfg.edition,
+                api_mode: cfg.api_mode,
+                policy: cfg.index_policy(),
+            },
+            indexes: IndexSet::default(),
+        };
+        let backend = Arc::new(LocalBackend::new(gateway, clock.clone(), cfg.seed));
+        let faults = Arc::new(fireemu_core_session::fault::FaultRegistry::new());
+        let path = std::env::temp_dir()
+            .join("fireemu")
+            .join(format!("fireemu-spill-{}", std::process::id()));
+        assert_eq!(spill_root(), std::env::temp_dir().join("fireemu"));
+        assert!(!path.exists());
+        let build = |cfg: &RuntimeConfig| {
+            storage_state(
+                cfg,
+                &clock,
+                &registry,
+                &tenancy,
+                &rules,
+                None,
+                &backend,
+                &faults,
+                None,
+                None,
+                String::new(),
+                String::new(),
+            )
+            .unwrap()
+        };
+        let state = build(&cfg);
+        assert!(!path.exists());
+        drop(state);
+        cfg.storage_spill_object_bytes = Some(1);
+        let state = build(&cfg);
+        assert!(path.is_dir());
+        release_storage_spill(&state);
+        assert!(!path.exists(), "shutdown must remove the spill directory while the state is still alive");
+        drop(state);
     }
 
     /// Every ruleset slot the daemon creates at start carries the profile's meaning of a lone

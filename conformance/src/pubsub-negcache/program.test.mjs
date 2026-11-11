@@ -103,3 +103,7 @@ test("the program is frozen: its canonical JSON has the pinned digest", async ()
   const digest = createHash("sha256").update(JSON.stringify(CELLS)).digest("hex");
   assert.equal(digest, "54f4124c22a5ec1dca70d7b1d363e34eb0a5cf9e143c56c46d097f2a44fc5c45");
 });
+
+test("the minimum gap between two requests is 50 ms", () => {
+  assert.equal(MIN_GAP_MS, 50);
+});

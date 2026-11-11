@@ -182,3 +182,13 @@ test("property: closureReady implies every resource is deleted, gone at A2 or ne
     for (const n of ledger.deletable()) assert.ok(!ledger.deleting(n));
   }
 });
+
+test("an unknown create followed by an own positive read is live, and the A2 absence then settles it like any confirmed resource", () => {
+  const ledger = createLedger();
+  create(ledger, "unknown");
+  ledger.read(N, "present");
+  ledger.read(N, "absent");
+  assert.equal(ledger.status(N), "live-suspect");
+  ledger.a2Absent(N);
+  assert.equal(ledger.status(N), "gone-a2");
+});

@@ -3,6 +3,10 @@ import https from "node:https";
 import grpc from "@grpc/grpc-js";
 import { protos } from "@google-cloud/pubsub";
 
+/** The gRPC status name of a numeric code, UNKNOWN for a code this table does not know. */
+export const grpcCodeName = (code) =>
+  Object.keys(grpc.status).find((k) => grpc.status[k] === code) ?? "UNKNOWN";
+
 export function createTransport({
   getToken,
   clock,
@@ -18,7 +22,7 @@ export function createTransport({
   let client;
   const defaultGrpc = ({ path, deadlineMs }) =>
     new Promise((resolve) => {
-      client ??= new grpc.Client("pubsub.googleapis.com:443", grpc.credentials.createSsl(), {
+      client ??= new grpc.Client(`${host}:${port}`, grpc.credentials.createSsl(), {
         "grpc.enable_retries": 0,
       });
       const metadata = new grpc.Metadata();
@@ -36,8 +40,7 @@ export function createTransport({
           if (!error) resolve({ code: "OK" });
           else
             resolve({
-              code:
-                Object.keys(grpc.status).find((k) => grpc.status[k] === error.code) ?? "UNKNOWN",
+              code: grpcCodeName(error.code),
               message: error.details ?? "",
             });
         },
@@ -78,13 +81,10 @@ export function createTransport({
           dedicated.set(conn, new net.Agent({ keepAlive: true, maxSockets: 1 }));
         agent = dedicated.get(conn);
       } else if (connPolicy === "fresh") agent = new net.Agent({ keepAlive: false });
-      let req,
-        timer,
-        finished = false;
+      let req, timer;
       let startedAt;
+      // A promise settles once; a second finish (an 'end' after a timeout) only repeats harmless cleanup.
       const finish = (value) => {
-        if (finished) return;
-        finished = true;
         clearTimeout(timer);
         if (connPolicy === "fresh") agent.destroy();
         resolve({ startedAt: startedAt ?? clock.now(), completedAt: clock.now(), ...value });

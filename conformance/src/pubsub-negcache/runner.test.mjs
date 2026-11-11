@@ -708,3 +708,72 @@ test("cleanup records a refused request and goes on", async () => {
   assert.ok(calls.length >= 1);
   assert.equal(report.rounds, 3);
 });
+
+test("the second round starts exactly 30 s after the first round's last LIST, and a persistent 404 adds no wait after round three", async () => {
+  let lists = 0;
+  const { run, rows, clock } = record({
+    wrap: async (base, req, meta) => {
+      const out = await base(req, meta);
+      if (req.list === "subscription" && ++lists === 2) {
+        const body = JSON.parse(out.bodyText);
+        body.subscriptions = [
+          ...(body.subscriptions ?? []),
+          { name: `projects/fireemu-oracle-idp/subscriptions/fireemu-observe-${RUN_ID}-nc-n2a-x` },
+        ];
+        return { ...out, bodyText: JSON.stringify(body) };
+      }
+      return out;
+    },
+  });
+  await run();
+  const cleanup = rows.filter((r) => r.event === "request" && r.cell === "cleanup");
+  const firstDeleteIndex = cleanup.findIndex((r) => r.method === "DELETE");
+  const roundOneEnd = cleanup.findLastIndex(
+    (r, i) =>
+      i > firstDeleteIndex &&
+      r.method === "GET" &&
+      r.path.includes("pageSize") &&
+      cleanup[i + 1]?.method === "DELETE",
+  );
+  const redo = cleanup[roundOneEnd + 1];
+  assert.equal(
+    redo.startedAt - (cleanup[roundOneEnd].startedAt + cleanup[roundOneEnd].completedMs),
+    30000,
+  );
+  assert.ok(clock.now() > 0);
+});
+
+test("with a DELETE 404 that never clears the run ends when its last LIST ends", async () => {
+  const { run, rows, clock } = record({
+    wrap: async (base, req, meta, clk) => {
+      if (req.method === "DELETE" && req.path.includes("-nc-n2a-x")) {
+        const startedAt = clk.now();
+        await clk.sleep(30);
+        return {
+          startedAt,
+          headersAt: clk.now(),
+          completedAt: clk.now(),
+          status: 404,
+          bodyText: JSON.stringify({ error: { code: 404, message: "m", status: "NOT_FOUND" } }),
+        };
+      }
+      return base(req, meta);
+    },
+  });
+  await run();
+  const last = rows.filter((r) => r.event === "request").at(-1);
+  assert.equal(clock.now(), last.startedAt + last.completedMs);
+});
+
+test("a wall clock that is exactly used up stops the recording", async () => {
+  const { run } = record({
+    caps: { ...CAPS, wallMs: 1000, cleanupReserveMs: 0 },
+    wrap: async (base, req, meta, clock) => {
+      await clock.sleep(1000);
+      return base(req, meta);
+    },
+  });
+  const out = await run();
+  assert.equal(out.stopped, "wall clock cap");
+  assert.equal(out.sent, 1);
+});

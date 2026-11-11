@@ -65,18 +65,15 @@ export function createLedger() {
       if (!r) return;
       if (what === "present") {
         r.confirmed = true;
-        r.createUnknown = false; // an own positive read settles an unknown create
-        r.createRejected = false;
+        // An own positive read settles an unknown create: status() reads `confirmed` first.
         r.absenceAfterDelete = false;
         r.presentAfterDelete = r.deletes.some((d) => d.answer === "ok");
         return;
       }
       if (what === "absent") {
         const deleted = r.deletes.some((d) => d.answer === "ok");
-        if (deleted) {
-          r.absenceAfterDelete = true;
-          r.presentAfterDelete = false;
-        } else if (r.confirmed) r.readAbsentBeforeDelete = true; // read-after-write lag cannot be told from gone
+        if (deleted) r.absenceAfterDelete = true;
+        else if (r.confirmed) r.readAbsentBeforeDelete = true; // read-after-write lag cannot be told from gone
       }
     },
     a2Absent(name) {

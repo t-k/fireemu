@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createJournal, writeExclusive } from "./journal.mjs";
+import { createJournal, MAX_ROWS, writeExclusive } from "./journal.mjs";
 
 test("journal is exclusive, private, durable and closed", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nc-journal-"));
@@ -36,4 +36,8 @@ test("the row limit refuses the next row and a closed journal says so", (t) => {
   journal.close();
   journal.close();
   assert.throws(() => journal.write({}), /closed/);
+});
+
+test("the row limit is 20000", () => {
+  assert.equal(MAX_ROWS, 20000);
 });

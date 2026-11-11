@@ -5,7 +5,9 @@ export function writeExclusive(file, text) {
   fs.writeFileSync(file, text, { flag: "wx", mode: 0o600 });
 }
 
-export function createJournal(dir, runId, { limit = 20000 } = {}) {
+export const MAX_ROWS = 20000;
+
+export function createJournal(dir, runId, { limit = MAX_ROWS } = {}) {
   fs.mkdirSync(dir, { mode: 0o700 });
   const fd = fs.openSync(path.join(dir, `capture-${runId}.jsonl`), "wx", 0o600);
   let n = 0,

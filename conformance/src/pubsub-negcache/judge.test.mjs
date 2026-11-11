@@ -376,3 +376,8 @@ test("combining runs keeps nulls and objects apart and agrees on equal values", 
   assert.deepEqual(merged.same, [1, 2]);
   assert.deepEqual(combineRuns({ answers: { k: null } }, { answers: { k: null } }), { k: null });
 });
+
+test("a hit on the first read after a seek is the window after the seek", () => {
+  const d1 = setStep(recordOf("D1"), 2, { ...HIT, ageMs: 3000 });
+  assert.deepEqual(withRecords(d1).answers.rearm.afterSeek[0], 3000);
+});

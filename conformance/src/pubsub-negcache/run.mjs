@@ -91,10 +91,12 @@ export async function main(args, deps = {}) {
     return 0;
   }
   if (mode === "local") {
+    const { faults = {}, ...params } = options.worldParams ? JSON.parse(options.worldParams) : {};
     const clock = virtualClock(),
       transport = createWorld({
         clock,
-        params: options.worldParams ? JSON.parse(options.worldParams) : {},
+        params,
+        faults: new Map(Object.entries(faults).map(([index, kind]) => [Number(index), kind])),
       });
     const result = await createRecorder({ runId, clock, transport, journal: { write() {} } }).run();
     const { answers, invalid } = judgeRun(result.records);
@@ -126,7 +128,8 @@ export async function main(args, deps = {}) {
     if (!(ageMs >= A2_MIN_AGE_MS))
       throw new Error("A2 needs at least ten minutes after the last request");
   }
-  const token = deps.token ?? (await createCredentials()({ timeoutMs: 30000 }));
+  const token =
+    deps.token ?? (await (deps.createCredentials ?? createCredentials)()({ timeoutMs: 30000 }));
   const clock = deps.clock ?? realClock;
   const transport = deps.transport ?? createTransport({ getToken: () => token, clock });
   try {

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import { createTransport } from "./transport.mjs";
+import { createTransport, grpcCodeName } from "./transport.mjs";
 
 test("HTTP responses, connections, errors and timeout", async (t) => {
   let connections = 0;
@@ -132,4 +132,34 @@ test("pooled requests share a connection; a body brings a content type and a bod
   assert.equal(exact.status, 200);
   assert.equal(exact.bodyText.length, 1024 * 1024);
   assert.equal(exact.failure, undefined);
+});
+
+test("each dedicated key keeps its own connection", async (t) => {
+  let connections = 0;
+  const server = http.createServer((req, res) => res.end("{}"));
+  server.on("connection", () => connections++);
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  let tick = 0;
+  const transport = createTransport({
+    getToken: () => "t",
+    clock: { now: () => ++tick },
+    protocol: "http",
+    host: "127.0.0.1",
+    port: server.address().port,
+  });
+  t.after(() => transport.close());
+  for (const conn of ["dedicated:a", "dedicated:b", "dedicated:a", "dedicated:b"])
+    await transport.send(
+      { method: "GET", path: "/" },
+      { conn, connPolicy: "dedicated", timeoutMs: 1000 },
+    );
+  assert.equal(connections, 2);
+});
+
+test("gRPC status names", () => {
+  assert.equal(grpcCodeName(5), "NOT_FOUND");
+  assert.equal(grpcCodeName(0), "OK");
+  assert.equal(grpcCodeName(14), "UNAVAILABLE");
+  assert.equal(grpcCodeName(99), "UNKNOWN");
 });

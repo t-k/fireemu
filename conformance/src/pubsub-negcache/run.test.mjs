@@ -319,3 +319,34 @@ test("a2: list validation refuses malformed pages and stops after five pages", a
   const file = JSON.parse(fs.readFileSync(path.join(root, `o${n}`, `a2-${id}.json`), "utf8"));
   assert.deepEqual(file.lists.subscription, { complete: true, names: [name], foreign: 1 });
 });
+
+test("local: a recording that stops exits 2, and the token is requested with a 30 s limit", async (t) => {
+  let output;
+  const code = await main(
+    ["local", "--run-id", id, "--world-params", JSON.stringify({ faults: { 4: "timeout" } })],
+    {
+      print: (v) => {
+        output = v;
+      },
+    },
+  );
+  assert.equal(code, 2);
+  assert.equal(output.stopped, "unknown create");
+  const root = fixture(t);
+  const clock = virtualClock(1000000);
+  const world = createWorld({ clock });
+  let limit;
+  await main(["record", "--run-id", id, "--out", "out", "--lock", "lock", "--packet", "packet"], {
+    root,
+    env: {},
+    clock,
+    transport: world,
+    sourceHead: "h",
+    print() {},
+    createCredentials: () => async (arg) => {
+      limit = arg.timeoutMs;
+      return "fake";
+    },
+  });
+  assert.equal(limit, 30000);
+});

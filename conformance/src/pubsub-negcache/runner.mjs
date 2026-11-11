@@ -52,11 +52,9 @@ const resultOf = (answer) =>
     ? "ok"
     : answer.kind === "unknown"
       ? "unknown"
-      : answer.status === 404
-        ? "notfound"
-        : answer.status === 409
-          ? "conflict"
-          : "error";
+      : answer.status === 409
+        ? "conflict"
+        : "error";
 
 export function createRecorder({ runId, transport, clock, journal, cells = CELLS, caps = CAPS }) {
   const ledger = createLedger();
@@ -127,7 +125,7 @@ export function createRecorder({ runId, transport, clock, journal, cells = CELLS
       body: journaledBody(request, answer.body, runId),
     };
     journal.write({ event: "request", ...row });
-    if (intent !== null && request.create && answer.kind === "unknown") {
+    if (request.create && answer.kind === "unknown") {
       stopped = "unknown create";
     }
     return { answer, raw, row };

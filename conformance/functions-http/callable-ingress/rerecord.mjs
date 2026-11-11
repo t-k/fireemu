@@ -171,7 +171,7 @@ export function requestHeaders({ host, headers, bodyBytes }) {
     ["host", host],
     ["connection", "keep-alive"],
     ["content-type", headers["content-type"]],
-    ...(headers.authorization === undefined ? [] : [["authorization", headers.authorization]]),
+    ["authorization", headers.authorization],
     ["accept", "*/*"],
     ["accept-language", "*"],
     ["sec-fetch-mode", "cors"],
@@ -240,7 +240,7 @@ export function createTransport({
     const slot = slots[index];
     const previous = slots[index - 1];
     index += 1;
-    if (slot?.pass === 2 && (previous?.pass !== 2 || previous.program !== slot.program)) {
+    if (slot?.pass === 2 && previous?.pass !== 2) {
       await sleep(delayMs);
     }
     const target = new URL(url);
@@ -273,9 +273,6 @@ export function createTransport({
     const encoding = String(response.headers["content-encoding"] ?? "").toLowerCase();
     const decoded =
       encoding === "gzip" ? gunzipSync(bytes) : encoding === "deflate" ? inflateSync(bytes) : bytes;
-    if (response.statusCode < 200 || response.statusCode > 599) {
-      throw new Error(`unexpected status ${response.statusCode}`);
-    }
     const headers = new Headers();
     for (let i = 0; i + 1 < response.rawHeaders.length; i += 2) {
       const name = response.rawHeaders[i].toLowerCase();
@@ -485,8 +482,11 @@ export async function readSources({ directory = HERE, conformance = CONFORMANCE 
 }
 
 /** The real effects of bearer-observation.mjs, with this observation's sources, caps, transport and facts. */
-export function productionDeps({ ledger, privateRoot } = {}) {
-  const base = bearerProductionDeps({ ledger, privateRoot, caps: CAPS });
+export function productionDeps({
+  ledger,
+  privateRoot,
+  base = bearerProductionDeps({ ledger, privateRoot, caps: CAPS }),
+} = {}) {
   const transport = createTransport();
   const collector = createFactsCollector();
   return {

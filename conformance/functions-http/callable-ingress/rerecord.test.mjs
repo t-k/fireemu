@@ -6,10 +6,10 @@ import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { gzipSync } from "node:zlib";
+import { deflateSync, gzipSync } from "node:zlib";
 
 import { forAll, pick, between } from "../../src/fs-ent-pipeline/test-support.mjs";
-import { admit, uploadRequestsLeft } from "../bearer-observation.mjs";
+import { admit, captureFetch, uploadRequestsLeft } from "../bearer-observation.mjs";
 import { createBudget } from "../harness.mjs";
 import { FAKE_RECEIPT_SCRIPT, deployWorld } from "../production.fake.mjs";
 import { MASKED_TOKEN, PROGRAMS, SLOTS, classOf, judgeRerecord } from "./rerecord-judge.mjs";
@@ -168,6 +168,7 @@ test("a corpus that changes a request, a case, an order, a program or the target
   refused((c) => c.programs[0].cases.push(c.programs[0].cases[0]), /auth-context cases/);
   refused((c) => (c.programs = c.programs.toReversed()), /program 1 id/);
   refused((c) => c.programs.pop(), /programs/);
+  refused((c) => c.programs.push(structuredClone(c.programs[0])), /programs/);
   refused((c) => (c.programs[0].id = "x"), /program 1 id/);
   refused((c) => (c.project = "fireemu-oracle-sbx"), /project or region/);
   refused((c) => (c.region = "europe-west1"), /project or region/);
@@ -492,6 +493,7 @@ async function withServer(handler, check) {
   try {
     await check(`http://127.0.0.1:${server.address().port}`, seen);
   } finally {
+    server.closeAllConnections?.();
     await new Promise((done) => server.close(done));
   }
 }
@@ -717,6 +719,84 @@ test("the transport refuses an unsupported scheme, a status outside 200-599 and 
   t.close();
 });
 
+test("the transport keeps one connection open between requests, as fetch does", async () => {
+  const ports = [];
+  await withServer(
+    (req, res) => {
+      ports.push(req.socket.remotePort);
+      res.end("ok");
+    },
+    async (origin) => {
+      const transport = createTransport({ delayMs: 0 });
+      await transport.fetchImpl(`${origin}/`, init(null));
+      await transport.fetchImpl(`${origin}/`, init("Bearer malformed"));
+      transport.close();
+      assert.equal(ports.length, 2);
+      assert.equal(ports[0], ports[1]);
+    },
+  );
+});
+
+test("a deflate-compressed answer is decoded; a 204 and a 304 answer without a body", async () => {
+  const body = deflateSync(Buffer.from(ENVELOPE));
+  await withServer(
+    (req, res) => {
+      res.writeHead(401, { "content-type": "application/json", "content-encoding": "deflate" });
+      res.end(body);
+    },
+    async (origin) => {
+      const transport = createTransport({ delayMs: 0 });
+      const response = await transport.fetchImpl(`${origin}/`, init(null));
+      transport.close();
+      assert.equal(await response.text(), ENVELOPE);
+      assert.equal(response.fireemuExtra.contentEncoding, "deflate");
+    },
+  );
+  for (const status of [204, 304]) {
+    await withServer(
+      (req, res) => {
+        res.writeHead(status);
+        res.end();
+      },
+      async (origin) => {
+        const transport = createTransport({ delayMs: 0 });
+        const response = await transport.fetchImpl(`${origin}/`, init(null));
+        transport.close();
+        assert.equal(response.status, status);
+        assert.equal(await response.text(), "");
+      },
+    );
+  }
+});
+
+test("an aborted request is abandoned, and an informational status is a failure", async () => {
+  await withServer(
+    () => {},
+    async (origin) => {
+      const controller = new AbortController();
+      const transport = createTransport({ delayMs: 0 });
+      const pending = transport.fetchImpl(`${origin}/`, {
+        ...init(null),
+        signal: controller.signal,
+      });
+      setTimeout(() => controller.abort(), 50);
+      await assert.rejects(pending, /abort/i);
+      transport.close();
+    },
+  );
+  await withServer(
+    (req, res) => {
+      res.writeHead(199);
+      res.end();
+    },
+    async (origin) => {
+      const transport = createTransport({ delayMs: 0 });
+      await assert.rejects(transport.fetchImpl(`${origin}/`, init(null)));
+      transport.close();
+    },
+  );
+});
+
 test("an https request goes through the https module with ALPN limited to http/1.1, a keep-alive agent and the same head", async () => {
   await withServer(
     (req, res) => res.end("ok"),
@@ -733,9 +813,20 @@ test("an https request goes through the https module with ALPN limited to http/1
         request(options, callback) {
           calls.push(options);
           const plain = { ...options, ALPNProtocols: undefined };
+          // A TLS socket's facts, and an HTTP/2-style version, that the loopback server cannot supply.
+          const tls = { alpnProtocol: "http/1.1", getProtocol: () => "TLSv1.3" };
+          const dressed = (res) =>
+            new Proxy(res, {
+              get(target, name) {
+                if (name === "socket") return tls;
+                if (name === "httpVersion") return "2.0";
+                const value = target[name];
+                return typeof value === "function" ? value.bind(target) : value;
+              },
+            });
           return http.request(
             { ...plain, hostname: "127.0.0.1", port: new URL(origin).port, agent: undefined },
-            callback,
+            (res) => callback(dressed(res)),
           );
         },
       };
@@ -754,6 +845,9 @@ test("an https request goes through the https module with ALPN limited to http/1
       assert.equal(calls[0].path, "/");
       assert.deepEqual(agents[0], { keepAlive: true, maxSockets: 1 });
       assert.equal(response.fireemuExtra.host, "service-123456789012.us-central1.run.app");
+      assert.equal(response.fireemuExtra.httpVersion, "2.0");
+      assert.equal(response.fireemuExtra.alpn, "http/1.1");
+      assert.equal(response.fireemuExtra.tlsProtocol, "TLSv1.3");
       assert.equal(seen[0].body, JSON.stringify({ data: { op: "auth" } }));
     },
   );
@@ -784,6 +878,10 @@ test("a capture masks the project number in the host and the head, and records t
   assert.equal(record.transport.alpn, "http/1.1");
   assert.equal(record.transport.tlsProtocol, "TLSv1.3");
   assert.equal(record.transport.traceContextPresent, true);
+  assert.equal(record.transport.sentAt, "t");
+  const absent = {};
+  enrichCapture(absent, { fireemuExtra: { ...extra, traceContextPresent: false } }, {});
+  assert.equal(absent.transport.traceContextPresent, false);
   // no extra, no change; a failed request (an error without the property) is left alone
   const untouched = { a: 1 };
   enrichCapture(untouched, new Error("x"), { projectNumber: "123456789012" });
@@ -989,6 +1087,32 @@ test("readSources refuses a changed reviewed byte and a Firebase CLI other than 
   }
 });
 
+test("a failed request still gets what the transport knew of it, and the error is passed on", async () => {
+  const seen = [];
+  const failing = async () => {
+    const error = new TypeError("fetch failed");
+    error.fireemuExtra = { sentAt: "t", host: "h", httpVersion: "1.1", requestHead: "x" };
+    throw error;
+  };
+  const fetchImpl = captureFetch({
+    fetchImpl: failing,
+    onCapture: (c) => seen.push(c),
+    slots: SLOTS,
+    maskAuthorization,
+    enrich: (record, source) => enrichCapture(record, source, {}),
+  });
+  await assert.rejects(
+    fetchImpl("https://h/", { method: "POST", headers: { authorization: "Bearer eyJ.a.b" } }),
+    /fetch failed/,
+  );
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].transport.httpVersion, "1.1");
+  assert.equal(seen[0].error, "TypeError: fetch failed");
+  assert.equal(seen[0].authorization, MASKED_TOKEN);
+  assert.equal(seen[0].program, SLOTS[0].program);
+  assert.equal(seen[0].caseId, SLOTS[0].caseId);
+});
+
 // ---- the whole path in the stage 3 fake world ---------------------------------------------------------------
 
 const CLOUDBUILD =
@@ -1007,6 +1131,7 @@ async function fakeRun({
   ledgerText = `${ledgerClosed}\n`,
   useTransport = false,
   failProgram = null,
+  vanishAtLastRequest = false,
 } = {}) {
   const world = await deployWorld({
     deployScript,
@@ -1017,6 +1142,7 @@ async function fakeRun({
   const files = {};
   const waits = [];
   const authCalls = [];
+  const runDirs = [];
   const restControl = async (method, url, body, kind = "control", allowed = [200]) => {
     if (url === CLOUDBUILD) {
       world.budget.take(kind);
@@ -1063,6 +1189,7 @@ async function fakeRun({
       requestInit.headers.authorization ?? null,
     ]);
     const chosen = rule(slot, index - 1);
+    if (vanishAtLastRequest && index === SLOTS.length) world.deployed.present = false;
     return new Response(chosen.bodyText, {
       status: chosen.status,
       headers: { "content-type": chosen.contentType },
@@ -1119,7 +1246,10 @@ async function fakeRun({
     appendLedger: async (text) => ledger.push(JSON.parse(text)),
     ownerAdc: async () => ({ path: "/adc", file: { refresh_token: "REFRESH-SECRET" } }),
     projectNumber: async () => "123456789012",
-    makeRunDir: async () => join(world.dir, "run"),
+    makeRunDir: async (name) => {
+      runDirs.push(name);
+      return join(world.dir, "run");
+    },
     writeRunFile: async (dir, name, text) => {
       files[name] = text;
     },
@@ -1147,12 +1277,13 @@ async function fakeRun({
   const result = await recordRerecord({}, deps, collector);
   transport?.close();
   loopback?.close();
-  return { world, result, ledger, files, sent, waits, collector, authCalls };
+  return { world, result, ledger, files, sent, waits, collector, authCalls, runDirs };
 }
 
 test("fake world: the whole path records twelve answers over two deployments, cleans up and writes two ledger lines", async () => {
-  const { world, result, ledger, files, sent } = await fakeRun();
+  const { world, result, ledger, files, sent, runDirs } = await fakeRun();
   try {
+    assert.match(runDirs[0], /^callable-rerecord-2026-11-12T\d{6}\.\d{3}Z$/);
     assert.equal(result.verdict, "recorded", files["judgement.json"]);
     assert.equal(result.outcome, "recorded", ledger[1]?.reason);
     assert.equal(result.exitCode, 0);
@@ -1401,6 +1532,24 @@ test("fake world: a program that fails stops the run, and the next program is no
   }
 });
 
+test("fake world: a deployment whose function vanishes before cleanup, with no delete of our own, is left for A2", async () => {
+  const { world, result, ledger } = await fakeRun({ vanishAtLastRequest: true });
+  try {
+    assert.equal(result.outcome, "needs-recovery");
+    assert.equal(ledger[1].closureReady, false);
+    assert.equal(ledger[1].lockKept, true);
+    assert.match(ledger[1].reason, /A2 read-back >= 10 min needed/);
+    assert.equal(ledger[1].requests.cliDeploy, 2);
+    assert.equal(
+      ledger[1].requests.cliDelete,
+      1,
+      "only the first deployment was deleted by the run",
+    );
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
 test("fake world: a failed deploy (unknown create) needs recovery even when every read shows 404", async () => {
   const { world, result, ledger } = await fakeRun({
     deployScript: FAKE_RECEIPT_SCRIPT('console.error("Error: Failed"); process.exit(1);', 200),
@@ -1518,6 +1667,27 @@ test("the source upload helper is allowed the requests of both deployments, not 
   for (let i = 0; i < 30; i += 1) fromDeps.take("upload");
   assert.throws(() => fromDeps.take("upload"));
   close();
+});
+
+test("productionDeps wraps the control it is given so that the facts are collected, and counts nothing itself", async () => {
+  const calls = [];
+  const base = {
+    createControl: (adc, budget) => async (method, url) => {
+      calls.push([adc, budget, method, url]);
+      return { status: 200, value: { environment: "GEN_2", buildConfig: {} } };
+    },
+  };
+  const { deps, collector, close } = productionDeps({ base });
+  const control = deps.createControl("adc", "budget");
+  await control(
+    "GET",
+    "https://cloudfunctions.googleapis.com/v2/projects/fireemu-oracle-query/locations/us-central1/functions/fireemuCallableProbe",
+  );
+  close();
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].slice(0, 2), ["adc", "budget"]);
+  assert.equal(collector.facts.functions.length, 1);
+  assert.equal(deps.createBudget, base.createBudget);
 });
 
 test("productionDeps reads the reviewed sources", async () => {

@@ -1293,7 +1293,7 @@ test("the FUNCTIONS-HTTP stand-in accepts only the listed successor of the recor
   }
 });
 
-const RECORDED_STRICT = "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f";
+const RECORDED_STRICT = "2f354fbcd16be3c6e30190d5f590d32a6dc41039672f06473424da8ee51053f8";
 const sha256Text = (text) => createHash("sha256").update(text).digest("hex");
 const recorderBytes = (output) => `${JSON.stringify(output, null, 2)}\n`;
 

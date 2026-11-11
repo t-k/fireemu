@@ -277,7 +277,7 @@ test("resolved divergences are accepted only when the integrated comparison show
   assert.equal(resolvedDivergenceRows(closureWith(matching), () => matching).has("p#other"), false);
 });
 
-test("the FUNCTIONS-HTTP rows come from recorded runs of the release binary", () => {
+test("the FUNCTIONS-HTTP rows come from recorded runs of the release binary, the strict run amended on 2026-11-12", () => {
   const receipt = readJson(RECEIPT);
   const evidence = readJson(
     "spec/compatibility/closure/evidence/integration-v0.8.0/FUNCTIONS-HTTP-comparison.json",
@@ -286,16 +286,38 @@ test("the FUNCTIONS-HTTP rows come from recorded runs of the release binary", ()
     evidence.runs.map(({ profile }) => profile),
     ["strict", "emulator"],
   );
+  const [strict, emulator] = evidence.runs;
+  // The emulator run is the v0.8.0 release binary's.
+  assert.equal(emulator.executedBinary, "target/release/fireemu");
+  assert.equal(emulator.binarySha256Before, receipt.binarySha256);
+  assert.equal(emulator.binarySha256After, receipt.binarySha256);
   for (const run of evidence.runs) {
-    assert.equal(run.executedBinary, "target/release/fireemu", run.profile);
-    assert.equal(run.binarySha256Before, receipt.binarySha256, run.profile);
-    assert.equal(run.binarySha256After, receipt.binarySha256, run.profile);
     assert.equal(run.exitCode, 0, run.profile);
     // The checkout head at run time; the binary itself is identified by its digest.
     assert.match(run.sourceHead, /^[0-9a-f]{40}$/, run.profile);
     assert.match(run.recordingSha256, /^[0-9a-f]{64}$/, run.profile);
   }
-  assert.equal(evidence.strictRecordingsIdenticalToLane, true);
+  // The strict run was redone on the amended head (closure amendment A1: the callable wrapper's
+  // envelope for a project-issued token that fails verification). The v0.8.0 run is kept as history.
+  const amendment = readJson(strict.amendmentEvidence);
+  assert.equal(amendment.kind, "functions-http-callable-auth-refusal-rerecord-comparison");
+  assert.equal(strict.sourceHead, amendment.sourceCommit);
+  assert.equal(strict.binarySha256Before, amendment.artifactSha256);
+  assert.equal(strict.binarySha256After, amendment.artifactSha256);
+  assert.notEqual(strict.binarySha256Before, receipt.binarySha256);
+  assert.equal(strict.recordingSha256, amendment.strictRecordingSha256);
+  assert.deepEqual(strict.supersedes, {
+    executedBinary: "target/release/fireemu",
+    binarySha256: receipt.binarySha256,
+    recordingSha256: "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+    sourceHead: "24f300b4f7e2a79dd35388f4c0724b00cd0d19f1",
+  });
+  assert.equal(evidence.strictRecordingsIdenticalToLane, false);
+  assert.deepEqual(evidence.strictRecordingDiffersFromLaneRows, [
+    "functions-http/callable/auth-refusal#malformed-bearer",
+    "functions-http/callable/auth-refusal#invalid-signature",
+    "functions-http/callable/auth-refusal#expired-id-token",
+  ]);
   assert.equal(evidence.emulatorRecordingsIdenticalToLaneAfterCheckoutPathNormalization, true);
   assert.equal(evidence.rows.length, evidence.totalCases);
   assert.equal(

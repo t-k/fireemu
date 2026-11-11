@@ -5,6 +5,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::hash::{Crc32c, Md5};
@@ -16,12 +17,16 @@ static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
 #[derive(Clone)]
 pub struct SpillDir {
     dir: PathBuf,
+    _owner: Option<Arc<SpillOwner>>,
 }
 
 impl SpillDir {
     /// Creates a directory handle without accessing the filesystem.
     pub fn new(dir: impl Into<PathBuf>) -> Self {
-        Self { dir: dir.into() }
+        Self {
+            dir: dir.into(),
+            _owner: None,
+        }
     }
 
     /// Creates the directory if necessary and opens a unique temporary file.
@@ -167,6 +172,10 @@ const PREFIX: &str = "fireemu-spill-";
 
 /// Owns a process-specific directory for temporary body files.
 pub struct ProcessSpill {
+    owner: Arc<SpillOwner>,
+}
+
+struct SpillOwner {
     dir: PathBuf,
 }
 
@@ -182,21 +191,26 @@ impl ProcessSpill {
             Err(error) => return Err(error),
         }
         fs::create_dir(&dir)?;
-        Ok(Self { dir })
+        Ok(Self {
+            owner: Arc::new(SpillOwner { dir }),
+        })
     }
 
     /// Returns the process-specific directory path.
     pub fn path(&self) -> &Path {
-        &self.dir
+        &self.owner.dir
     }
 
     /// Returns a handle for creating temporary files in this directory.
     pub fn spill_dir(&self) -> SpillDir {
-        SpillDir::new(self.path())
+        SpillDir {
+            dir: self.path().to_owned(),
+            _owner: Some(Arc::clone(&self.owner)),
+        }
     }
 }
 
-impl Drop for ProcessSpill {
+impl Drop for SpillOwner {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.dir);
     }

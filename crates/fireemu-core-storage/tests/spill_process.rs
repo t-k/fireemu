@@ -38,6 +38,29 @@ fn sweep_removes_only_dead_process_directories() {
 }
 
 #[test]
+fn spill_dir_keeps_process_directory_alive() {
+    let root = std::env::temp_dir().join(format!(
+        "spill-owner-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let process = ProcessSpill::create(&root).unwrap();
+    let dir = process.path().to_owned();
+    let spill = process.spill_dir();
+    let clone = spill.clone();
+    drop(process);
+    assert!(dir.is_dir());
+    drop(spill);
+    assert!(dir.is_dir());
+    drop(clone);
+    assert!(!dir.exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn process_spill_removes_directory_and_file_on_drop() {
     let root = std::env::temp_dir().join(format!(
         "spill-drop-{}-{}",

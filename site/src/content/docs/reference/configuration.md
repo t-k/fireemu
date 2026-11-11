@@ -36,6 +36,8 @@ The same settings can be written as TOML (`fireemu.toml`) or JSON (`fireemu.json
 | `events` | Delivery of function trigger events: `maxAttempts` for functions declared with `retry` (default 4); `delivery` accepts only `exactly-once-test` | [Profiles and productionExact](../../guides/profiles/) |
 | `trace` | Accepted, currently no effect | |
 
+A key that is accepted with no effect prints a `note:` line when a run loads it. To fail a CI job on such a setting instead of relying on the log, run `fireemu config lint --deny-ineffective`, which lists them and exits 1 unless an `--allow` entry covers each one (see [`config lint`](../cli/#config-lint)).
+
 ## Storage size limits
 
 `storage.maxObjectBytes` sets the maximum size of one object (default 268435456 bytes, maximum 2143289343). The request body cap is this value plus 4194304 bytes. `storage.bufferedBodyBudgetBytes` sets the process-wide budget for buffered Storage request bodies (default 1073741824 bytes, maximum 2147483647). Both values must be positive whole numbers. See [Cloud Storage](../../products/storage/) for the separate stored-byte and resumable-upload limits.

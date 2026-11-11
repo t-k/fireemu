@@ -22,6 +22,11 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 - Dependencies: rustix is updated to 1.1.6 for RUSTSEC-2026-0486 (extended-attribute reads with a zero-length buffer).
 - `fireemu config show` (text and `--json`) and `fireemu config lint --json` no longer print OIDC client secrets, API keys, Auth custom token signer keys, Pub/Sub local bearer tokens or App Check debug token digests in plaintext.
 
+### Changed
+
+- Strict profile: a callable refuses an `Authorization` credential that is not a verified ID token of the project with the callable wrapper's own `401` envelope (`{"error":{"message":"Unauthenticated","status":"UNAUTHENTICATED"}}`, `application/json; charset=utf-8`, `Vary: Origin`), as production answered a malformed Bearer, a scheme in another case, `Bearer` without a token, another scheme and an unsigned three-part token, in two recordings on 2026-11-11: a real callable and a callable's code deployed as a plain `onRequest` function. Another scheme and `Bearer` without a token used to reach the handler as if no credential were sent, and a malformed Bearer was answered with the front end's `401` page. An ID token this project issued whose signature the daemon cannot verify or that has expired is answered with the same envelope: two re-recordings on 2026-11-11 (a real callable, right after the public grant and 60 s later) showed production's wrapper refusing both, which supersedes the front end's page recorded on 2026-09-27. More than one `Authorization` field still gets the front end's page (no recording sends the wrapper two). An empty `Authorization` value is no credential, as the installed firebase-functions reads it: the handler runs unauthenticated (unrecorded, inferred from the SDK); a value that is not text is refused with the envelope. The same refusal applies to a callable that a configured manifest serves as `onRequest`.
+- Strict profile: a callable's wrapper nested in an `onRequest` function (`onRequest(opts, onCall(...))`, which discovery cannot see as a callable) no longer accepts a credential the daemon did not verify as an identity: it refuses it with the wrapper's `401` envelope, as production's wrapper does. A plain `onRequest` function is unchanged and still receives every credential.
+
 ## [0.49.0] - 2026-11-11
 
 ### Added

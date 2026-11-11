@@ -674,26 +674,66 @@
       "evidence": {
         "productionRecordings": [
           {
-            "recordedAt": "2026-09-27T13:59:44Z",
+            "recordedAt": "2026-11-11T18:40:06Z",
             "project": "fireemu-oracle-query",
-            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "corpusDigest": "665bd73ae2144f2035840835eff00a447fee33139c65a83b718978cbb5d3c167",
             "pass": 1
           },
           {
-            "recordedAt": "2026-09-27T13:59:45Z",
+            "recordedAt": "2026-11-11T18:41:07Z",
             "project": "fireemu-oracle-query",
-            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "corpusDigest": "665bd73ae2144f2035840835eff00a447fee33139c65a83b718978cbb5d3c167",
             "pass": 2
           }
         ],
-        "sourceCommit": "cceb6965c5f3e7195a73d20034d789ea8587e03e",
-        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
-        "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
-        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
-        "comparisonSha256": "659186bb0bcf4e0a1bb655fcf7cf9b32309c5a76d52cd9a76e6269e5504169d2",
-        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "confirmingProductionRecordings": [
+          {
+            "recordedAt": "2026-11-11T19:47:25Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "665bd73ae2144f2035840835eff00a447fee33139c65a83b718978cbb5d3c167",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-11-11T19:48:26Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "665bd73ae2144f2035840835eff00a447fee33139c65a83b718978cbb5d3c167",
+            "pass": 2
+          }
+        ],
+        "sourceCommit": "c85ca4704106c34323714cdcac9e9783a327bdd6",
+        "finalArtifactSha256": "c9dac4f8f8e676b2ae873edc40203858d7633ba2c575ac46c1453d29b20ec51a",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-callable-auth-refusal-rerecord-comparison.json",
+        "comparisonSha256": "89cd7a0fb48d54d5685ef46c0525bb07364d9c18966856f5f1900b2abbd2d7fb",
+        "productionRecordingPath": "conformance/functions-http-callable-rerecord-production.json",
+        "productionRecordingSha256": "7bee9903295fb1ffae1b4b6cfbdc7574aebf3f5ee19d9a98beb387dce4caf7a9",
+        "strictRecordingSha256": "2f354fbcd16be3c6e30190d5f590d32a6dc41039672f06473424da8ee51053f8",
         "rows": {
           "MATCH": 3
+        },
+        "supersededEvidence": {
+          "productionRecordings": [
+            {
+              "recordedAt": "2026-09-27T13:59:44Z",
+              "project": "fireemu-oracle-query",
+              "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+              "pass": 1
+            },
+            {
+              "recordedAt": "2026-09-27T13:59:45Z",
+              "project": "fireemu-oracle-query",
+              "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+              "pass": 2
+            }
+          ],
+          "sourceCommit": "cceb6965c5f3e7195a73d20034d789ea8587e03e",
+          "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
+          "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
+          "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+          "comparisonSha256": "659186bb0bcf4e0a1bb655fcf7cf9b32309c5a76d52cd9a76e6269e5504169d2",
+          "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+          "rows": {
+            "MATCH": 3
+          }
         }
       }
     },
@@ -878,7 +918,7 @@
     "comparisons": [
       {
         "path": "spec/compatibility/closure/evidence/integration-v0.8.0/FUNCTIONS-HTTP-comparison.json",
-        "sha256": "73215bfc9eff6bf583d7ef41a0179a8791dd0c2e0f15ba68a2d4f5a7b701a701",
+        "sha256": "4d0c4ddd739099adaaaa99b12a3537b20013533042f912a589c01c182e6e443b",
         "rows": 68,
         "summary": {
           "MATCH": 68
@@ -891,5 +931,17 @@
     ],
     "result": "IDENTICAL_TO_LANE",
     "productionRequests": 0
-  }
+  },
+  "amendments": [
+    {
+      "id": "A1",
+      "amendedOn": "2026-11-12",
+      "conditionId": "FUNCTIONS-HTTP/callable-auth-refusal",
+      "decision": "The 2026-09-27 recording of the front-end page for a malformed Bearer, a bad-signature token and an expired token is superseded by two re-recordings of 2026-11-11 (FUNCTIONS-HTTP-CALLABLE-RERECORD, a real callable, right after the public grant and 60 s later): production answers all three with the callable wrapper's 66-byte 401 envelope. The September recording stays in the condition as history (supersededEvidence).",
+      "decider": "project coordinator (ruling 8, 2026-11-12)",
+      "strictChange": "crates/fireemu-adapter-functions/src/http.rs: strict_callable_credential answers WrapperRefusal for every single credential it cannot verify",
+      "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-callable-auth-refusal-rerecord-comparison.json",
+      "comparisonSha256": "89cd7a0fb48d54d5685ef46c0525bb07364d9c18966856f5f1900b2abbd2d7fb"
+    }
+  ]
 }

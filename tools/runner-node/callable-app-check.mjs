@@ -28,6 +28,8 @@ import { createRequire, register } from "node:module";
 import { dirname, join, parse as parsePath } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { guardCallableWrapper } from "./nested-callable.mjs";
+
 /// `firebase-functions` majors whose callable internals this instrumentation is written for.
 const SUPPORTED_MAJORS = [6, 7];
 
@@ -187,15 +189,19 @@ export function instrumentCallables(sourceDir) {
   ].map((v) => String(v ?? "").toLowerCase());
 
   const options = new WeakMap();
+  // Returns the callable wrapper to use: the guarded wrapper, which refuses a credential the daemon
+  // did not verify when it runs inside a non-callable endpoint (nested-callable.mjs).
   const observe = (fn, opts) => {
-    if (typeof fn !== "function" || options.has(fn)) return;
+    if (typeof fn !== "function" || options.has(fn)) return fn;
+    const guarded = guardCallableWrapper(fn);
     options.set(
-      fn,
+      guarded,
       Object.freeze({
         enforceAppCheck: (opts ?? {}).enforceAppCheck === true,
         consumeAppCheckToken: consumeState((opts ?? {}).consumeAppCheckToken),
       }),
     );
+    return guarded;
   };
   const carry = (from, to) => {
     if (typeof to === "function" && !options.has(to) && options.has(from)) {
@@ -205,9 +211,7 @@ export function instrumentCallables(sourceDir) {
 
   const originalOnCallHandler = loaded.commonHttps.onCallHandler;
   loaded.commonHttps.onCallHandler = function onCallHandler(opts, handler, version_) {
-    const fn = originalOnCallHandler.call(this, opts, handler, version_);
-    observe(fn, opts);
-    return fn;
+    return observe(originalOnCallHandler.call(this, opts, handler, version_), opts);
   };
 
   const originalWrapTrace = loaded.trace.wrapTraceContext;

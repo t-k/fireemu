@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -195,5 +196,86 @@ test("FUNCTIONS-HTTP closure keeps every declared condition and scope decision",
     assert.ok(closure.conditions.every(({ status }) => status === "VERIFIED"));
     assert.ok(closure.scopeDecisions.every(({ status }) => status === "FROZEN"));
     assert.equal(closure.closureReview.decision, "APPROVED");
+  }
+});
+
+// ---- closure amendment A1 (2026-11-12): the callable wrapper's envelope for a refused credential ------------
+
+const sha256Path = (path) =>
+  createHash("sha256")
+    .update(readFileSync(fileURLToPath(new URL(`../../${path}`, import.meta.url))))
+    .digest("hex");
+
+test("amendment A1: the callable-auth-refusal rows are the two re-recordings, the September recording is history", () => {
+  const closure = readRepo("spec/compatibility/closure/FUNCTIONS-HTTP.json");
+  const condition = closure.conditions.find(
+    ({ conditionId }) => conditionId === "FUNCTIONS-HTTP/callable-auth-refusal",
+  );
+  const evidence = condition.evidence;
+  const comparison = readRepo(evidence.comparisonPath);
+  const production = readRepo(evidence.productionRecordingPath);
+  assert.equal(evidence.comparisonSha256, sha256Path(evidence.comparisonPath));
+  assert.equal(evidence.productionRecordingSha256, sha256Path(evidence.productionRecordingPath));
+  assert.equal(comparison.productionRecording.sha256, evidence.productionRecordingSha256);
+  assert.equal(comparison.artifactSha256, evidence.finalArtifactSha256);
+  assert.equal(comparison.sourceCommit, evidence.sourceCommit);
+  assert.equal(comparison.strictRecordingSha256, evidence.strictRecordingSha256);
+  assert.equal(evidence.rows.MATCH, 3);
+  assert.deepEqual(
+    comparison.rows.map(({ row, status }) => [row, status]),
+    condition.cases.map((name) => [`functions-http/callable/auth-refusal#${name}`, "MATCH"]),
+  );
+  // Both runs and both passes of the published recording are exactly the compared answers.
+  const wrapper = {
+    status: 401,
+    headers: { "content-type": "application/json; charset=utf-8" },
+    body: { error: { message: "Unauthenticated", status: "UNAUTHENTICATED" } },
+  };
+  for (const row of comparison.rows) {
+    assert.deepEqual(row.answer, wrapper, row.row);
+    assert.equal(row.productionObservations, 4, row.row);
+    const name = row.row.split("#")[1];
+    const observed = Object.values(production.runs).flatMap((run) =>
+      run.captures.filter(
+        (capture) => capture.program.endsWith("/auth-refusal") && capture.caseId === name,
+      ),
+    );
+    assert.equal(observed.length, 4, row.row);
+    for (const capture of observed) {
+      assert.equal(capture.status, 401, row.row);
+      assert.equal(capture.bodyBytes, 66, row.row);
+      assert.deepEqual(JSON.parse(capture.bodyText), wrapper.body, row.row);
+      assert.equal(capture.headers["content-type"], wrapper.headers["content-type"], row.row);
+    }
+  }
+  assert.equal(evidence.productionRecordings.length, 2);
+  assert.equal(evidence.confirmingProductionRecordings.length, 2);
+  assert.deepEqual(
+    evidence.productionRecordings.map(({ pass }) => pass),
+    [1, 2],
+  );
+  // History: the September evidence is kept whole, and the amendment names what it supersedes.
+  const history = evidence.supersededEvidence;
+  assert.equal(history.productionRecordings[0].recordedAt, "2026-09-27T13:59:44Z");
+  assert.equal(
+    history.strictRecordingSha256,
+    "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+  );
+  assert.equal(comparison.supersedes.comparisonPath, history.comparisonPath);
+  assert.equal(comparison.supersedes.comparisonSha256, history.comparisonSha256);
+  assert.equal(history.comparisonSha256, sha256Path(history.comparisonPath));
+  assert.equal(comparison.supersedes.answer.bodyBytes, 294);
+  assert.equal(closure.amendments.length, 1);
+  assert.equal(closure.amendments[0].conditionId, condition.conditionId);
+  assert.equal(closure.amendments[0].comparisonSha256, evidence.comparisonSha256);
+  // Every other condition still cites the September comparison and recording.
+  for (const other of closure.conditions) {
+    if (other.conditionId === condition.conditionId || other.status !== "VERIFIED") continue;
+    assert.equal(
+      other.evidence.strictRecordingSha256 ??
+        "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+      "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+      other.conditionId,
+    );
   }
 });

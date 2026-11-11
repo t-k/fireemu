@@ -1,0 +1,135 @@
+{
+  "schemaVersion": 1,
+  "kind": "functions-http-callable-auth-refusal-rerecord-comparison",
+  "parent": "FUNCTIONS-HTTP",
+  "amendedOn": "2026-11-12",
+  "decision": "coordinator ruling 8 (2026-11-12): strict answers the callable wrapper's 66-byte envelope for every refused single credential, project-issued tokens that fail verification included; the 2026-09-27 front-end page is superseded by current production and kept as history",
+  "sourceCommit": "c85ca4704106c34323714cdcac9e9783a327bdd6",
+  "artifactSha256": "c9dac4f8f8e676b2ae873edc40203858d7633ba2c575ac46c1453d29b20ec51a",
+  "artifactKind": "release build of the amended head under the source-bound binary custody rules: a fresh worktree-local target directory, an explicit manifest path, --locked, RUSTC_WRAPPER= (empty); the binary was copied privately and the copy hashed; check-local replayed it twice under Node 22.22.1 with the same recording digest. The release job rebuilds from the tag and replays check-local against the digest pinned in the integrated comparison",
+  "buildCustody": {
+    "command": "cargo build --release --locked -p fireemu --manifest-path <worktree>/Cargo.toml",
+    "cargoTargetDir": "fresh, worktree-local, exclusively owned",
+    "rustcWrapper": "",
+    "sourceCommit": "c85ca4704106c34323714cdcac9e9783a327bdd6",
+    "binarySha256": "c9dac4f8f8e676b2ae873edc40203858d7633ba2c575ac46c1453d29b20ec51a",
+    "privateCopySha256": "c9dac4f8f8e676b2ae873edc40203858d7633ba2c575ac46c1453d29b20ec51a",
+    "checkLocalRuns": 2,
+    "recordingSha256Both": "2f354fbcd16be3c6e30190d5f590d32a6dc41039672f06473424da8ee51053f8"
+  },
+  "corpusSha256": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+  "rerecordCorpusSha256": "665bd73ae2144f2035840835eff00a447fee33139c65a83b718978cbb5d3c167",
+  "fixtureIndexSha256": "0c481ec6b6ec87db71a2f90550238ce69ec2b923c7a92b7ea5171cb7909886a5",
+  "fixturePackageLockSha256": "bcec0509ef824246fc0773859a02561ef178cfd59ede9aab5d39fbcfc178485d",
+  "nodeVersion": "v22.22.1",
+  "productionRecording": {
+    "path": "conformance/functions-http-callable-rerecord-production.json",
+    "sha256": "7bee9903295fb1ffae1b4b6cfbdc7574aebf3f5ee19d9a98beb387dce4caf7a9",
+    "gitSha": "48095bdff6464fb912605478d44e00c1efd573cb",
+    "runs": {
+      "run-1": {
+        "runId": "2026-11-11T173534.381Z",
+        "envelope": "FUNCTIONS-HTTP-CALLABLE-RERECORD-20261112-01",
+        "recordedAt": "2026-11-11T17:35:34.381Z",
+        "privateCapturesSha256": "877c13a98ad7d6f09459eb19ddba050f9650198d4429aaf71dad91aa8bb1cb7e",
+        "privateRecordingSha256": "dee17da57197c8fd3d27306226450cdf64173fa8827980a98cab3dc0971b6a09"
+      },
+      "run-2": {
+        "runId": "2026-11-11T184259.739Z",
+        "envelope": "FUNCTIONS-HTTP-CALLABLE-RERECORD-20261112-02",
+        "recordedAt": "2026-11-11T18:42:59.739Z",
+        "privateCapturesSha256": "7f3f0aee2bbfb1b6cfb5f17af7a9e4241b15f052e628bae5789bcedcabf46185",
+        "privateRecordingSha256": "dee17da57197c8fd3d27306226450cdf64173fa8827980a98cab3dc0971b6a09"
+      }
+    },
+    "passesPerRun": 2,
+    "note": "Pass 1 right after the public invoker grant, pass 2 sixty seconds later; both runs, both passes gave the same answers."
+  },
+  "strictRecordingSha256": "2f354fbcd16be3c6e30190d5f590d32a6dc41039672f06473424da8ee51053f8",
+  "strictProductionMatches": 3,
+  "totalCases": 3,
+  "supersedes": {
+    "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+    "comparisonSha256": "659186bb0bcf4e0a1bb655fcf7cf9b32309c5a76d52cd9a76e6269e5504169d2",
+    "productionRecordingSha256": [
+      "555c1150e708606a6f21ac931d9196a5e75e62486398b760d9e9cfafc8d94e0f",
+      "555c1150e708606a6f21ac931d9196a5e75e62486398b760d9e9cfafc8d94e0f"
+    ],
+    "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+    "recordedAt": [
+      "2026-09-27T13:59:44Z",
+      "2026-09-27T13:59:45Z"
+    ],
+    "rows": [
+      "functions-http/callable/auth-refusal#malformed-bearer",
+      "functions-http/callable/auth-refusal#invalid-signature",
+      "functions-http/callable/auth-refusal#expired-id-token"
+    ],
+    "answer": {
+      "class": "front-end-page",
+      "status": 401,
+      "contentType": "text/html; charset=UTF-8",
+      "bodyBytes": 294,
+      "bodySha256": "09673563d03ef97396af9ae7ab8cdd9dae9215caba19a896220da01a094376e0"
+    }
+  },
+  "rows": [
+    {
+      "row": "functions-http/callable/auth-refusal#malformed-bearer",
+      "status": "MATCH",
+      "answer": {
+        "status": 401,
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": {
+            "message": "Unauthenticated",
+            "status": "UNAUTHENTICATED"
+          }
+        }
+      },
+      "answerSha256": "603e136eabb9f3745034572ebbfa7b35c7c9261453f3c6cf11062ff54c8b3b56",
+      "productionObservations": 4,
+      "strictObservations": 2
+    },
+    {
+      "row": "functions-http/callable/auth-refusal#invalid-signature",
+      "status": "MATCH",
+      "answer": {
+        "status": 401,
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": {
+            "message": "Unauthenticated",
+            "status": "UNAUTHENTICATED"
+          }
+        }
+      },
+      "answerSha256": "603e136eabb9f3745034572ebbfa7b35c7c9261453f3c6cf11062ff54c8b3b56",
+      "productionObservations": 4,
+      "strictObservations": 2
+    },
+    {
+      "row": "functions-http/callable/auth-refusal#expired-id-token",
+      "status": "MATCH",
+      "answer": {
+        "status": 401,
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "error": {
+            "message": "Unauthenticated",
+            "status": "UNAUTHENTICATED"
+          }
+        }
+      },
+      "answerSha256": "603e136eabb9f3745034572ebbfa7b35c7c9261453f3c6cf11062ff54c8b3b56",
+      "productionObservations": 4,
+      "strictObservations": 2
+    }
+  ]
+}

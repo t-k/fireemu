@@ -231,3 +231,13 @@ cargo bench -p fireemu-core-firestore --bench verify
 ```
 
 This measures elapsed time; it does not measure allocations or peak RSS.
+
+## sdk-latest records
+
+1. Open a passing run of the `sdk-latest` workflow on `main` in GitHub Actions.
+2. Download the `sdk-latest-combination-light` or `sdk-latest-combination-broad` artifact for the suite.
+3. Replace the record with the same `suite` in the `records` array of `site/src/data/sdk-latest.json` with the JSON from the artifact, which contains one record object.
+4. Run `pnpm -C site test` and `pnpm -C site build`.
+5. Commit the change on a branch and open a pull request.
+
+The workflow never pushes, opens pull requests or commits. The site is built only from the committed file.

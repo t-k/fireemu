@@ -7,6 +7,7 @@ tableOfContents:
 
 import ProductTable from '../../../components/ProductTable.astro';
 import ProductionAreas from '../../../components/ProductionAreas.astro';
+import SdkLatestTable from '../../../components/SdkLatestTable.astro';
 import CapabilityTable from '../../../components/CapabilityTable.astro';
 
 The tables on this page are generated from the records in the repository when the site is built: the [compatibility contract](https://github.com/fireemu/fireemu/blob/main/spec/compatibility/contract.json), the [production verification records](https://github.com/fireemu/fireemu/tree/main/spec/compatibility/closure) and the [capability manifest](https://github.com/fireemu/fireemu/blob/main/crates/fireemu/src/capabilities.json).
@@ -46,6 +47,12 @@ Differences that most often change a test result. Fireemu's column is the defaul
 Fireemu compares its answers with recordings taken from real Firebase projects. An area is **verified against production** when every condition in its frozen inventory matches the recordings, or differs only in a reviewed and documented way (a known difference). An area still being worked on is marked **In progress**, and its counts describe recorded conditions, not verification of the whole area.
 
 <ProductionAreas />
+
+## Published package with the latest SDKs
+
+This table shows the last passing run of the published npm package `fireemu` with the newest `firebase`, `firebase-admin` and `firebase-functions`, recorded by the `sdk-latest` workflow. Maintainers refresh a row after a passing run, and a run that fails is never shown.
+
+<SdkLatestTable />
 
 ## Capability manifest
 

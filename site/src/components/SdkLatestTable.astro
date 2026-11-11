@@ -1,0 +1,28 @@
+---
+import data from '../data/sdk-latest.json';
+import { sdkLatestRows } from '../data/sdk-latest.mjs';
+
+const rows = sdkLatestRows(data);
+---
+
+{rows.length === 0 ? <p>No passing combination is recorded yet.</p> : (
+	<table>
+		<thead>
+			<tr><th>Run type</th><th>Date recorded</th><th>fireemu</th><th>firebase</th><th>firebase-admin</th><th>firebase-functions</th><th>Smokes</th><th>Run</th></tr>
+		</thead>
+		<tbody>
+			{rows.map((row) => (
+				<tr>
+					<td>{row.label}</td>
+					<td>{row.recordedOn}</td>
+					<td>{row.fireemu}</td>
+					<td>{row.firebase}</td>
+					<td>{row.firebaseAdmin}</td>
+					<td>{row.firebaseFunctions}</td>
+					<td>{row.smokes}</td>
+					<td><a href={row.runId === null ? 'https://github.com/fireemu/fireemu/actions/workflows/sdk-latest.yml' : `https://github.com/fireemu/fireemu/actions/runs/${row.runId}`}>View run</a></td>
+				</tr>
+			))}
+		</tbody>
+	</table>
+)}

@@ -1051,7 +1051,7 @@ fn storage_unknown_bucket_note(event: NoticeEvent<'_>) -> String {
         }
     };
     format!(
-        "note: storage: an object was written to bucket {bucket:?}, which is not a default bucket of the project, a firebase.json storage target, imported data or listed in storage.buckets. Production would answer 404 unless that bucket exists, so check the name; list it in storage.buckets to silence this note. Reported once per bucket."
+        "note: storage: an object was written to bucket {bucket:?}, which is not a default bucket of the project, a firebase.json storage target, imported data or listed in storage.buckets. Production would answer 404 unless that bucket exists, so check the name; list it in storage.buckets to silence this note, or set storage.undeclaredBuckets to \"refuse\" to answer 404 for such a bucket as production does. Reported once per bucket."
     )
 }
 
@@ -3026,6 +3026,10 @@ mod tests {
         assert!(first.contains("\"typo-bucket\""), "{first}");
         assert!(
             first.contains("404") && first.contains("storage.buckets"),
+            "{first}"
+        );
+        assert!(
+            first.contains("storage.undeclaredBuckets") && first.contains("\"refuse\""),
             "{first}"
         );
         let suppressed = storage_unknown_bucket_note(NoticeEvent::Suppressed);

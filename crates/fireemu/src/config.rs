@@ -299,6 +299,18 @@ impl CompatibilityProfile {
         }
     }
 
+    /// The default of `storage.undeclaredBuckets`: the strict profile creates the bucket a write
+    /// names and notes it once (owner decision of 2026-10-13); the emulator profile creates it
+    /// silently, as the official emulator does, and offers no other mode.
+    #[must_use]
+    pub const fn undeclared_buckets(self) -> fireemu_adapter_http::storage::UndeclaredBuckets {
+        use fireemu_adapter_http::storage::UndeclaredBuckets;
+        match self {
+            Self::Strict => UndeclaredBuckets::Warn,
+            Self::Emulator => UndeclaredBuckets::Create,
+        }
+    }
+
     /// How Security Rules treat a lone surrogate: production holds a half cut from a pair as
     /// U+FFFD, so `"é🔥x"[1] == "\ud83d"` is false (`string-escape#esc-high`, recorded
     /// 2026-11-08), and refuses a pattern that holds one; the official emulator keeps the lone
@@ -1090,6 +1102,9 @@ pub struct RuntimeConfig {
     /// `storage.defaultBucket`: which of the project's two default bucket names exist under
     /// strict (`"both"` by default).
     pub storage_default_bucket: fireemu_adapter_http::storage::DefaultBuckets,
+    /// `storage.undeclaredBuckets`: what an object operation on a bucket nothing declared does
+    /// (`warn` under strict, `create` under the emulator profile unless the key says otherwise).
+    pub storage_undeclared_buckets: fireemu_adapter_http::storage::UndeclaredBuckets,
     /// When the daemon's databases were created (`firestore.databaseCreateTime`): the
     /// `createTime` they report and the instant before which a `read_time` is refused. Unset,
     /// it is the daemon's start; a run compared with a production database names that
@@ -1810,6 +1825,7 @@ impl Default for RuntimeConfig {
             storage_buckets: Vec::new(),
             storage_public_buckets: Vec::new(),
             storage_default_bucket: fireemu_adapter_http::storage::DefaultBuckets::Both,
+            storage_undeclared_buckets: profile.undeclared_buckets(),
             database_create_time: None,
             require_demo_prefix: true,
             refuse_unknown_projects: false,
@@ -2161,6 +2177,7 @@ impl RuntimeConfig {
                     "firestore.enforceLimits"
                         | "auth.improvedEmailPrivacy"
                         | "firestore.missingIndexes"
+                        | "storage.undeclaredBuckets"
                 ) {
                     "derived from profile"
                 } else {
@@ -2240,6 +2257,11 @@ impl RuntimeConfig {
                     "firebasestorage.app"
                 }
                 fireemu_adapter_http::storage::DefaultBuckets::AppspotCom => "appspot.com",
+            })),
+            "storage.undeclaredBuckets" => Some(json!(match self.storage_undeclared_buckets {
+                fireemu_adapter_http::storage::UndeclaredBuckets::Create => "create",
+                fireemu_adapter_http::storage::UndeclaredBuckets::Warn => "warn",
+                fireemu_adapter_http::storage::UndeclaredBuckets::Refuse => "refuse",
             })),
             "daemon.clockStart" => Some(json!(self.clock_start_pinned.then(|| self.clock_start.to_rfc3339().ok()).flatten())),
             "daemon.clock" => Some(json!(if self.clock_frozen() { "frozen" } else { "realtime" })),
@@ -4369,6 +4391,7 @@ impl RuntimeConfig {
         self.profile = profile;
         self.enforce_limits = profile.enforce_limits();
         self.firestore_missing_indexes = profile.missing_indexes();
+        self.storage_undeclared_buckets = profile.undeclared_buckets();
         self.token_acceptance = profile.token_acceptance();
         self.implicit_database_creation = profile.implicit_database_creation();
         self.refuse_without_ruleset = profile.refuse_without_ruleset();
@@ -5796,6 +5819,30 @@ impl RuntimeConfig {
             if let Some(value) = storage.get("publicBuckets") {
                 cfg.storage_public_buckets = parse_storage_buckets("publicBuckets", value)?;
             }
+            if let Some(value) = storage.get("undeclaredBuckets") {
+                use fireemu_adapter_http::storage::UndeclaredBuckets;
+                let mode =
+                    match value.as_str() {
+                        Some("create") => UndeclaredBuckets::Create,
+                        Some("warn") => UndeclaredBuckets::Warn,
+                        Some("refuse") => UndeclaredBuckets::Refuse,
+                        _ => return Err(ConfigError(
+                            "storage.undeclaredBuckets must be \"create\", \"warn\" or \"refuse\""
+                                .to_owned(),
+                        )),
+                    };
+                // The emulator profile reproduces the official emulator, which creates every
+                // bucket on first use and reports nothing; the other two modes are the strict
+                // profile's.
+                if mode != UndeclaredBuckets::Create && cfg.profile != CompatibilityProfile::Strict
+                {
+                    return Err(ConfigError(format!(
+                        "storage.undeclaredBuckets \"{}\" requires the strict profile",
+                        value.as_str().unwrap_or_default()
+                    )));
+                }
+                cfg.storage_undeclared_buckets = mode;
+            }
         }
         if let Some(functions) = obj.get("functions").and_then(Value::as_object) {
             Self::parse_functions(functions, &mut cfg)?;
@@ -6544,6 +6591,11 @@ mod tests {
             ("storage.buckets", json!([]), "default"),
             ("storage.publicBuckets", json!([]), "default"),
             ("storage.defaultBucket", json!("both"), "default"),
+            (
+                "storage.undeclaredBuckets",
+                json!("warn"),
+                "derived from profile",
+            ),
             ("events.maxAttempts", json!(4), "default"),
             (
                 "pubsub.pushMinimumRedeliveryIntervalMillis",
@@ -7035,6 +7087,14 @@ mod tests {
                     }),
                 ),
                 (
+                    "storage.undeclaredBuckets",
+                    json!(match cfg.storage_undeclared_buckets {
+                        fireemu_adapter_http::storage::UndeclaredBuckets::Create => "create",
+                        fireemu_adapter_http::storage::UndeclaredBuckets::Warn => "warn",
+                        fireemu_adapter_http::storage::UndeclaredBuckets::Refuse => "refuse",
+                    }),
+                ),
+                (
                     "pubsub.deadLetterAuthorization",
                     json!(cfg.pubsub_dead_letter_authorization.as_config_str()),
                 ),
@@ -7112,6 +7172,7 @@ mod tests {
                     // The key only matters to the strict profile; the emulator profile
                     // runs the query (Report is its inert value).
                     ("firestore.missingIndexes", _) if profile == "emulator" => json!("report"),
+                    ("storage.undeclaredBuckets", _) if profile == "emulator" => json!("create"),
                     ("firestore.listenStreamLifetime", true) => json!("oneHour"),
                     _ => node["default"].clone(),
                 };
@@ -7134,14 +7195,13 @@ mod tests {
                 assert_eq!(row["value"], json!(actual), "{key}");
                 assert_eq!(row["source"], "derived from profile", "{key}");
             }
-            let row = rows
-                .iter()
-                .find(|row| row["key"] == "firestore.missingIndexes")
-                .unwrap();
-            assert_eq!(
-                row["source"], "derived from profile",
-                "{profile}, productionExact={exact}"
-            );
+            for key in ["firestore.missingIndexes", "storage.undeclaredBuckets"] {
+                let row = rows.iter().find(|row| row["key"] == key).unwrap();
+                assert_eq!(
+                    row["source"], "derived from profile",
+                    "{key}, {profile}, productionExact={exact}"
+                );
+            }
             // Defaults behind schema references also have concrete runtime values.
             let full_schema: Value =
                 serde_json::from_str(include_str!("../../../spec/config/fireemu.schema.json"))
@@ -7534,6 +7594,102 @@ mod tests {
             let error = parse(json!({"maxStoredBytes": bad})).unwrap_err();
             assert!(error.0.contains("storage.maxStoredBytes"), "{error}");
         }
+    }
+
+    #[test]
+    fn storage_undeclared_buckets_follows_the_profile_unless_the_key_names_a_mode() {
+        use fireemu_adapter_http::storage::UndeclaredBuckets::{Create, Refuse, Warn};
+        let read = |profile: &str, exact: bool, mode: Option<Value>| {
+            let mut input = json!({"schemaVersion": 1, "profile": profile});
+            if exact {
+                input["productionExact"] = json!(true);
+            }
+            if let Some(mode) = mode {
+                input["storage"] = json!({"undeclaredBuckets": mode});
+            }
+            RuntimeConfig::from_json(&input)
+        };
+        for exact in [false, true] {
+            // The strict profile keeps the note (owner decision of 2026-10-13); productionExact
+            // does not move the key.
+            assert_eq!(
+                read("strict", exact, None)
+                    .unwrap()
+                    .storage_undeclared_buckets,
+                Warn
+            );
+            assert_eq!(
+                read("emulator", false, None)
+                    .unwrap()
+                    .storage_undeclared_buckets,
+                Create
+            );
+            for (text, expected) in [("create", Create), ("warn", Warn), ("refuse", Refuse)] {
+                assert_eq!(
+                    read("strict", exact, Some(json!(text)))
+                        .unwrap()
+                        .storage_undeclared_buckets,
+                    expected
+                );
+            }
+        }
+        assert_eq!(RuntimeConfig::default().storage_undeclared_buckets, Warn);
+        assert_eq!(
+            read("emulator", false, Some(json!("create")))
+                .unwrap()
+                .storage_undeclared_buckets,
+            Create
+        );
+        // The emulator profile reproduces the official emulator, which creates every bucket
+        // silently; the other two modes are the strict profile's.
+        for text in ["warn", "refuse"] {
+            assert_eq!(
+                read("emulator", false, Some(json!(text))),
+                Err(ConfigError(format!(
+                    "storage.undeclaredBuckets \"{text}\" requires the strict profile"
+                )))
+            );
+        }
+        for bad in [
+            json!("Refuse"),
+            json!(true),
+            json!(null),
+            json!(""),
+            json!(["refuse"]),
+        ] {
+            for profile in ["strict", "emulator"] {
+                assert_eq!(
+                    read(profile, false, Some(bad.clone())),
+                    Err(ConfigError(
+                        "storage.undeclaredBuckets must be \"create\", \"warn\" or \"refuse\""
+                            .to_owned()
+                    )),
+                    "{profile} {bad}"
+                );
+            }
+        }
+        // A later profile change rewrites the derived default, an explicit key parsed after
+        // it still wins.
+        let mut cfg = RuntimeConfig::default();
+        cfg.set_profile(CompatibilityProfile::Emulator);
+        assert_eq!(cfg.storage_undeclared_buckets, Create);
+        cfg.set_profile(CompatibilityProfile::Strict);
+        assert_eq!(cfg.storage_undeclared_buckets, Warn);
+    }
+
+    #[test]
+    fn config_show_reports_an_explicit_undeclared_buckets_mode_as_explicit() {
+        let input = json!({"schemaVersion": 1, "storage": {"undeclaredBuckets": "refuse"}});
+        let cfg = RuntimeConfig::from_json(&input).unwrap();
+        let rows = cfg.config_show(&input);
+        let row = rows
+            .iter()
+            .find(|row| row["key"] == "storage.undeclaredBuckets")
+            .unwrap();
+        assert_eq!(
+            (row["value"].clone(), row["source"].clone()),
+            (json!("refuse"), json!("explicit"))
+        );
     }
 
     #[test]

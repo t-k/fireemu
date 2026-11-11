@@ -2562,6 +2562,9 @@ fn load_storage_rules(
     loaded
         .registry
         .set_default_buckets(cfg.storage_default_bucket);
+    loaded
+        .registry
+        .set_undeclared_buckets(cfg.storage_undeclared_buckets);
     Ok(loaded)
 }
 

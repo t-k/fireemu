@@ -124,6 +124,21 @@ pub enum DefaultBuckets {
     AppspotCom,
 }
 
+/// What the strict profile does with an object operation that names a bucket nothing declared
+/// (`storage.undeclaredBuckets`). Cloud Storage answers 404 for a bucket nobody created; a local
+/// run that creates the bucket on its first write needs no setup but passes a typo in a bucket
+/// name. The `emulator` profile always creates the bucket silently, as the official emulator does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum UndeclaredBuckets {
+    /// The first write creates the bucket and nothing is reported.
+    Create,
+    /// The first write creates the bucket and one note per bucket goes to the notice sink.
+    #[default]
+    Warn,
+    /// Every operation naming a bucket that does not exist answers production's 404.
+    Refuse,
+}
+
 /// How server-side Cloud Storage JSON API traffic (the Admin SDK, `gcloud`) passes an `enforced`
 /// Storage App Check policy (`appCheck.storageServerRequests`).
 ///
@@ -188,6 +203,8 @@ pub struct StorageRulesRegistry {
     /// The buckets `storage.publicBuckets` lists: every object in them is readable without a
     /// credential, as a bucket whose IAM grants `allUsers` the object viewer role is.
     public_buckets: std::sync::RwLock<std::collections::BTreeSet<String>>,
+    /// What happens to an operation on a bucket nothing declared (`storage.undeclaredBuckets`).
+    undeclared_buckets: std::sync::RwLock<UndeclaredBuckets>,
     /// Where the first write to a bucket nothing declared is reported, once per bucket.
     unknown_bucket_notice: std::sync::RwLock<Option<NoRulesNotice>>,
     /// The buckets already reported to `unknown_bucket_notice`.
@@ -267,6 +284,7 @@ impl StorageRulesRegistry {
             configured_buckets: std::sync::RwLock::default(),
             default_buckets: std::sync::RwLock::default(),
             public_buckets: std::sync::RwLock::default(),
+            undeclared_buckets: std::sync::RwLock::default(),
             unknown_bucket_notice: std::sync::RwLock::default(),
             noticed_unknown_buckets: Mutex::default(),
             no_rules_notice: std::sync::RwLock::default(),
@@ -284,6 +302,7 @@ impl StorageRulesRegistry {
             configured_buckets: std::sync::RwLock::default(),
             default_buckets: std::sync::RwLock::default(),
             public_buckets: std::sync::RwLock::default(),
+            undeclared_buckets: std::sync::RwLock::default(),
             unknown_bucket_notice: std::sync::RwLock::default(),
             noticed_unknown_buckets: Mutex::default(),
             no_rules_notice: std::sync::RwLock::default(),
@@ -350,6 +369,20 @@ impl StorageRulesRegistry {
 
     fn default_buckets(&self) -> DefaultBuckets {
         self.default_buckets.read().map(|d| *d).unwrap_or_default()
+    }
+
+    /// Selects what an operation on a bucket nothing declared does (strict profile only).
+    pub fn set_undeclared_buckets(&self, mode: UndeclaredBuckets) {
+        if let Ok(mut slot) = self.undeclared_buckets.write() {
+            *slot = mode;
+        }
+    }
+
+    fn undeclared_buckets(&self) -> UndeclaredBuckets {
+        self.undeclared_buckets
+            .read()
+            .map(|mode| *mode)
+            .unwrap_or_default()
     }
 
     /// Replaces the set of buckets `storage.publicBuckets` lists.
@@ -3760,7 +3793,17 @@ fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse 
         if let Some(refused) = invalid_bucket_refusal(state, &route, &params) {
             return refused;
         }
-        undeclared = unknown_bucket_written(state, &route, &req.method, &params);
+        match state.rules.undeclared_buckets() {
+            UndeclaredBuckets::Refuse => {
+                if let Some(refused) = missing_bucket_refusal(state, &route, &params) {
+                    return production_framing(dialect, refused);
+                }
+            }
+            UndeclaredBuckets::Warn => {
+                undeclared = unknown_bucket_written(state, &route, &req.method, &params);
+            }
+            UndeclaredBuckets::Create => {}
+        }
     }
     // This proof lives only for this request, including a resumable finalization's repeated authentication.
     let mut signature = None;
@@ -3996,6 +4039,65 @@ fn unknown_bucket_written(
         .store()
         .map_or(true, |store| bucket_exists(state, &store, &parsed));
     (!exists).then(|| bucket.clone())
+}
+
+/// `storage.undeclaredBuckets: "refuse"` (strict only): a request naming a bucket that does not
+/// exist (see [`bucket_exists`]) is answered as Cloud Storage answers a bucket nobody created,
+/// whichever operation it is: 404 `The specified bucket does not exist.` on the JSON API
+/// (RECORDED for the bucket resource in FE v5, the object routes UNRECORDED), the XML API's
+/// `NoSuchBucket` document (UNRECORDED, documented) and the Firebase dialect's not-found
+/// envelope (UNRECORDED). A copy or rewrite checks both of its buckets. A resumable
+/// continuation belongs to a session whose start checked its bucket.
+fn missing_bucket_refusal(
+    state: &StorageState,
+    route: &Route,
+    params: &BTreeMap<String, String>,
+) -> Option<StorageResponse> {
+    if params.contains_key("upload_id") {
+        return None;
+    }
+    let named: Vec<(&String, BucketSurface)> = match route {
+        Route::FbBucket { bucket } | Route::FbObject { bucket, .. } => {
+            vec![(bucket, BucketSurface::Firebase)]
+        }
+        Route::GcsList { bucket }
+        | Route::GcsObject { bucket, .. }
+        | Route::GcsUpload { bucket }
+        | Route::GcsAcl { bucket, .. }
+        | Route::GcsAclEntry { bucket, .. } => vec![(bucket, BucketSurface::Json)],
+        Route::GcsCopy {
+            bucket, dst_bucket, ..
+        } => vec![
+            (bucket, BucketSurface::Json),
+            (dst_bucket, BucketSurface::Json),
+        ],
+        Route::XmlStyle { bucket, .. } | Route::FormUpload { bucket } => {
+            vec![(bucket, BucketSurface::Xml)]
+        }
+        _ => return None,
+    };
+    let store = state.store().ok()?;
+    named.into_iter().find_map(|(bucket, surface)| {
+        let parsed = BucketName::try_new(bucket).ok()?;
+        (!bucket_exists(state, &store, &parsed)).then(|| missing_bucket_response(surface, bucket))
+    })
+}
+
+fn missing_bucket_response(surface: BucketSurface, bucket: &str) -> StorageResponse {
+    match surface {
+        BucketSurface::Firebase => {
+            production_error(404, &format!("Not Found. Could not access bucket {bucket}"))
+        }
+        BucketSurface::Json => {
+            gcs_json_error(404, "The specified bucket does not exist.", "notFound")
+        }
+        BucketSurface::Xml => xml_error(
+            404,
+            "NoSuchBucket",
+            "The specified bucket does not exist.",
+            None,
+        ),
+    }
 }
 
 /// Strict: a request naming a bucket that does not exist and could never have been created, because

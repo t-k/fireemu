@@ -234,3 +234,88 @@ fn spilled_read_failure_and_generation_delete() {
     drop(process);
     fs::remove_dir_all(root).unwrap();
 }
+
+fn count_files(dir: &std::path::Path) -> usize {
+    match fs::read_dir(dir) {
+        Ok(entries) => entries
+            .filter(|entry| entry.as_ref().map(|e| e.path().is_file()).unwrap_or(false))
+            .count(),
+        Err(_) => 0,
+    }
+}
+
+#[test]
+fn a_spilled_body_is_shared_with_a_snapshot_and_not_with_a_copy() {
+    let root = std::env::temp_dir().join(format!("spill-shared-{}", std::process::id()));
+    let process = ProcessSpill::create(&root).unwrap();
+    let bucket = BucketName::try_new("example.appspot.com").unwrap();
+    let name = ObjectName::try_new("shared").unwrap();
+    let now = LogicalInstant::UNIX_EPOCH;
+    let mut store = StorageState::new(1);
+    store.set_spill(Some((process.spill_dir(), 1)));
+    store
+        .put(
+            &bucket,
+            &name,
+            b"0123456789".to_vec(),
+            NewMetadata::default(),
+            Precondition::default(),
+            now,
+        )
+        .unwrap();
+    let snapshot = store.clone();
+    assert_eq!(snapshot.blob_bytes_shared_with(&store), 10);
+    let mut copy = StorageState::new(1);
+    copy.set_spill(Some((process.spill_dir(), 1)));
+    copy.put(
+        &bucket,
+        &name,
+        b"0123456789".to_vec(),
+        NewMetadata::default(),
+        Precondition::default(),
+        now,
+    )
+    .unwrap();
+    assert_eq!(copy.blob_bytes_shared_with(&store), 0);
+    drop(snapshot);
+    drop(copy);
+    drop(store);
+    drop(process);
+    let _ = fs::remove_dir(&root);
+}
+
+#[test]
+fn an_upload_spills_at_exactly_the_threshold_and_not_below() {
+    let root = std::env::temp_dir().join(format!("spill-threshold-{}", std::process::id()));
+    let process = ProcessSpill::create(&root).unwrap();
+    let bucket = BucketName::try_new("example.appspot.com").unwrap();
+    let now = LogicalInstant::UNIX_EPOCH;
+    let mut store = StorageState::new(1);
+    store.set_spill(Some((process.spill_dir(), 8)));
+    for (name, size, expected_files) in [("below", 7_usize, 0), ("at", 8_usize, 1)] {
+        let object = ObjectName::try_new(name).unwrap();
+        let id = store
+            .begin_upload(
+                &bucket,
+                &object,
+                NewMetadata::default(),
+                Precondition::default(),
+                None,
+                now,
+            )
+            .unwrap();
+        store.append_upload(&id, 0, &vec![7_u8; size], now).unwrap();
+        store.finalize_upload(&id, now).unwrap();
+        assert_eq!(count_files(process.path()), expected_files, "size {size}");
+    }
+    drop(store);
+    drop(process);
+    let _ = fs::remove_dir(&root);
+}
+
+#[test]
+fn a_spill_directory_debug_output_names_the_type_and_not_the_path() {
+    let text = format!("{:?}", SpillDir::new("/private/var/does-not-appear"));
+    assert!(text.contains("SpillDir"), "{text}");
+    assert!(!text.contains("does-not-appear"), "{text}");
+}

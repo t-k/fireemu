@@ -5,8 +5,10 @@ import { join, delimiter } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { constants as fsConstants } from 'node:fs';
+import fsp from 'node:fs/promises';
 import test from 'node:test';
-import { snapshotInputs, prepareGeneration, readRegularFile } from '../fireemu/testing-snapshot.mjs';
+import { snapshotInputs, prepareGeneration, readRegularFile, cloneSupport } from '../fireemu/testing-snapshot.mjs';
 import { createTestWorld } from '../fireemu/testing.mjs';
 
 const exec = promisify(execFile);
@@ -44,7 +46,7 @@ for (const mode of ['implicit', 'explicit-without-node-path', 'explicit-empty', 
     await linkedRepository(f);
     const temporary = join(f.root, 'temporary');
     await mkdir(temporary);
-    const settings = { cwd: f.root, functionsSource: f.source, services: ['auth'], binaryPath: process.execPath, tempRoot: temporary };
+    const settings = { cwd: f.root, functionsSource: f.source, services: ['auth', 'functions'], binaryPath: process.execPath, tempRoot: temporary };
     const script = `
       import assert from 'node:assert/strict';
       import { readdir } from 'node:fs/promises';
@@ -88,9 +90,10 @@ async function packageAt(modules, name, value) {
 for (const explicit of [false, true]) {
   test(`native world preserves ordinary environment and isolates opted-in globals: ${explicit}`, { skip: !process.env.FIREEMU_TEST_BINARY }, async t => {
     const f = await fixture(t);
+    await writeFile(join(f.source, 'index.js'), 'module.exports = {};');
     if (explicit) await packageAt(f.modules, 'needed', 'creation');
     else await linkedRepository(f);
-    const settings = { cwd: f.root, functionsSource: f.source, services: ['auth'], binaryPath: process.env.FIREEMU_TEST_BINARY };
+    const settings = { cwd: f.root, functionsSource: f.source, services: ['auth', 'functions'], binaryPath: process.env.FIREEMU_TEST_BINARY };
     const script = `
       import assert from 'node:assert/strict';
       import { writeFile } from 'node:fs/promises';
@@ -112,7 +115,7 @@ for (const explicit of [false, true]) {
         }
       } finally { await world.dispose(); }
     `;
-    await exec(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, NODE_PATH: f.modules, FIREEMU_TEST_PARENT_MARKER: 'inherited' }, timeout: 30000 });
+    await exec(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, NODE_PATH: f.modules, FIREEMU_TEST_PARENT_MARKER: 'inherited', FIREEMU_RUNNER_NODE: new URL('../../tools/runner-node/index.mjs', import.meta.url).pathname }, timeout: 30000 });
   });
 }
 
@@ -253,7 +256,7 @@ test('snapshot timeout names its phase, removes partial input and never starts t
   await assert.rejects(createTestWorld({
     cwd: f.root,
     functionsSource: source,
-    services: ['auth'],
+    services: ['auth', 'functions'],
     env: { ...process.env, NODE_PATH: '' },
     binaryPath: daemon,
     tempRoot: temporary,
@@ -319,7 +322,7 @@ test('external abort during an active file copy settles I/O before removing the 
   const pending = createTestWorld({
     cwd: f.root,
     functionsSource: source,
-    services: ['auth'],
+    services: ['auth', 'functions'],
     env: { ...process.env, NODE_PATH: '' },
     binaryPath: process.execPath,
     tempRoot: temporary,
@@ -364,6 +367,7 @@ test('external abort during an active file copy settles I/O before removing the 
 });
 
 test('generation preparation abort removes its partial copy after the stream settles', { timeout: 30_000 }, async t => {
+  await withCloneSupport(t, {});
   const f = await fixture(t), baseline = join(f.root, 'baseline'), generation = join(f.root, 'generation');
   await mkdir(baseline);
   const input = join(baseline, 'large.bin'), inputBytes = 512 * 1024 * 1024;
@@ -426,4 +430,311 @@ test('scoped exclusions reject a linked scope already captured through another d
   await packageAt(scope, 'unused', 'also reachable');
   await symlink(scope, join(f.modules, '@scope'), directoryLink);
   await assert.rejects(snapshotInputs({ ...f.options, nodePathExcludes: ['@scope/unused'] }, f.world), /nodePathExcludes.*already captured|already captured.*nodePathExcludes/);
+});
+
+// Functions sources and dependencies are snapshotted only when a selected service loads them
+// (model: PICT services x source x NODE_PATH, full order-3 product).
+const serviceSelections = {
+  default: undefined,
+  auth: ['auth'],
+  functions: ['functions'],
+  'functions-codebase': ['functions:default'],
+  'auth-and-functions': ['auth', 'functions'],
+  'firestore-storage': ['firestore', 'storage'],
+};
+const functionsSources = ['none', 'functionsSource', 'firebase-json', 'config-source', 'manifest'];
+
+async function selectionFixture(t, kind) {
+  const f = await fixture(t);
+  await mkdir(join(f.source, 'node_modules', 'dependency'), { recursive: true });
+  await writeFile(join(f.source, 'index.js'), 'exports.main = 1;');
+  await writeFile(join(f.source, 'node_modules', 'dependency', 'index.js'), 'module.exports = 2;');
+  await packageAt(f.modules, 'global', 'shared');
+  await writeFile(join(f.root, 'manifest.json'), '{}');
+  const options = { cwd: f.root };
+  if (kind === 'functionsSource') options.functionsSource = f.source;
+  if (kind === 'firebase-json') {
+    await writeFile(join(f.root, 'firebase.json'), JSON.stringify({ functions: [{ source: 'source', codebase: 'default' }], firestore: { rules: 'firestore.rules' } }));
+    await writeFile(join(f.root, 'firestore.rules'), 'rules');
+    options.firebaseJson = 'firebase.json';
+  }
+  if (kind === 'config-source') options.config = { schemaVersion: 1, functions: { source: 'source' } };
+  if (kind === 'manifest') options.config = { schemaVersion: 1, functions: { manifest: 'manifest.json' } };
+  return { f, options };
+}
+
+for (const [selection, services] of Object.entries(serviceSelections)) {
+  for (const kind of functionsSources) {
+    for (const nodePath of ['unset', 'set']) {
+      test(`Functions snapshot follows the selected services: ${selection} / ${kind} / NODE_PATH ${nodePath}`, async t => {
+        const { f, options } = await selectionFixture(t, kind);
+        const selected = services === undefined || services.some(name => name.startsWith('functions'));
+        const configured = kind !== 'none';
+        const snapshot = await snapshotInputs({ ...options, services, env: nodePath === 'set' ? { NODE_PATH: 'shared' } : {} }, f.world);
+        const copiedSource = ['functionsSource', 'firebase-json', 'config-source'].includes(kind);
+        const baseline = await readdir(snapshot.baseline);
+        assert.equal(baseline.some(name => name.startsWith('functions-')), selected && copiedSource, `baseline ${baseline}`);
+        assert.equal(baseline.some(name => name.startsWith('node-path-')), selected && configured && nodePath === 'set');
+        assert.equal(snapshot.nodePaths.length, selected && configured && nodePath === 'set' ? 1 : 0);
+        assert.equal(snapshot.functionsSkipped, !selected);
+        assert.equal(snapshot.functionsConfigured, selected && configured);
+        const files = await regularFiles(snapshot.baseline);
+        assert.equal(snapshot.stats.files, files.length, 'statistics count every file the snapshot owns');
+        assert.equal(snapshot.stats.bytes, files.reduce((sum, [, size]) => sum + size, 0));
+        if (!selected) assert.equal(files.length, kind === 'firebase-json' ? 3 : 1, 'only the configuration and non-Functions inputs');
+        const config = JSON.parse(await readFile(join(snapshot.baseline, 'fireemu.json'), 'utf8'));
+        assert.equal(config.functions.clock.date, 'virtual', 'clock policy survives');
+        if (!selected) {
+          assert.equal(config.functions.source, undefined);
+          assert.equal(config.functions.manifest, undefined);
+          assert.ok(!JSON.stringify(config).includes(f.source), 'no caller Functions path in the snapshot');
+          if (kind === 'firebase-json') {
+            const firebase = JSON.parse(await readFile(config.firebaseJson, 'utf8'));
+            assert.equal(firebase.functions, undefined);
+            assert.ok(firebase.firestore.rules.startsWith(snapshot.baseline), 'other services are still snapshotted');
+          }
+        } else if (copiedSource) {
+          assert.ok(snapshot.stats.files >= 2, 'source and dependency were copied');
+        }
+      });
+    }
+  }
+}
+
+test('selecting Functions in a codebase-qualified form snapshots every configured source', async t => {
+  const { f, options } = await selectionFixture(t, 'functionsSource');
+  const snapshot = await snapshotInputs({ ...options, services: ['auth', 'functions:other'] }, f.world);
+  assert.equal(snapshot.functionsSkipped, false);
+  assert.ok((await readdir(snapshot.baseline)).some(name => name.startsWith('functions-')));
+});
+
+async function regularFiles(root) {
+  const found = [];
+  const visit = async directory => {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) await visit(path);
+      else if (entry.isFile()) found.push([path, (await stat(path)).size]);
+    }
+  };
+  await visit(root);
+  return found;
+}
+
+test('snapshot and generation statistics count the copied files and bytes', async t => {
+  const { f, options } = await selectionFixture(t, 'functionsSource');
+  const snapshot = await snapshotInputs({ ...options, services: ['functions'] }, f.world);
+  const configBytes = (await stat(join(snapshot.baseline, 'fireemu.json'))).size;
+  assert.equal(snapshot.stats.files, 3, 'two source files and the configuration written beside them');
+  assert.equal(snapshot.stats.bytes, 'exports.main = 1;'.length + 'module.exports = 2;'.length + configBytes);
+  assert.ok(snapshot.stats.directories >= 3);
+  assert.ok(Number.isInteger(snapshot.stats.elapsedMs) && snapshot.stats.elapsedMs >= 0);
+  assert.ok(['copy', 'clone', 'mixed'].includes(snapshot.stats.method));
+  const generation = await prepareGeneration(snapshot, join(f.world, 'generation-1'));
+  const files = await regularFiles(join(f.world, 'generation-1', 'inputs'));
+  assert.equal(generation.stats.files, files.length);
+  assert.equal(generation.stats.bytes, files.reduce((sum, [, size]) => sum + size, 0));
+  assert.ok(Number.isInteger(generation.stats.elapsedMs) && generation.stats.elapsedMs >= 0);
+  assert.ok(Object.isFrozen(snapshot.stats) && Object.isFrozen(generation.stats));
+});
+
+test('statistics keep symbolic links apart from files and count rewritten Firebase files exactly', async t => {
+  const { f, options } = await selectionFixture(t, 'firebase-json');
+  await symlink(join(f.root, 'shared'), join(f.source, 'node_modules', 'linked'), directoryLink);
+  const snapshot = await snapshotInputs({ ...options, services: ['functions', 'firestore'] }, f.world);
+  const generation = await prepareGeneration(snapshot, join(f.world, 'generation-1'));
+  assert.ok(generation.stats.symlinks >= 1);
+  assert.equal(generation.stats.symlinks, snapshot.stats.symlinks);
+  const files = await regularFiles(join(f.world, 'generation-1', 'inputs'));
+  assert.equal(generation.stats.files, files.length, 'links are not files');
+  assert.equal(generation.stats.bytes, files.reduce((sum, [, size]) => sum + size, 0), 'rewritten configuration bytes are included');
+});
+
+async function withCloneSupport(t, overrides) {
+  const saved = { ...cloneSupport };
+  Object.assign(cloneSupport, { file: false, tree: false }, overrides);
+  t.after(() => Object.assign(cloneSupport, saved));
+}
+
+test('copy-on-write file clones are requested when enabled and generations stay independent', async t => {
+  await withCloneSupport(t, { file: true });
+  const { f, options } = await selectionFixture(t, 'functionsSource');
+  const calls = [];
+  const real = fsp.copyFile;
+  t.mock.method(fsp, 'copyFile', async (source, destination, mode) => { calls.push(mode); return real(source, destination, fsConstants.COPYFILE_EXCL); });
+  const snapshot = await snapshotInputs({ ...options, services: ['functions'] }, f.world);
+  assert.equal(calls.length, 2);
+  assert.ok(calls.every(mode => mode === (fsConstants.COPYFILE_FICLONE_FORCE | fsConstants.COPYFILE_EXCL)), 'only forced exclusive clones are requested');
+  const first = await prepareGeneration(snapshot, join(f.world, 'generation-1'));
+  const second = await prepareGeneration(snapshot, join(f.world, 'generation-2'));
+  assert.equal(first.stats.method, 'clone');
+  const config = JSON.parse(await readFile(first.configPath, 'utf8'));
+  await writeFile(join(config.functions.source, 'index.js'), 'generation edit');
+  assert.equal(await readFile(join(snapshot.baseline, 'functions-0', 'index.js'), 'utf8'), 'exports.main = 1;', 'the baseline keeps its bytes');
+  const secondConfig = JSON.parse(await readFile(second.configPath, 'utf8'));
+  assert.equal(await readFile(join(secondConfig.functions.source, 'index.js'), 'utf8'), 'exports.main = 1;');
+  assert.equal(await readFile(join(f.source, 'index.js'), 'utf8'), 'exports.main = 1;', 'the caller keeps its bytes');
+});
+
+test('file clones are not attempted when the platform has none', async t => {
+  await withCloneSupport(t, { file: false });
+  const { f, options } = await selectionFixture(t, 'functionsSource');
+  let attempts = 0;
+  t.mock.method(fsp, 'copyFile', async () => { attempts++; });
+  const snapshot = await snapshotInputs({ ...options, services: ['functions'] }, f.world);
+  assert.equal(attempts, 0);
+  assert.equal(snapshot.stats.method, 'copy');
+});
+
+test('a file system that refuses clones falls back to a real copy, once per source device', async t => {
+  await withCloneSupport(t, { file: true });
+  const { f, options } = await selectionFixture(t, 'functionsSource');
+  for (let index = 0; index < 4; index++) await writeFile(join(f.source, `extra-${index}.js`), `extra ${index}`);
+  let attempts = 0;
+  t.mock.method(fsp, 'copyFile', async () => { attempts++; throw Object.assign(Error('operation not supported'), { code: 'ENOTSUP' }); });
+  const snapshot = await snapshotInputs({ ...options, services: ['functions'] }, f.world);
+  assert.equal(snapshot.stats.files, 7);
+  assert.equal(snapshot.stats.method, 'copy');
+  assert.equal(attempts, 1, 'the refusal disables clones for the rest of that device');
+  const config = JSON.parse(await readFile(join(snapshot.baseline, 'fireemu.json'), 'utf8'));
+  assert.equal(await readFile(join(config.functions.source, 'extra-3.js'), 'utf8'), 'extra 3');
+  assert.equal(await readFile(join(config.functions.source, 'node_modules', 'dependency', 'index.js'), 'utf8'), 'module.exports = 2;');
+});
+
+test('a snapshot that clones some files and copies the rest reports a mixed method', async t => {
+  await withCloneSupport(t, { file: true });
+  const { f, options } = await selectionFixture(t, 'functionsSource');
+  const real = fsp.copyFile;
+  let calls = 0;
+  t.mock.method(fsp, 'copyFile', async (source, destination) => {
+    if (++calls === 1) return real(source, destination, fsConstants.COPYFILE_EXCL);
+    throw Object.assign(Error('operation not supported'), { code: 'ENOTSUP' });
+  });
+  const snapshot = await snapshotInputs({ ...options, services: ['functions'] }, f.world);
+  assert.equal(snapshot.stats.method, 'mixed');
+  assert.equal(calls, 2, 'one clone, then one refusal that disables clones');
+  const config = JSON.parse(await readFile(join(snapshot.baseline, 'fireemu.json'), 'utf8'));
+  assert.equal(await readFile(join(config.functions.source, 'index.js'), 'utf8'), 'exports.main = 1;');
+});
+
+test('a clone that leaves a partial file does not break the fallback copy', async t => {
+  await withCloneSupport(t, { file: true });
+  const { f, options } = await selectionFixture(t, 'functionsSource');
+  t.mock.method(fsp, 'copyFile', async (source, destination) => { await writeFile(destination, 'partial'); throw Object.assign(Error('cross-device'), { code: 'EXDEV' }); });
+  const snapshot = await snapshotInputs({ ...options, services: ['functions'] }, f.world);
+  const config = JSON.parse(await readFile(join(snapshot.baseline, 'fireemu.json'), 'utf8'));
+  assert.equal(await readFile(join(config.functions.source, 'index.js'), 'utf8'), 'exports.main = 1;');
+});
+
+test('a clone cancelled by the caller stops the snapshot instead of falling back', async t => {
+  await withCloneSupport(t, { file: true });
+  const { f, options } = await selectionFixture(t, 'functionsSource');
+  const controller = new AbortController();
+  t.mock.method(fsp, 'copyFile', async () => { controller.abort(Error('stop here')); throw Object.assign(Error('aborted'), { code: 'ECANCELED' }); });
+  await assert.rejects(snapshotInputs({ ...options, services: ['functions'] }, f.world, controller.signal), /stop here/);
+});
+
+test('a source that cannot be read still fails when clones fall back to the real copy', async t => {
+  if (process.getuid?.() === 0 || process.platform === 'win32') return t.skip('permissions are not enforced');
+  await withCloneSupport(t, { file: true });
+  const { f, options } = await selectionFixture(t, 'functionsSource');
+  t.mock.method(fsp, 'copyFile', async () => { throw Object.assign(Error('operation not supported'), { code: 'ENOTSUP' }); });
+  await chmod(join(f.source, 'index.js'), 0o000);
+  t.after(() => chmod(join(f.source, 'index.js'), 0o644).catch(() => {}));
+  await assert.rejects(snapshotInputs({ ...options, services: ['functions'] }, f.world), /EACCES|permission denied/i);
+});
+
+// The tree clone is the platform copy tool run over the whole baseline; plain `cp -R` stands in
+// for `cp -c -R` so the path runs on every platform.
+const plainCopy = { tree: true, treeCommand: 'cp', treeArguments: (source, destination) => ['-R', source, destination] };
+
+test('a generation is cloned from the baseline as a tree with exact statistics, and stays independent', { skip: process.platform === 'win32' }, async t => {
+  await withCloneSupport(t, plainCopy);
+  const { f, options } = await selectionFixture(t, 'firebase-json');
+  await symlink(join(f.root, 'shared'), join(f.source, 'node_modules', 'linked'), directoryLink);
+  const snapshot = await snapshotInputs({ ...options, services: ['functions', 'firestore'] }, f.world);
+  const first = await prepareGeneration(snapshot, join(f.world, 'generation-1'));
+  assert.equal(first.stats.method, 'clone');
+  const files = await regularFiles(join(f.world, 'generation-1', 'inputs'));
+  assert.equal(first.stats.files, files.length);
+  assert.equal(first.stats.bytes, files.reduce((sum, [, size]) => sum + size, 0));
+  const sourceOf = async generation => JSON.parse(await readFile(JSON.parse(await readFile(generation.configPath, 'utf8')).firebaseJson, 'utf8')).functions[0].source;
+  const source = await sourceOf(first);
+  assert.ok(source.startsWith(join(f.world, 'generation-1')), 'paths point into the generation');
+  assert.equal(await readFile(join(source, 'node_modules', 'dependency', 'index.js'), 'utf8'), 'module.exports = 2;');
+  await writeFile(join(source, 'index.js'), 'generation edit');
+  const second = await prepareGeneration(snapshot, join(f.world, 'generation-2'));
+  assert.equal(await readFile(join(await sourceOf(second), 'index.js'), 'utf8'), 'exports.main = 1;');
+});
+
+test('a failing tree clone leaves nothing behind and the generation is copied file by file', { skip: process.platform === 'win32' }, async t => {
+  await withCloneSupport(t, { tree: true, treeCommand: 'false', treeArguments: () => [] });
+  const { f, options } = await selectionFixture(t, 'functionsSource');
+  const snapshot = await snapshotInputs({ ...options, services: ['functions'] }, f.world);
+  const generation = await prepareGeneration(snapshot, join(f.world, 'generation-1'));
+  assert.equal(generation.stats.method, 'copy');
+  const files = await regularFiles(join(f.world, 'generation-1', 'inputs'));
+  assert.equal(generation.stats.files, files.length);
+  const config = JSON.parse(await readFile(generation.configPath, 'utf8'));
+  assert.equal(await readFile(join(config.functions.source, 'index.js'), 'utf8'), 'exports.main = 1;');
+});
+
+test('a tree clone that leaves a partial directory is cleaned before the fallback', { skip: process.platform === 'win32' }, async t => {
+  await withCloneSupport(t, { tree: true, treeCommand: process.execPath, treeArguments: (source, destination) => ['-e', "require('fs').mkdirSync(process.argv[1]+'/partial',{recursive:true});process.exit(1)", destination] });
+  const { f, options } = await selectionFixture(t, 'functionsSource');
+  const snapshot = await snapshotInputs({ ...options, services: ['functions'] }, f.world);
+  const generation = await prepareGeneration(snapshot, join(f.world, 'generation-1'));
+  assert.equal(generation.stats.method, 'copy');
+  assert.deepEqual((await readdir(join(f.world, 'generation-1', 'inputs'))).sort(), ['fireemu.json', 'functions-0']);
+});
+
+test('cancelling a tree clone stops the tool and removes the generation directory', { skip: process.platform === 'win32', timeout: 20_000 }, async t => {
+  await withCloneSupport(t, { tree: true, treeCommand: process.execPath, treeArguments: () => ['-e', 'setTimeout(() => {}, 10000)'] });
+  const { f, options } = await selectionFixture(t, 'functionsSource');
+  const snapshot = await snapshotInputs({ ...options, services: ['functions'] }, f.world);
+  const controller = new AbortController();
+  const pending = prepareGeneration(snapshot, join(f.world, 'generation-1'), controller.signal);
+  await delay(100);
+  controller.abort(Error('cancelled while cloning'));
+  await assert.rejects(pending, /cancelled while cloning/);
+  await assert.rejects(stat(join(f.world, 'generation-1')), { code: 'ENOENT' });
+});
+
+test('a Firebase file named by both the configuration and the option is counted once', async t => {
+  const f = await fixture(t);
+  await writeFile(join(f.root, 'one.json'), JSON.stringify({ firestore: { rules: 'one.rules' } }));
+  await writeFile(join(f.root, 'two.json'), JSON.stringify({ firestore: { rules: 'two.rules' } }));
+  await writeFile(join(f.root, 'one.rules'), 'one');
+  await writeFile(join(f.root, 'two.rules'), 'twelve bytes');
+  const snapshot = await snapshotInputs({ cwd: f.root, services: ['firestore'], config: { schemaVersion: 1, firebaseJson: 'one.json' }, firebaseJson: 'two.json' }, f.world);
+  const files = await regularFiles(snapshot.baseline);
+  assert.equal(snapshot.stats.files, files.length);
+  assert.equal(snapshot.stats.bytes, files.reduce((sum, [, size]) => sum + size, 0), 'the overwritten file counts once, at its final size');
+  assert.equal(files.length, 4, 'firebase.json, the copied rules of the second file, fireemu.json and the first rules copy');
+});
+
+for (const tree of [false, true]) {
+  test(`a generation counts configuration the baseline did not hold (tree clone ${tree})`, { skip: tree && process.platform === 'win32' }, async t => {
+    await withCloneSupport(t, tree ? plainCopy : {});
+    const f = await fixture(t);
+    const baseline = join(f.root, 'baseline');
+    await mkdir(baseline);
+    await writeFile(join(baseline, 'data.txt'), 'twelve bytes');
+    const generation = await prepareGeneration({ baseline, config: { daemon: {} }, nodePaths: [], totals: { files: 1, directories: 1, symlinks: 0, bytes: 12 } }, join(f.root, 'generation'));
+    const files = await regularFiles(join(f.root, 'generation', 'inputs'));
+    assert.deepEqual(files.map(([path]) => path.split('/').pop()).sort(), ['data.txt', 'fireemu.json']);
+    assert.equal(generation.stats.files, 2, 'the newly written configuration is a file of the generation');
+    assert.equal(generation.stats.bytes, files.reduce((sum, [, size]) => sum + size, 0));
+  });
+}
+
+test('the elapsed time covers the copy', async t => {
+  await withCloneSupport(t, { file: true });
+  const { f, options } = await selectionFixture(t, 'functionsSource');
+  const real = fsp.copyFile;
+  t.mock.method(fsp, 'copyFile', async (source, destination) => { await delay(60); return real(source, destination, fsConstants.COPYFILE_EXCL); });
+  const snapshot = await snapshotInputs({ ...options, services: ['functions'] }, f.world);
+  assert.ok(snapshot.stats.elapsedMs >= 100, `two files at 60 ms each took ${snapshot.stats.elapsedMs} ms`);
+  const generation = await prepareGeneration(snapshot, join(f.world, 'generation-1'));
+  assert.ok(generation.stats.elapsedMs >= 150, `three clones at 60 ms each took ${generation.stats.elapsedMs} ms`);
 });

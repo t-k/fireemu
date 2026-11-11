@@ -4113,8 +4113,11 @@ fn export_storage(
         })?;
         let id = blob_id(object.bucket.as_str(), object.name.as_str(), generation);
         let blob_path = blobs_dir.join(&id);
+        let body = store
+            .body_bytes(object)
+            .map_err(|e| ArtifactError::new("storage", &blob_path, e.to_string()))?;
         blob_path
-            .write(store.bytes(object))
+            .write(&body)
             .map_err(|e| ArtifactError::new("storage", &blob_path, e))?;
         let document = ExportedObject {
             name: object.name.as_str().to_owned(),

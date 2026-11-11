@@ -1524,6 +1524,10 @@ fn core_err(e: StorageError) -> (u16, String, &'static str) {
             "storage identity space exhausted".to_owned(),
             "internalError",
         ),
+        StorageError::SpillFailed(message) => {
+            eprintln!("storage spill failed: {message}");
+            (503, "spill storage unavailable".to_owned(), "backendError")
+        }
         StorageError::EventAdmission(error) => {
             use fireemu_core_types::admission::EventAdmissionError;
             match error {
@@ -1545,8 +1549,14 @@ fn gcs_core_err(e: StorageError) -> StorageResponse {
         }
         StorageError::PreconditionFailed(_) => production_precondition_failed(),
         other => {
+            let retry = matches!(&other, StorageError::SpillFailed(_));
             let (status, message, reason) = core_err(other);
-            gcs_json_error(status, &message, reason)
+            let response = gcs_json_error(status, &message, reason);
+            if retry {
+                response.with_header("retry-after", "1")
+            } else {
+                response
+            }
         }
     }
 }
@@ -1575,8 +1585,14 @@ fn fb_core_err(e: StorageError) -> StorageResponse {
         // The official Firebase dialect answers missing things with a bare status.
         StorageError::NotFound | StorageError::UploadNotFound => plain_status(404),
         other => {
+            let retry = matches!(&other, StorageError::SpillFailed(_));
             let (status, message, _) = core_err(other);
-            fb_json_error(status, &message)
+            let response = fb_json_error(status, &message);
+            if retry {
+                response.with_header("retry-after", "1")
+            } else {
+                response
+            }
         }
     }
 }
@@ -4315,7 +4331,9 @@ fn fb_get(
     if media {
         // A media read leaves the object as it is (production, stage 3 v9: the metadata read
         // after `get-media` still has its metageneration and no token).
-        let bytes = store.shared_bytes(&meta);
+        let bytes = store
+            .body_shared(&meta)
+            .map_err(|e| fb_core_err(StorageError::SpillFailed(e.to_string())))?;
         drop(store);
         Ok(send_file_bytes(
             bytes,
@@ -6030,7 +6048,7 @@ fn patch_target(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn gcs_object(
     state: &StorageState,
     bucket: &str,
@@ -6093,7 +6111,9 @@ fn gcs_object(
                 Err(e) => return Ok(gcs_core_err(e)),
             }
             if media {
-                let bytes = store.shared_bytes(&meta);
+                let bytes = store
+                    .body_shared(&meta)
+                    .map_err(|e| gcs_core_err(StorageError::SpillFailed(e.to_string())))?;
                 drop(store);
                 Ok(send_file_bytes(
                     bytes,
@@ -7354,7 +7374,9 @@ fn xml_style_get(
     let Some(meta) = store.get(&b, &n).cloned() else {
         return Ok(gcs_no_such_object(bucket, name, media));
     };
-    let bytes = store.shared_bytes(&meta);
+    let bytes = store
+        .body_shared(&meta)
+        .map_err(|e| gcs_core_err(StorageError::SpillFailed(e.to_string())))?;
     drop(store);
     // The XML API's answers were not recorded, so both profiles keep the official emulator's
     // (no strict range style, no strict media headers).
@@ -7363,7 +7385,9 @@ fn xml_style_get(
 
 #[cfg(test)]
 mod storage_rules_registry_tests {
-    use super::{core_err, StorageRulesRegistry, StorageRulesSnapshotMode};
+    use super::{
+        core_err, fb_core_err, gcs_core_err, StorageRulesRegistry, StorageRulesSnapshotMode,
+    };
     use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
     use fireemu_core_storage::store::StorageError;
     use fireemu_core_types::admission::EventAdmissionError;
@@ -7372,6 +7396,20 @@ mod storage_rules_registry_tests {
 
     const ALLOW: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read: if true; } } }";
     const DENY: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read: if false; } } }";
+
+    #[test]
+    fn spill_failure_responses_are_retryable() {
+        for response in [
+            gcs_core_err(StorageError::SpillFailed("disk error".to_owned())),
+            fb_core_err(StorageError::SpillFailed("disk error".to_owned())),
+        ] {
+            assert_eq!(response.status, 503);
+            assert!(response
+                .headers
+                .iter()
+                .any(|(name, value)| name == "retry-after" && value == "1"));
+        }
+    }
 
     fn slot(source: &str) -> Arc<RulesetSlot> {
         Arc::new(RulesetSlot::new(LoadedRules::from_source(source).unwrap()))

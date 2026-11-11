@@ -2073,18 +2073,14 @@ async fn strict_callable_ingress_refuses_invalid_bearer_before_invocation() {
     )
     .await;
     let (_, valid) = h.user("strict@example.com");
-    // An ID token this project issued, with a signature the daemon cannot verify: the front end's
-    // page (FUNCTIONS-HTTP stage 3, invalid-signature and expired-id-token).
-    let expected = "\n<html><head>\n<meta http-equiv=\"content-type\" content=\"text/html;charset=utf-8\">\n<title>401 Unauthorized</title>\n</head>\n<body text=#000000 bgcolor=#ffffff>\n<h1>Error: Unauthorized</h1>\n<h2>Your client does not have permission to the requested URL <code>/</code>.</h2>\n<h2></h2>\n</body></html>\n";
-    let response = h
-        .request("POST", "add", &[("authorization", &format!("{valid}x"))])
-        .await;
-    assert_eq!(response.status, 401);
-    assert_eq!(
-        response_header(&response, "content-type"),
-        Some("text/html; charset=UTF-8")
+    // An ID token this project issued, with a signature the daemon cannot verify: the wrapper's
+    // own envelope, as production answered the re-recordings of 2026-11-11 (invalid-signature and
+    // expired-id-token; the front end's page of 2026-09-27 is superseded).
+    assert_wrapper_refusal(
+        &h.request("POST", "add", &[("authorization", &format!("{valid}x"))])
+            .await,
+        "invalid-signature-project-token",
     );
-    assert_eq!(response.body, expected.as_bytes());
     // A Bearer that is no such token reaches the wrapper in production, which refuses it itself.
     assert_wrapper_refusal(
         &h.request("POST", "add", &[("authorization", "Bearer malformed")])
@@ -2149,15 +2145,12 @@ async fn a_callable_served_as_an_onrequest_function_passes_the_strict_bearer_che
             .await,
         "malformed-bearer",
     );
-    // A token this project issued that the daemon cannot verify: the front end's page, as for a
+    // A token this project issued that the daemon cannot verify: the wrapper's envelope, as for a
     // callable.
-    let page = h
-        .request("POST", "echo", &[("authorization", &format!("{valid}x"))])
-        .await;
-    assert_eq!(page.status, 401);
-    assert_eq!(
-        response_header(&page, "content-type"),
-        Some("text/html; charset=UTF-8")
+    assert_wrapper_refusal(
+        &h.request("POST", "echo", &[("authorization", &format!("{valid}x"))])
+            .await,
+        "invalid-signature-project-token",
     );
     // Another scheme and a scheme without a token are refused by the wrapper in production too.
     for (case, authorization) in [("basic-scheme", "Basic YQ=="), ("empty-token", "Bearer ")] {

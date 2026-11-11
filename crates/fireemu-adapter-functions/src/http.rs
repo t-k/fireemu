@@ -1142,15 +1142,20 @@ fn verified_single_credential(runtime: &FunctionsRuntime, raw: &hyper::HeaderMap
 pub(crate) enum StrictCallableCredential {
     /// No credential, or one single Bearer that is a user of the project: the request goes on.
     Accepted,
-    /// The Google front end's 401 page. Production recorded it for a callable that was sent a
-    /// Firebase ID token it cannot accept (an invalid signature, an expired token:
-    /// FUNCTIONS-HTTP stage 3), and for more than one `Authorization` field.
+    /// The Google front end's 401 page, for more than one `Authorization` field (a request no
+    /// recording sends the wrapper). FUNCTIONS-HTTP stage 3 (2026-09-27) also recorded it for a
+    /// malformed Bearer and for an ID token of the project with an invalid signature or past its
+    /// expiry; two re-recordings on 2026-11-11 (FUNCTIONS-HTTP-CALLABLE-RERECORD) answered all of
+    /// those with the wrapper's envelope, so the page is no longer answered for any single
+    /// credential.
     FrontEndPage,
     /// The callable wrapper's own `401 UNAUTHENTICATED` envelope. Production recorded it for a
-    /// malformed Bearer, a scheme in another case, a scheme without a token, another scheme and
-    /// a three-part token that no Firebase project issued (FUNCTIONS-HTTP-CALLABLE-INGRESS, for
-    /// a real callable and for a callable's code served as `onRequest`): the front end hands the
-    /// request on and the wrapper refuses every credential that is not a verified ID token.
+    /// malformed Bearer, a scheme in another case, a scheme without a token, another scheme, a
+    /// three-part token that no Firebase project issued (FUNCTIONS-HTTP-CALLABLE-INGRESS, for a
+    /// real callable and for a callable's code served as `onRequest`) and, in the re-recordings, an
+    /// ID token of the project with an invalid signature or past its expiry: the front end hands
+    /// the request on and the wrapper refuses every single credential that is not a verified ID
+    /// token.
     WrapperRefusal,
 }
 
@@ -1172,8 +1177,6 @@ pub(crate) fn strict_callable_credential(
     };
     if is_verified_user(runtime, authorization) {
         StrictCallableCredential::Accepted
-    } else if names_project_id_token(runtime.project(), authorization) {
-        StrictCallableCredential::FrontEndPage
     } else {
         StrictCallableCredential::WrapperRefusal
     }
@@ -1187,34 +1190,6 @@ fn is_verified_user(runtime: &FunctionsRuntime, authorization: &str) -> bool {
             Ok(fireemu_adapter_grpc::rules::Principal::User(_))
         )
     })
-}
-
-/// Whether the value is a Bearer whose token is a three-part JWT issued for this project's
-/// Firebase users (its `iss` is `https://securetoken.google.com/<project>`): the shape of the two
-/// ID tokens FUNCTIONS-HTTP stage 3 sent a callable, which the front end refused with its page.
-fn names_project_id_token(project: &str, authorization: &str) -> bool {
-    let Some((scheme, token)) = authorization.split_once(' ') else {
-        return false;
-    };
-    if !scheme.eq_ignore_ascii_case("bearer") {
-        return false;
-    }
-    let parts: Vec<&str> = token.split('.').collect();
-    let [_, payload, _] = parts.as_slice() else {
-        return false;
-    };
-    let Ok(bytes) = fireemu_core_auth::jwt::base64url_decode(payload) else {
-        return false;
-    };
-    serde_json::from_slice::<serde_json::Value>(&bytes)
-        .ok()
-        .and_then(|claims| {
-            claims
-                .get("iss")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
-        })
-        .is_some_and(|iss| iss == format!("https://securetoken.google.com/{project}"))
 }
 
 /// The refusal for [`StrictCallableCredential`], or `None` when the request goes on.

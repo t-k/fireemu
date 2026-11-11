@@ -180,6 +180,25 @@ export function tokenSource({ mint, now = Date.now, maxAgeMs = 40 * 60_000 }) {
   };
 }
 
+/** What the case family adds to a report: the verdict of its rows against the candidates (no table). */
+export function readingOf(plan, report) {
+  if (plan.id !== "case") return {};
+  const reading = readCase(report.rows ?? [], plan);
+  return {
+    reading: {
+      verdict: reading.verdict,
+      complete: reading.complete,
+      controls: reading.controls,
+      failedControls: reading.failedControls,
+      unread: reading.unread,
+      disagreeing: reading.disagreeing,
+      mismatches: Object.fromEntries(
+        Object.entries(reading.perCandidate).map(([name, { mismatches }]) => [name, mismatches]),
+      ),
+    },
+  };
+}
+
 /** The production run, with its collaborators passed in so a test can stand in for each. */
 export async function recordProductionRun({
   plan = S9_PLAN,
@@ -228,7 +247,7 @@ export async function recordProductionRun({
     async (lease) => {
       const deps = makeDeps({ accessToken, token: tokens.get, lease });
       const { report } = await observer({ plan, target, runId, baseline, deps, out });
-      final = finish(out, report, { startedAt, ...pin }, log, plan);
+      final = finish(out, report, { startedAt, ...pin, ...readingOf(plan, report) }, log, plan);
       if (report.closureReady) lease.confirmClosed();
     },
   );
@@ -387,7 +406,7 @@ async function recordLocal() {
     recordings,
     rowFilter,
   });
-  return finish(out, report, { startedAt, ...pin }, console, plan);
+  return finish(out, report, { startedAt, ...pin, ...readingOf(plan, report) }, console, plan);
 }
 
 /**

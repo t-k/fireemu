@@ -52,8 +52,8 @@ export function predictRow(row, candidate, P = SAMPLE_PREFIX) {
 
 const q = (text) => `'${text}'`;
 
-/** The condition of a row, with the raw characters. */
-function condition(row) {
+/** The condition of a row, with the raw characters: what follows `allow read: if` in the rule source. */
+export function conditionOf(row) {
   if (row.kind === "literal") {
     const receiver = row.fn ? `${q(row.input)}.${row.fn}()` : q(row.input);
     return row.rel === "size"
@@ -182,7 +182,7 @@ export function ruleSource(P) {
   for (const row of CASE_ROWS)
     body += allow(
       row.kind === "literal" ? `${P}/${row.id}/x` : `${P}/${row.id}/{n}`,
-      condition(row),
+      conditionOf(row),
     );
   return wrap(body);
 }

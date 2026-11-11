@@ -672,11 +672,26 @@ describe("storage rules s9 command line options", () => {
       { plan: S9_PLAN, baseline: "absent", outPath: "d", lockDir: "/l" },
     );
     assert.deepEqual(
-      productionOptions(["--plan", "s9", "--out", "d", "--baseline", "absent", "--legacy-lock", "/g"]),
+      productionOptions([
+        "--plan",
+        "s9",
+        "--out",
+        "d",
+        "--baseline",
+        "absent",
+        "--legacy-lock",
+        "/g",
+      ]),
       { plan: S9_PLAN, baseline: "absent", outPath: "d", legacyLock: "/g" },
     );
-    assert.throws(() => productionOptions(["--plan", "s9", "--out", "d"]), /--baseline is required/);
-    assert.throws(() => productionOptions(["--plan", "s9", "--baseline", "absent"]), /--out is required/);
+    assert.throws(
+      () => productionOptions(["--plan", "s9", "--out", "d"]),
+      /--baseline is required/,
+    );
+    assert.throws(
+      () => productionOptions(["--plan", "s9", "--baseline", "absent"]),
+      /--out is required/,
+    );
   });
 
   it("runs git on this checkout with -C", () => {

@@ -110,6 +110,41 @@ describe("the run of the case family", () => {
     assert.equal(final.estimatedUsd, CASE_PLAN.estimatedUsd);
   });
 
+  it("puts the reading of the rows into the case receipt and report, and nothing into the s9 one", async () => {
+    const rows = [1, 2].flatMap((recording) =>
+      CASE_PLAN.rows.map((row) => ({
+        recording,
+        id: row.id,
+        class: row.candidates.full ? "allow" : "deny",
+      })),
+    );
+    const lines = [];
+    const { options } = setup({
+      log: { log: (text) => lines.push(text), error() {} },
+      observer: async (args) => ({
+        report: { runId: args.runId, closureReady: true, rows, loads: [] },
+      }),
+    });
+    const final = await recordProductionRun(options);
+    assert.equal(final.reading.verdict, "full");
+    assert.equal(final.reading.complete, true);
+    assert.deepEqual(final.reading.mismatches.full, []);
+    assert.ok(final.reading.mismatches.ascii.length > 0);
+    assert.ok(final.reading.mismatches.simple.length > 0);
+    assert.ok(!("table" in final.reading));
+    assert.equal(JSON.parse(lines[0]).reading.verdict, "full");
+    const saved = JSON.parse(readFileSync(join(options.outPath, "run-report.json"), "utf8"));
+    assert.equal(saved.reading.verdict, "full");
+    const s9 = setup({ plan: S9_PLAN });
+    assert.equal("reading" in (await recordProductionRun(s9.options)), false);
+  });
+
+  it("reads a run with no rows as incomplete, not as a verdict", async () => {
+    const { options } = setup();
+    const final = await recordProductionRun(options);
+    assert.equal(final.reading.verdict, "incomplete");
+  });
+
   it("keeps the s9 task id for the s9 family", async () => {
     const { options, seen } = setup({ plan: S9_PLAN });
     await recordProductionRun(options);

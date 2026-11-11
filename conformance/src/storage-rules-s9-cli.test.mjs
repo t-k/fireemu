@@ -62,9 +62,20 @@ describe("storage rules s9 command line", () => {
     assert.match(withEnv.stderr, /refusing to start with GOOGLE_APPLICATION_CREDENTIALS set/);
     for (const name of ["FIREBASE_TOKEN", "CLOUDSDK_AUTH_ACCESS_TOKEN"]) {
       assert.match(
-        cli(["record-production", "--plan", "s9", "--baseline", "absent", "--out", join(scratch, "b")], {
-          [name]: "x",
-        }).stderr,
+        cli(
+          [
+            "record-production",
+            "--plan",
+            "s9",
+            "--baseline",
+            "absent",
+            "--out",
+            join(scratch, "b"),
+          ],
+          {
+            [name]: "x",
+          },
+        ).stderr,
         /refusing to start/,
       );
     }
@@ -73,7 +84,15 @@ describe("storage rules s9 command line", () => {
       /--baseline is required/,
     );
     assert.match(
-      cli(["record-production", "--plan", "s9", "--baseline", "present", "--out", join(scratch, "d")]).stderr,
+      cli([
+        "record-production",
+        "--plan",
+        "s9",
+        "--baseline",
+        "present",
+        "--out",
+        join(scratch, "d"),
+      ]).stderr,
       /baseline is neither/,
     );
     assert.match(
@@ -103,7 +122,10 @@ describe("storage rules s9 command line", () => {
   });
 
   it("needs an origin or an emulator host for a local record, and knows its rows", () => {
-    assert.match(cli(["record-local", "--plan", "s9", "--out", join(scratch, "f")]).stderr, /--origin is required/);
+    assert.match(
+      cli(["record-local", "--plan", "s9", "--out", join(scratch, "f")]).stderr,
+      /--origin is required/,
+    );
     assert.match(
       cli([
         "record-local",
@@ -185,7 +207,18 @@ describe("storage rules s9 command line", () => {
       const viaEnv = join(scratch, "via-env");
       const child = spawn(
         process.execPath,
-        [run, "record-local", "--plan", "s9", "--out", viaEnv, "--rows", "c1-true", "--recordings", "1"],
+        [
+          run,
+          "record-local",
+          "--plan",
+          "s9",
+          "--out",
+          viaEnv,
+          "--rows",
+          "c1-true",
+          "--recordings",
+          "1",
+        ],
         { env: { PATH: process.env.PATH, FIREBASE_STORAGE_EMULATOR_HOST: host } },
       );
       let stdout = "";

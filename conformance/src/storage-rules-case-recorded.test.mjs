@@ -13,7 +13,7 @@ import { readCase } from "./storage-rules-s9/reading.mjs";
 
 const fixture = JSON.parse(
   readFileSync(
-    fileURLToPath(new URL("../fixtures/storage/rules-case-production.json", import.meta.url)),
+    fileURLToPath(new URL("../storage-rules-case-production.json", import.meta.url)),
     "utf8",
   ),
 );

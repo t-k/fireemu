@@ -19,7 +19,7 @@
 //! The rows are generated from the plan (`conformance/src/storage-rules-s9/plan-case.mjs`);
 //! `conformance/src/storage-rules-case-rust.test.mjs` compares this table with the plan row by row,
 //! and `conformance/src/storage-rules-case-recorded.test.mjs` reads the published recording
-//! (`conformance/fixtures/storage/rules-case-production.json`) against the same plan.
+//! (`conformance/storage-rules-case-production.json`) against the same plan.
 
 use std::collections::BTreeMap;
 

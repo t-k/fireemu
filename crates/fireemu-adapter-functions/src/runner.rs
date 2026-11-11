@@ -453,7 +453,9 @@ pub struct Runner {
     diagnostic_id: u64,
     child: AsyncMutex<Option<RunnerChild>>,
     #[cfg(unix)]
-    _lifetime_guard: RunnerLifetimeGuard,
+    _lifetime_guard: Option<RunnerLifetimeGuard>,
+    /// A placeholder for a runner that has not been started yet (see [`Runner::unstarted`]).
+    unstarted: bool,
     stdin: Arc<AsyncMutex<Option<ChildStdin>>>,
     hello: Hello,
     pub(crate) waiters: Arc<Mutex<HashMap<String, oneshot::Sender<InvokeOutcome>>>>,
@@ -966,7 +968,8 @@ impl Runner {
             diagnostic_id: RUNNER_DIAGNOSTIC_SEQUENCE.fetch_add(1, Ordering::Relaxed),
             child: AsyncMutex::new(Some(child)),
             #[cfg(unix)]
-            _lifetime_guard: lifetime_guard,
+            _lifetime_guard: Some(lifetime_guard),
+            unstarted: false,
             stdin: stdin_shared,
             hello,
             waiters,
@@ -978,6 +981,37 @@ impl Runner {
             clock_sequence: AtomicU64::new(0),
             clock_status,
         })
+    }
+
+    /// A runner that has not been started: dead, with no process, no `hello` and no logs. A function
+    /// whose runner starts on its first trigger holds one until then; the runtime replaces it with a
+    /// started runner the way it replaces a crashed one, while the work that needs it waits.
+    #[must_use]
+    pub fn unstarted(label: &str) -> Self {
+        Self {
+            diagnostic_id: RUNNER_DIAGNOSTIC_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+            child: AsyncMutex::new(None),
+            #[cfg(unix)]
+            _lifetime_guard: None,
+            unstarted: true,
+            stdin: Arc::new(AsyncMutex::new(None)),
+            hello: Hello::default(),
+            waiters: Arc::new(Mutex::new(HashMap::new())),
+            logs: Arc::new(Mutex::new(LogBuffer::default())),
+            label: label.to_owned(),
+            alive: Arc::new(AtomicBool::new(false)),
+            credential_sandbox: Mutex::new(None),
+            clock_revision: AsyncMutex::new(None),
+            clock_sequence: AtomicU64::new(0),
+            clock_status: Arc::new(Mutex::new(Value::Null)),
+        }
+    }
+
+    /// Whether this is a placeholder that was never started: down because nobody has needed it yet,
+    /// not because it died.
+    #[must_use]
+    pub const fn never_started(&self) -> bool {
+        self.unstarted
     }
 
     /// Process-local identity for diagnostic cursors; a replacement never reuses its predecessor's cursor.
@@ -1129,6 +1163,10 @@ impl Runner {
         &self,
         snapshot: fireemu_core_session::clock::ClockSnapshot,
     ) -> Result<(), String> {
+        if self.unstarted {
+            // It starts with the clock of the moment it is started.
+            return Ok(());
+        }
         let mut revision = self.clock_revision.lock().await;
         if revision.is_some_and(|previous| previous >= snapshot.revision) {
             return Ok(());
@@ -1158,6 +1196,9 @@ impl Runner {
 
     /// Drain one bounded batch of application timers using native protocol deadlines.
     pub async fn run_due(&self, budget: usize) -> Result<Value, String> {
+        if self.unstarted {
+            return Ok(Value::Null);
+        }
         let _revision = self.clock_revision.lock().await;
         let id = format!(
             "clock-{}",
@@ -1207,7 +1248,9 @@ impl Runner {
             kill_process_group(pid);
             let _ = tokio::time::timeout(Duration::from_secs(2), wait_child(&mut child)).await;
         }
-        eprintln!("{} stopped", self.label);
+        if !self.unstarted {
+            eprintln!("{} stopped", self.label);
+        }
         remove_credential_sandbox(&self.credential_sandbox);
     }
 }

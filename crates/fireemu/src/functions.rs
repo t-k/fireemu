@@ -3347,7 +3347,7 @@ pub async fn start(
                 .to_owned(),
         );
     }
-    if cfg.functions_isolation == FunctionsIsolation::Function
+    if cfg.effective_functions_isolation() == FunctionsIsolation::Function
         && cfg.functions_inspect_port.is_some()
     {
         return Err(
@@ -4085,7 +4085,7 @@ async fn start_codebase_units(
         clock_snapshot,
     )
     .await?;
-    if cfg.functions_isolation != FunctionsIsolation::Function
+    if cfg.effective_functions_isolation() != FunctionsIsolation::Function
         || discovery.manifest.functions.is_empty()
     {
         return Ok(vec![discovery]);

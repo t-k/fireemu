@@ -2995,6 +2995,26 @@ impl RuntimeConfig {
         )
     }
 
+    /// The isolation the run uses. `"function"` that only `productionExact` selected gives way to
+    /// `"codebase"` where it cannot apply (a custom `functions.runner`, a fixed `--inspect-functions`
+    /// port): the developer asked for production's behaviour, not for a refusal. The same
+    /// `"function"` written in the configuration is never softened and is refused there.
+    #[must_use]
+    pub fn effective_functions_isolation(&self) -> FunctionsIsolation {
+        let explicit = self
+            .development_defaults
+            .iter()
+            .any(|entry| entry["key"] == "functions.isolation" && entry["source"] == "explicit");
+        if self.functions_isolation == FunctionsIsolation::Function
+            && !explicit
+            && (self.functions_runner.is_some() || self.functions_inspect_port.is_some())
+        {
+            FunctionsIsolation::Codebase
+        } else {
+            self.functions_isolation
+        }
+    }
+
     /// Whether the strict profile's setup-free defaults for the project's console and Admin API
     /// enablement apply (multi-tenancy, multi-factor): the strict profile without
     /// `productionExact` (owner ledger 1413). The emulator profile keeps the official emulator's
@@ -4482,6 +4502,11 @@ impl RuntimeConfig {
         } else {
             AuthBlockingToken::Emulated
         };
+        self.functions_isolation = if exact {
+            FunctionsIsolation::Function
+        } else {
+            FunctionsIsolation::Codebase
+        };
         self.hosting_cache_control = if exact {
             HostingCacheControl::Production
         } else {
@@ -4585,6 +4610,10 @@ impl RuntimeConfig {
             (
                 "functions.authBlockingToken",
                 self.functions_auth_blocking_token.as_config_str(),
+            ),
+            (
+                "functions.isolation",
+                self.functions_isolation.as_config_str(),
             ),
             (
                 "hosting.cacheControl",
@@ -7192,6 +7221,7 @@ mod tests {
                     ("functions.authBlockingToken" | "eventarc.authentication", true) => {
                         json!("production")
                     }
+                    ("functions.isolation", true) => json!("function"),
                     // The key only matters to the strict profile; the emulator profile
                     // runs the query (Report is its inert value).
                     ("firestore.missingIndexes", _) if profile == "emulator" => json!("report"),
@@ -10947,6 +10977,89 @@ mod tests {
     }
 
     #[test]
+    fn functions_isolation_follows_profile_exact_and_explicit_precedence() {
+        for profile in ["emulator", "strict"] {
+            for exact in [None, Some(false), Some(true)] {
+                for key in [None, Some("codebase"), Some("function")] {
+                    let mut input = json!({"schemaVersion": 1, "profile": profile});
+                    if let Some(exact) = exact {
+                        input["productionExact"] = json!(exact);
+                    }
+                    if let Some(key) = key {
+                        input["functions"] = json!({"isolation": key});
+                    }
+                    let parsed = RuntimeConfig::from_json(&input);
+                    if profile == "emulator" && exact == Some(true) {
+                        assert!(parsed.is_err(), "productionExact needs strict: {input}");
+                        continue;
+                    }
+                    let cfg = parsed.unwrap_or_else(|e| panic!("{input}: {e:?}"));
+                    let value = key.unwrap_or(if exact == Some(true) {
+                        "function"
+                    } else {
+                        "codebase"
+                    });
+                    let source = if key.is_some() {
+                        "explicit"
+                    } else if exact == Some(true) {
+                        "productionExact"
+                    } else {
+                        "default"
+                    };
+                    let entry = cfg
+                        .development_defaults
+                        .iter()
+                        .find(|entry| entry["key"] == "functions.isolation")
+                        .unwrap();
+                    assert_eq!(cfg.functions_isolation.as_config_str(), value, "{input}");
+                    assert_eq!(entry["value"], value, "{input}");
+                    assert_eq!(entry["source"], source, "{input}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_function_isolation_that_only_production_exact_chose_gives_way_where_it_cannot_apply() {
+        let exact = json!({"schemaVersion": 1, "productionExact": true});
+        let mut cfg = RuntimeConfig::from_json(&exact).unwrap();
+        assert_eq!(
+            cfg.effective_functions_isolation(),
+            FunctionsIsolation::Function
+        );
+        cfg.functions_inspect_port = Some(9229);
+        assert_eq!(
+            cfg.effective_functions_isolation(),
+            FunctionsIsolation::Codebase
+        );
+        cfg.functions_inspect_port = None;
+        cfg.functions_runner = Some(vec!["node".to_owned(), "runner.mjs".to_owned()]);
+        assert_eq!(
+            cfg.effective_functions_isolation(),
+            FunctionsIsolation::Codebase
+        );
+        // Written in the configuration, "function" is the developer's request and is not softened.
+        let mut cfg = RuntimeConfig::from_json(
+            &json!({"schemaVersion": 1, "functions": {"isolation": "function"}}),
+        )
+        .unwrap();
+        cfg.functions_inspect_port = Some(9229);
+        assert_eq!(
+            cfg.effective_functions_isolation(),
+            FunctionsIsolation::Function
+        );
+        // An explicit "codebase" wins under productionExact whatever else is set.
+        let cfg = RuntimeConfig::from_json(
+            &json!({"schemaVersion": 1, "productionExact": true, "functions": {"isolation": "codebase"}}),
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.effective_functions_isolation(),
+            FunctionsIsolation::Codebase
+        );
+    }
+
+    #[test]
     fn functions_isolation_defaults_to_the_shared_codebase_runner_and_parses_both_spellings() {
         let cfg = RuntimeConfig::from_json(&json!({"schemaVersion": 1})).unwrap();
         assert_eq!(cfg.functions_isolation, FunctionsIsolation::Codebase);
@@ -11025,6 +11138,7 @@ mod tests {
             "pubsub.deadLetterAuthorization",
             "appCheck.debugTokens",
             "functions.authBlockingToken",
+            "functions.isolation",
         ];
         let defaults = [
             "true",
@@ -11036,6 +11150,7 @@ mod tests {
             "implicit",
             "any",
             "emulated",
+            "codebase",
         ];
         let production = [
             "false",
@@ -11047,6 +11162,7 @@ mod tests {
             "iam",
             "registered",
             "production",
+            "function",
         ];
         for exact in [None, Some(false), Some(true)] {
             let mut input = json!({"schemaVersion": 1});

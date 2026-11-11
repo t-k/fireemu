@@ -6746,3 +6746,157 @@ async fn an_event_reaches_only_the_runner_dedicated_to_its_function() {
     runtime.shutdown().await;
     let _ = std::fs::remove_dir_all(dir);
 }
+
+// ---- a function runner that starts on its first trigger ----
+
+/// One unit per name whose runner has not been started: a placeholder runner, and a spawn spec whose fake
+/// runner records its start in `<dir>/<name>.starts` and every invoke frame in `<dir>/<name>.frames`.
+async fn lazy_units(dir: &Path, names: &[&str]) -> Vec<CodebaseSpec> {
+    let probe = Runner::spawn_spec(&fake_spawn_spec()).await.unwrap();
+    let all = parse_manifest(probe.hello().manifest.as_ref().unwrap()).unwrap();
+    probe.shutdown().await;
+    names
+        .iter()
+        .map(|name| {
+            let mut spec = fake_spawn_spec();
+            spec.env = vec![
+                (
+                    "FIREEMU_FAKE_START_PROBE".to_owned(),
+                    dir.join(format!("{name}.starts")).display().to_string(),
+                ),
+                (
+                    "FIREEMU_FAKE_FRAME_LOG".to_owned(),
+                    dir.join(format!("{name}.frames")).display().to_string(),
+                ),
+            ];
+            let mut manifest = all.clone();
+            manifest.functions.retain(|function| function.name == *name);
+            CodebaseSpec {
+                name: "api".to_owned(),
+                function: Some((*name).to_owned()),
+                manifest,
+                runner: Arc::new(Runner::unstarted("[functions:api]")),
+                spawn: Some(spec),
+                cleanup_dir: None,
+            }
+        })
+        .collect()
+}
+
+fn lazy_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("fireemu-lazy-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn lines_of(path: &Path) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+#[tokio::test]
+async fn an_unstarted_runner_is_down_without_being_dead_and_stops_quietly() {
+    let runner = Runner::unstarted("[functions:api]");
+    assert!(!runner.is_alive());
+    assert!(runner.never_started());
+    assert!(runner.hello().http_port.is_none());
+    runner
+        .sync_clock(VirtualClock::new(START).snapshot())
+        .await
+        .unwrap();
+    assert_eq!(runner.run_due(10).await.unwrap(), serde_json::Value::Null);
+    runner.shutdown().await;
+    runner.kill_now();
+    // A runner that started and was killed is dead, not unstarted.
+    let started = Runner::spawn_spec(&fake_spawn_spec()).await.unwrap();
+    assert!(!started.never_started());
+    started.kill_now();
+    assert!(!started.is_alive() && !started.never_started());
+}
+
+#[tokio::test]
+async fn a_lazy_runner_starts_on_its_first_event_and_the_waiting_events_arrive_once_and_in_order() {
+    let dir = lazy_dir("events");
+    let runtime = runtime_of_units(lazy_units(&dir, &["echo", "onJob"]).await);
+    // Nothing is started, and nothing is reported as down.
+    assert!(runtime.runner_alive());
+    assert!(lines_of(&dir.join("onJob.starts")).is_empty());
+    let status = runtime.status();
+    assert_eq!(status["codebases"][1]["started"], false);
+    assert_eq!(status["codebases"][1]["runnerAlive"], true);
+    for data in ["QQ==", "Qg==", "Qw=="] {
+        runtime.publish("jobs", &[json!({"data": data})]).unwrap();
+    }
+    runtime.await_idle(Duration::from_secs(20)).await.unwrap();
+    let delivered = runtime
+        .history()
+        .iter()
+        .filter(|record| record.function == "onJob" && record.outcome == "ok")
+        .count();
+    assert_eq!(delivered, 3);
+    let frames = lines_of(&dir.join("onJob.frames"));
+    assert_eq!(
+        frames.len(),
+        3,
+        "each event reached the runner exactly once: {frames:?}"
+    );
+    let position = |data: &str| {
+        frames
+            .iter()
+            .position(|frame| frame.contains(data))
+            .unwrap()
+    };
+    assert!(
+        position("QQ==") < position("Qg==") && position("Qg==") < position("Qw=="),
+        "{frames:?}"
+    );
+    assert_eq!(
+        lines_of(&dir.join("onJob.starts")).len(),
+        1,
+        "one process, started once"
+    );
+    // The other function was never needed, so it was never started.
+    assert!(lines_of(&dir.join("echo.starts")).is_empty());
+    let status = runtime.status();
+    assert_eq!(status["codebases"][1]["started"], true);
+    assert_eq!(status["codebases"][0]["started"], false);
+    runtime.shutdown().await;
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn a_lazy_runner_starts_on_its_first_http_request_and_a_reset_does_not_start_the_rest() {
+    let dir = lazy_dir("http");
+    let runtime = runtime_of_units(lazy_units(&dir, &["echo", "onJob"]).await);
+    let target = runtime
+        .http_target("demo-app", "us-central1", "echo")
+        .expect("a route exists before the runner does");
+    assert_eq!(
+        runtime
+            .invoke_http(&target, "GET", "/first", &[], &[])
+            .await
+            .unwrap()
+            .status,
+        200
+    );
+    assert_eq!(lines_of(&dir.join("echo.starts")).len(), 1);
+    assert!(lines_of(&dir.join("onJob.starts")).is_empty());
+    // A reset restarts what ran and leaves what never ran alone.
+    runtime.reset();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(lines_of(&dir.join("onJob.starts")).is_empty());
+    assert_eq!(
+        runtime
+            .invoke_http(&target, "GET", "/again", &[], &[])
+            .await
+            .unwrap()
+            .status,
+        200
+    );
+    runtime.shutdown().await;
+    let _ = std::fs::remove_dir_all(dir);
+}

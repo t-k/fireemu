@@ -5032,6 +5032,10 @@ impl FunctionsRuntime {
         let Some(respawn) = self.codebases.get(index).map(Codebase::capture_respawn) else {
             return;
         };
+        if respawn.runner.never_started() {
+            // Nothing of this runner ran, so a reset has nothing to clear; it starts when needed.
+            return;
+        }
         self.spawn_captured(index, generation, &respawn, None);
     }
 
@@ -5473,7 +5477,10 @@ impl FunctionsRuntime {
     /// codebase's queued work pending).
     #[must_use]
     pub fn runner_alive(&self) -> bool {
-        (0..self.codebases.len()).all(|i| self.runner_at(i).is_alive())
+        (0..self.codebases.len()).all(|i| {
+            let runner = self.runner_at(i);
+            runner.is_alive() || runner.never_started()
+        })
     }
 
     /// Outstanding work, for `await-idle` timeouts and status output.
@@ -5518,13 +5525,14 @@ impl FunctionsRuntime {
             "codebases": (0..self.codebases.len()).map(|i| {
                 let mut entry = json!({
                     "codebase": self.codebases[i].name,
-                    "runnerAlive": self.runner_at(i).is_alive(),
+                    "runnerAlive": self.runner_at(i).is_alive() || self.runner_at(i).never_started(),
                     "functions": self.manifest.functions.iter()
                         .filter(|f| self.owner.get(&f.name).copied() == Some(i))
                         .map(|f| f.name.clone()).collect::<Vec<_>>(),
                 });
                 if let Some(function) = &self.codebases[i].function {
                     entry["function"] = json!(function);
+                    entry["started"] = json!(!self.runner_at(i).never_started());
                 }
                 entry
             }).collect::<Vec<_>>(),
@@ -5897,10 +5905,16 @@ impl FunctionsRuntime {
         // Each codebase hosts its own HTTP server, so the route resolves to the runner of the
         // codebase that exported this function.
         let runner = self.runner_for(function);
-        let port = runner.hello().http_port?;
+        // A runner that starts on its first request has no port yet; the request starts it and
+        // resolves the address of the runner that answers (`current_http_addr`).
+        let addr = match runner.hello().http_port {
+            Some(port) => format!("127.0.0.1:{port}"),
+            None if runner.never_started() => String::new(),
+            None => return None,
+        };
         Some(HttpTarget {
             function: function.to_owned(),
-            addr: format!("127.0.0.1:{port}"),
+            addr,
             origin_runner: Arc::downgrade(&runner),
         })
     }

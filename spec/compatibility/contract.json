@@ -1928,7 +1928,7 @@
               "precision": "conservative"
             },
             {
-              "behaviour": "functions.isolation = \"function\" starts one dedicated runner process per function (Node and Python), each with its function's FUNCTION_TARGET, FUNCTION_SIGNATURE_TYPE, K_SERVICE and declared local secrets in its environment from the start; the default \"codebase\" keeps one runner process per codebase",
+              "behaviour": "functions.isolation = \"function\" (selected by productionExact) starts one dedicated runner process per function (Node and Python) on its first trigger, each with its function's FUNCTION_TARGET, FUNCTION_SIGNATURE_TYPE, K_SERVICE and declared local secrets in its environment from the start; the default \"codebase\" keeps one runner process per codebase",
               "precision": "conservative"
             }
           ],

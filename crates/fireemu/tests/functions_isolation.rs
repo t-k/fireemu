@@ -107,7 +107,7 @@ const runnerLines = () => execFileSync('ps', ['-ax', '-o', 'ucomm=,args='], PS_L
   .filter(line => line.startsWith('node ') && line.includes(' --source ' + process.argv[1]));
 (async () => {
   const out = {};
-  out.runners = runnerLines().map(line => line.includes(' --function ') ? line.split(' --function ')[1].trim() : '(codebase)').sort();
+  out.runnersAtStart = runnerLines().map(line => line.includes(' --function ') ? line.split(' --function ')[1].trim() : '(codebase)').sort();
   // An await in one function while another function of the codebase is called.
   const slow = get('beta?wait=2000');
   await sleep(400);
@@ -118,6 +118,7 @@ const runnerLines = () => execFileSync('ps', ['-ax', '-o', 'ucomm=,args='], PS_L
   await sleep(400);
   const plain = get('beta');
   [out.alpha, out.plainBeta] = await Promise.all([holding, plain]);
+  out.runnersAfterCalls = runnerLines().map(line => line.includes(' --function ') ? line.split(' --function ')[1].trim() : '(codebase)').sort();
   // Another function's process dies; the others keep theirs.
   const before = { alpha: (await get('alpha')).after.pid, beta: (await get('beta')).after.pid };
   out.crashedPid = (await get('crasher')).pid;
@@ -233,7 +234,7 @@ fn the_shared_runner_shows_what_one_process_for_a_codebase_means() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
-        result["runners"],
+        result["runnersAtStart"],
         serde_json::json!(["(codebase)"]),
         "one process serves the codebase"
     );
@@ -275,10 +276,12 @@ fn dedicated_runners_keep_identity_module_graph_secrets_and_lifecycle_per_functi
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    // One process per function, and the discovery process is gone.
+    // The discovery process is gone and no function process exists until the function is first called;
+    // then there is one per function that was called (the crasher has not been called yet).
+    assert_eq!(result["runnersAtStart"], serde_json::json!([]));
     assert_eq!(
-        result["runners"],
-        serde_json::json!(["alpha", "beta", "crasher", "gamma"])
+        result["runnersAfterCalls"],
+        serde_json::json!(["alpha", "beta", "gamma"])
     );
     // Identity: fixed from the start, whatever else runs meanwhile.
     for path in ["before", "after"] {
@@ -369,8 +372,9 @@ const until = async (check, what) => {
   throw new Error('timed out waiting for ' + what);
 };
 (async () => {
-  const out = { runnersBefore: runners(), ancestors: ancestors() };
+  const out = { runnersAtStart: runners(), ancestors: ancestors() };
   out.first = { alpha: (await get('alpha')).body, beta: (await get('beta')).body };
+  out.runnersBefore = runners();
   const index = path.join(dir, 'index.js');
   fs.writeFileSync(index, fs.readFileSync(index, 'utf8').replace(/'before'/g, "'after'"));
   out.reloaded = await until(async () => {
@@ -454,6 +458,7 @@ exports.beta = onRequest((req, res) => res.json({ marker, pid: process.pid }));
         .find_map(|line| line.strip_prefix("RESULT "))
         .unwrap_or_else(|| panic!("no result; stdout:\n{stdout}\nstderr:\n{stderr}"));
     let result: serde_json::Value = serde_json::from_str(line).unwrap();
+    assert_eq!(result["runnersAtStart"], serde_json::json!([]));
     assert_eq!(
         result["runnersBefore"],
         serde_json::json!(["alpha", "beta"])

@@ -108,6 +108,18 @@ pub(crate) fn retain_current_cursors<V>(
     cursors.retain(|key, _| current.contains(key));
 }
 
+/// Whether a function's runner is started with the codebase rather than on its first trigger.
+///
+/// Production starts an instance on the first request, so a function's runner does too: its process
+/// does not exist until the first call, event or task for it needs one, and the work waits meanwhile.
+/// Two kinds start at launch. With a debugger requested, every runner does, because the developer
+/// attaches before the first call and each process reports its own port. A Blocking Auth function
+/// does, because it answers a sign-up inside a short deadline and a sign-up must not be the call that
+/// pays for a cold start.
+pub(super) fn starts_at_launch(function: &FunctionSpec, inspecting: bool) -> bool {
+    inspecting || matches!(function.trigger, Trigger::BlockingAuth { .. })
+}
+
 /// The manifest of one unit: its function, and the codebase's ignored exports on the first unit so
 /// the union the runtime builds lists each of them once.
 pub(super) fn unit_manifest(manifest: &FunctionManifest, index: usize) -> FunctionManifest {
@@ -141,7 +153,7 @@ pub(super) async fn isolate_functions(
     if count > MAX_ISOLATED_FUNCTIONS {
         discovery.runner.kill_now();
         return Err(format!(
-            "the Functions codebase {label:?}: functions.isolation \"function\" starts one runner process per function, and this codebase serves {count} (the limit is {MAX_ISOLATED_FUNCTIONS}); keep functions.isolation \"codebase\" for it"
+            "the Functions codebase {label:?}: functions.isolation \"function\" starts one runner process per function, and this codebase serves {count} (the limit is {MAX_ISOLATED_FUNCTIONS}); set functions.isolation to \"codebase\" (the default) to serve this codebase from one process"
         ));
     }
     let specs: Vec<SpawnSpec> = discovery
@@ -150,8 +162,12 @@ pub(super) async fn isolate_functions(
         .iter()
         .map(|function| function_spawn_spec(&base, function))
         .collect();
+    let inspecting = cfg.functions_inspect_dynamic || cfg.functions_inspect_port.is_some();
     let mut starts = tokio::task::JoinSet::new();
     for (index, spec) in specs.iter().cloned().enumerate() {
+        if !starts_at_launch(&discovery.manifest.functions[index], inspecting) {
+            continue;
+        }
         let admin = hosts.admin_app_check.clone();
         starts.spawn(async move { (index, Runner::spawn_spec_with(&spec, admin).await) });
     }
@@ -200,7 +216,13 @@ pub(super) async fn isolate_functions(
             name: label.clone(),
             function: Some(discovery.manifest.functions[index].name.clone()),
             manifest: unit_manifest(&discovery.manifest, index),
-            runner: runner.expect("every function runner started"),
+            // A function whose runner starts on its first trigger holds a placeholder until then.
+            runner: runner.unwrap_or_else(|| {
+                Arc::new(Runner::unstarted(&format!(
+                    "[functions:{label}/{}]",
+                    discovery.manifest.functions[index].name
+                )))
+            }),
             spawn: Some(spec),
             cleanup_dir: None,
         })
@@ -354,6 +376,28 @@ mod tests {
         assert_eq!(
             env_of(&function_spawn_spec(&codebase, &all[0]), "API_KEY"),
             vec!["secret-value"]
+        );
+    }
+
+    #[test]
+    fn a_runner_starts_on_its_first_trigger_except_for_blocking_auth_and_under_a_debugger() {
+        let all = functions(&json!({"functions": [
+            {"name": "web", "generation": 2, "trigger": {"type": "http"}},
+            {"name": "doc", "generation": 2, "trigger": {"type": "firestore", "eventType": "google.cloud.firestore.document.v1.created", "document": "items/{id}"}},
+            {"name": "cron", "generation": 2, "trigger": {"type": "schedule", "schedule": "every 5 minutes"}},
+            {"name": "queue", "generation": 2, "trigger": {"type": "tasks"}},
+            {"name": "block", "generation": 2, "trigger": {"type": "blockingAuth", "eventType": "providers/cloud.auth/eventTypes/user.beforeCreate"}},
+        ]}));
+        let at_launch = |inspecting| -> Vec<&str> {
+            all.iter()
+                .filter(|f| starts_at_launch(f, inspecting))
+                .map(|f| f.name.as_str())
+                .collect()
+        };
+        assert_eq!(at_launch(false), vec!["block"]);
+        assert_eq!(
+            at_launch(true),
+            vec!["web", "doc", "cron", "queue", "block"]
         );
     }
 

@@ -599,6 +599,7 @@ pub fn is_no_store_path(path: &str) -> bool {
         && (path.ends_with(APP_CHECK_OBSERVATIONS_SUFFIX)
             || is_resources_path(path)
             || is_rules_requests_path(path)
+            || (path.starts_with("/v1/sessions/") && path.ends_with("/diagnostics/bundle"))
             || is_rules_diagnostics_path(path)
             || is_missing_indexes_path(path))
         || path == MISSING_INDEXES_PATH
@@ -612,7 +613,10 @@ fn diagnostics_guard(
     path: &str,
     headers: &RequestHeaders,
 ) -> Option<JsonResponse> {
-    let refusal = if is_resources_path(path) {
+    let bundle_path = path.starts_with("/v1/sessions/") && path.ends_with("/diagnostics/bundle");
+    let refusal = if bundle_path {
+        "CONTROL_TOKEN_REQUIRED : diagnostics bundles need Authorization: Bearer <control token> on every method"
+    } else if is_resources_path(path) {
         "CONTROL_TOKEN_REQUIRED : resource diagnostics need Authorization: Bearer <control token> on every method"
     } else if is_rules_diagnostics_path(path) {
         "CONTROL_TOKEN_REQUIRED : Security Rules collection diagnostics need Authorization: Bearer <control token> on every method"
@@ -623,7 +627,7 @@ fn diagnostics_guard(
     } else {
         return None;
     };
-    if !is_rules_diagnostics_path(path) {
+    if !bundle_path && !is_rules_diagnostics_path(path) {
         headers.origin.as_ref()?;
     }
     let presented = headers
@@ -807,7 +811,7 @@ pub fn handle_with(
     if let Some(refusal) = browser_guard(state, method, path, headers) {
         return refusal;
     }
-    let path = path.split('?').next().unwrap_or(path);
+    let (path, query) = path.split_once('?').unwrap_or((path, ""));
     if let Some(refusal) = remote_config_guard(state, method, path, headers) {
         return refusal;
     }
@@ -850,6 +854,15 @@ pub fn handle_with(
         ("POST", "/v1/sessions") => create_session(state, body),
         (m, p) if p.starts_with("/v1/sessions/") && p.ends_with(APP_CHECK_OBSERVATIONS_SUFFIX) => {
             app_check_observations(state, m, p, headers)
+        }
+        (m, p) if p.starts_with("/v1/sessions/") && p.ends_with("/diagnostics/bundle") => {
+            let Some(session) = p
+                .strip_prefix("/v1/sessions/")
+                .and_then(|rest| rest.strip_suffix("/diagnostics/bundle"))
+            else {
+                return error(404, "NOT_FOUND");
+            };
+            diagnostics_bundle_route(state, m, session, query)
         }
         (m, p) if p.starts_with("/v1/sessions/") => session_route(state, m, p, body),
         // The Pub/Sub REST shape (`projects/{p}/topics/{t}:publish`), for clients that speak it.
@@ -936,6 +949,170 @@ fn ttl_sweep_route(state: &ControlState, method: &str, project: &str) -> JsonRes
     JsonResponse {
         status: 200,
         body: json!({ "deletedDocumentCount": deleted }),
+    }
+}
+
+/// Builds a bounded, redacted diagnostics bundle.
+#[allow(clippy::too_many_lines)]
+fn diagnostics_bundle_route(
+    state: &ControlState,
+    method: &str,
+    session: &str,
+    query: &str,
+) -> JsonResponse {
+    use fireemu_adapter_support::diagnostics::{
+        self, Bundle, BundleInput, FunctionsSection, Limits, LogSection, PendingSection,
+        RuleCondition, RuleDenial, RulesSection, Versions,
+    };
+
+    if method != "GET" {
+        return error(
+            400,
+            "INVALID_ARGUMENT : the diagnostics bundle is read with GET",
+        );
+    }
+    let format = query
+        .split('&')
+        .filter_map(|part| part.split_once('='))
+        .find(|(key, _)| *key == "format")
+        .map_or("json", |(_, value)| value);
+    if format != "json" && format != "html" {
+        return error(400, "INVALID_ARGUMENT : format must be json or html");
+    }
+    let project = match state.sessions.lock() {
+        Ok(sessions) => sessions.get(session).cloned(),
+        Err(_) => return error(500, "INTERNAL"),
+    };
+    let Some(project) = project else {
+        return error(404, "NOT_FOUND : no such session");
+    };
+    if project != state.default_project {
+        return error(400, "FAILED_PRECONDITION : the ruleset and its request trace belong to the default session; use /v1/sessions/default/rules/requests");
+    }
+    let Ok(rules) = state.rules.snapshot() else {
+        return error(500, "INTERNAL");
+    };
+    let Ok(trace) = rules.diagnostics.lock() else {
+        return error(500, "INTERNAL");
+    };
+    let denials = trace
+        .requests()
+        .into_iter()
+        .filter(|request| !request.allowed)
+        .map(|request| RuleDenial {
+            service: "firestore".into(),
+            location: "firestore.rules".into(),
+            method: request.method.into(),
+            path: request.path.clone(),
+            uid: request.uid.clone(),
+            reason: request.reason.clone(),
+            conditions: request
+                .expressions
+                .iter()
+                .map(|expression| RuleCondition {
+                    line: expression.span.line,
+                    column: expression.span.column,
+                    excerpt: rules
+                        .source
+                        .as_deref()
+                        .and_then(|source| source.get(expression.span.offset..expression.end))
+                        .map(str::to_owned),
+                    outcome: format!("{:?}", expression.values),
+                })
+                .collect(),
+        })
+        .collect();
+    let rules_section = RulesSection {
+        history_enabled: trace.request_traces_enabled(),
+        retention: u32::try_from(trace.request_trace_capacity()).unwrap_or(u32::MAX),
+        history_started_at: None,
+        denials,
+        dropped: trace.dropped(),
+    };
+    drop(trace);
+    let entries = state
+        .firestore_missing_indexes
+        .as_ref()
+        .filter(|hook| hook.enabled())
+        .map(|hook| hook.reports())
+        .unwrap_or_default();
+    let indexes = missing_indexes_json(&entries)["missingIndexes"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let status = state
+        .functions
+        .as_ref()
+        .map(|functions| functions.status())
+        .unwrap_or_default();
+    let events = status["causality"]["events"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let attempts = events
+        .iter()
+        .flat_map(|event| {
+            event["phases"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|phase| phase["phase"] == "running")
+                .cloned()
+        })
+        .collect();
+    let retries = events
+        .iter()
+        .flat_map(|event| {
+            event["phases"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|phase| phase["phase"].as_str().is_some_and(|p| p.contains("retry")))
+                .cloned()
+        })
+        .collect();
+    let report = collect_resources(state, session, &scope_of(state, &project));
+    let resources = report.services.iter().map(service_json).collect();
+    let generated_at = match state.clock.lock() {
+        Ok(clock) => clock
+            .now()
+            .to_rfc3339()
+            .unwrap_or_else(|_| "virtual".into()),
+        Err(_) => return error(500, "INTERNAL"),
+    };
+    let bundle = Bundle::from_input(
+        BundleInput {
+            generated_at,
+            versions: Versions {
+                fireemu: env!("CARGO_PKG_VERSION").into(),
+                runtimes: vec![],
+                sdks: vec![],
+            },
+            config: vec![],
+            functions: FunctionsSection {
+                events,
+                attempts,
+                retries,
+                log_gaps: status["logGaps"].as_bool().unwrap_or(false),
+            },
+            rules: rules_section,
+            indexes,
+            pending: PendingSection {
+                tasks: vec![],
+                resources,
+            },
+            logs: LogSection {
+                lines: vec![],
+                dropped_ranges: vec![],
+            },
+        },
+        Limits::default(),
+    );
+    // The control client accepts JSON only, so HTML is wrapped in an object.
+    if format == "html" {
+        ok(json!({"html": diagnostics::to_html(&bundle)}))
+    } else {
+        ok(diagnostics::to_value(&bundle))
     }
 }
 
@@ -3130,6 +3307,7 @@ pub fn browser_guard(
     let privileged = (method != "GET" && !path.starts_with("/health/"))
         || is_resources_path(path)
         || is_rules_requests_path(path)
+        || (path.starts_with("/v1/sessions/") && path.ends_with("/diagnostics/bundle"))
         || is_rules_diagnostics_path(path)
         || is_missing_indexes_path(path);
     let presented = headers

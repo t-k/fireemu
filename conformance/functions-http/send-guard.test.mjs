@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import http from "node:http";
 import https from "node:https";
 import { tmpdir } from "node:os";
@@ -134,6 +134,45 @@ test("node:http requests to this machine are served, through the guarded module 
     assert.equal(body, "local");
   } finally {
     agent.destroy();
+    server.closeAllConnections?.();
+    await new Promise((done) => server.close(done));
+  }
+});
+
+test("the host a request really connects to is the one checked: node prefers hostname over host", () => {
+  for (const protocol of ["https:", "http:"]) {
+    // node connects to `hostname` when both are given, so a loopback `host` must not vouch for another `hostname`
+    assert.throws(
+      () => guardedRequest(protocol, { hostname: "never.invalid", host: "127.0.0.1", path: "/" }),
+      REFUSED,
+      `${protocol} hostname wins`,
+    );
+    assert.throws(
+      () => guardedRequest(protocol, { hostname: "never.invalid", host: "localhost", path: "/" }),
+      REFUSED,
+    );
+  }
+});
+
+test("the `host` form of a loopback request is served, and https really uses TLS", async () => {
+  const server = http.createServer((req, res) => res.end("plain"));
+  await new Promise((done) => server.listen(0, "127.0.0.1", done));
+  const port = server.address().port;
+  const get = (protocol, options) =>
+    new Promise((resolveBody, reject) => {
+      const request = guardedRequest(protocol, { path: "/", port, ...options }, (res) => {
+        const chunks = [];
+        res.on("data", (chunk) => chunks.push(chunk));
+        res.on("end", () => resolveBody(Buffer.concat(chunks).toString()));
+      });
+      request.once("error", reject);
+      request.end();
+    });
+  try {
+    assert.equal(await get("http:", { host: "127.0.0.1", agent: false }), "plain");
+    // the https path speaks TLS: a plain-HTTP server cannot answer it (the http module would be served)
+    await assert.rejects(get("https:", { hostname: "127.0.0.1", agent: false }));
+  } finally {
     server.closeAllConnections?.();
     await new Promise((done) => server.close(done));
   }
@@ -379,6 +418,41 @@ test("a private path outside the mutation work copy is refused while the harness
 function homedirOf() {
   return process.env.HOME || "/home/nobody";
 }
+
+test("the work copy is judged by its real path, and a work copy that does not exist yet by where it would be", () => {
+  const base = mkdtempSync(join(tmpdir(), "guard-real-"));
+  try {
+    const real = join(base, "real");
+    mkdirSync(real);
+    symlinkSync(real, join(base, "alias"));
+    // a work copy named through a symlink: a file inside it, named by its real path, is inside
+    assert.doesNotThrow(() =>
+      assertPrivatePathAllowed(join(real, "docs.local/x"), {
+        FIREEMU_MUTATION_WORK: join(base, "alias"),
+      }),
+    );
+    assert.doesNotThrow(() =>
+      assertPrivatePathAllowed(join(base, "alias/docs.local/x"), { FIREEMU_MUTATION_WORK: real }),
+    );
+    // a work copy that does not exist yet: only its own subtree is inside, not the directory around it
+    const env = { FIREEMU_MUTATION_WORK: join(base, "not-yet") };
+    assert.doesNotThrow(() => assertPrivatePathAllowed(join(base, "not-yet/a/b"), env));
+    assert.throws(
+      () => assertPrivatePathAllowed(join(base, "other/file"), env),
+      /outside the mutation work copy/,
+    );
+    assert.throws(
+      () => assertPrivatePathAllowed(join(base, "not-yet-sibling/x"), env),
+      /outside the mutation work copy/,
+    );
+    assert.throws(
+      () => assertPrivatePathAllowed(join(base, "x"), env),
+      /outside the mutation work copy/,
+    );
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
 
 test("with the harness variable set, production.mjs refuses a private root and private files outside the work copy", () => {
   const work = mkdtempSync(join(tmpdir(), "guard-work-"));

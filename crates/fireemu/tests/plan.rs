@@ -115,6 +115,196 @@ fn up_plan_reports_the_project_services_and_ports_without_starting_anything() {
     assert!(text.contains("firestore"), "{text}");
 }
 
+/// The text form up to the development defaults, with the working directory line removed.
+fn text_head(output: &Output) -> String {
+    let text = stdout(output);
+    let head = text
+        .split("\ndevelopment defaults")
+        .next()
+        .unwrap()
+        .to_owned();
+    head.lines()
+        .filter(|line| !line.starts_with("working dir:"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn the_text_plan_reads_as_documented() {
+    let dir = project("text");
+    let output = run(
+        &dir,
+        &[
+            "exec",
+            "--plan",
+            "--only",
+            "firestore,auth",
+            "--hub-port",
+            "0",
+            "--",
+            "echo",
+            "hi",
+        ],
+        &[("PUBSUB_EMULATOR_HOST", "localhost:8085")],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    let expected = "\
+fireemu plan (exec)
+project:         demo-app (built-in default)
+profile:         strict
+configuration:   none found (no fireemu.toml or fireemu.json in the working directory, no firebase.json in it or the parents the search may enter); built-in defaults apply, so no Security Rules are loaded
+override:        --only firestore,auth
+override:        --hub-port 0
+command:         echo hi
+
+services
+  firestore  start 127.0.0.1:8080
+  auth       start 127.0.0.1:9099
+  storage    off   not in --only
+  functions  off   not in --only
+  hosting    off   not in --only
+  eventarc   off   starts only with a loaded Functions codebase
+  tasks      off   starts only with a loaded Functions codebase
+  pubsub     off   not in --only
+  database   off   not in --only
+  appcheck   off   not in --only
+  hub        off   --hub-port 0 turns it off
+  ui         off   off (exec starts it only with --ui)
+  logging    start 127.0.0.1:4500 (best effort unless the port was asked for)
+
+environment
+  sets FIRESTORE_EMULATOR_HOST, FIREBASE_FIRESTORE_EMULATOR_ADDRESS = 127.0.0.1:8080
+  sets FIREBASE_AUTH_EMULATOR_HOST = 127.0.0.1:9099
+  sets FIREBASE_LOGGING_EMULATOR_HOST = 127.0.0.1:4500
+  PUBSUB_EMULATOR_HOST=localhost:8085 (inherited, kept: this run does not start the service)
+  inherited emulator variables of services this run does not start: warn
+";
+    assert_eq!(text_head(&output), expected.trim_end());
+}
+
+#[test]
+fn the_auxiliary_listeners_and_port_notes_follow_the_options() {
+    let dir = project("aux");
+    let plan = json_plan(
+        &dir,
+        &[
+            "exec",
+            "--plan",
+            "--json",
+            "--ui",
+            "--ui-port",
+            "auto",
+            "--hub-port",
+            "auto",
+            "--logging-port",
+            "0",
+            "--firestore-port",
+            "0",
+            "--",
+            "true",
+        ],
+        &[],
+    );
+    assert_eq!(service(&plan, "ui")["start"], true);
+    assert_eq!(service(&plan, "hub")["start"], true);
+    assert_eq!(service(&plan, "hub")["address"], "127.0.0.1:0");
+    assert_eq!(service(&plan, "logging")["start"], false);
+    assert!(service(&plan, "logging")["address"].is_null());
+    assert_eq!(
+        service(&plan, "firestore")["note"],
+        "a free port is chosen at start"
+    );
+    assert!(service(&plan, "auth")["note"].is_null());
+    assert_eq!(service(&plan, "ui")["auxiliary"], true);
+    assert_eq!(service(&plan, "firestore")["auxiliary"], false);
+
+    let up = json_plan(&dir, &["up", "--plan", "--json"], &[]);
+    assert_eq!(service(&up, "ui")["start"], true);
+    assert_eq!(service(&up, "hub")["start"], true);
+    assert_eq!(service(&up, "hub")["address"], "127.0.0.1:4400");
+    assert!(service(&up, "hub")["note"]
+        .as_str()
+        .unwrap()
+        .contains("best effort"));
+    assert_eq!(service(&up, "logging")["start"], true);
+
+    let only = json_plan(
+        &dir,
+        &["up", "--plan", "--json", "--only", "firestore"],
+        &[],
+    );
+    assert_eq!(service(&only, "appcheck")["start"], false);
+    assert!(service(&only, "appcheck")["reason"]
+        .as_str()
+        .unwrap()
+        .contains("--only"));
+    assert!(service(&only, "appcheck")["address"].is_null());
+    let all = json_plan(&dir, &["up", "--plan", "--json"], &[]);
+    assert_eq!(service(&all, "appcheck")["start"], true);
+    assert_eq!(service(&all, "appcheck")["address"], "127.0.0.1:9099");
+    let without_auth = json_plan(
+        &dir,
+        &["up", "--plan", "--json", "--only", "appcheck,firestore"],
+        &[],
+    );
+    assert_eq!(service(&without_auth, "appcheck")["start"], true);
+    assert!(service(&without_auth, "appcheck")["address"]
+        .as_str()
+        .unwrap()
+        .contains("control listener"));
+}
+
+#[test]
+fn hosting_and_the_support_emulators_say_when_and_how_they_start() {
+    let dir = project("hosting");
+    write(
+        &dir,
+        "firebase.json",
+        r#"{"hosting": {"public": "pub"}, "emulators": {"eventarc": {"port": 9399}}}"#,
+    );
+    std::fs::create_dir_all(dir.join("pub")).unwrap();
+    let plan = json_plan(&dir, &["up", "--plan", "--json"], &[]);
+    assert_eq!(service(&plan, "hosting")["start"], true);
+    assert_eq!(
+        service(&plan, "hosting")["note"],
+        "moves up to the next free port when busy"
+    );
+    assert_eq!(
+        service(&plan, "eventarc")["start"],
+        false,
+        "no Functions codebase"
+    );
+    let fixed = json_plan(
+        &dir,
+        &["up", "--plan", "--json", "--hosting-port", "5050"],
+        &[],
+    );
+    assert!(service(&fixed, "hosting")["note"].is_null());
+    assert_eq!(service(&fixed, "hosting")["address"], "127.0.0.1:5050");
+    let rows = fixed["paths"].as_array().unwrap();
+    let public = rows
+        .iter()
+        .find(|row| row["setting"] == "hosting.public")
+        .unwrap();
+    assert_eq!(public["written"], "pub");
+    assert_eq!(public["base"], "firebase.json directory");
+    let off = run(
+        &dir,
+        &["up", "--plan", "--only", "hosting", "--no-config-discovery"],
+        &[],
+    );
+    assert_eq!(
+        off.status.code(),
+        Some(1),
+        "--only hosting without hosting.public is refused like start-up"
+    );
+    assert!(
+        stderr(&off).contains("--only hosting requires hosting.public"),
+        "{}",
+        stderr(&off)
+    );
+}
+
 #[test]
 fn the_json_plan_names_the_project_and_where_it_came_from() {
     let dir = project("json");

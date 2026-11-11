@@ -313,3 +313,46 @@ test("the dependency tree is checked with the discovery: the pinned SDK and no l
   });
   assert.match(linked[0], /leave the tree/);
 });
+
+test("a function is active only with its Cloud Run service, and only a build of this run's functions is the build's copy", () => {
+  const fns = functionsOf(RUN);
+  const noService = {
+    v2: { functions: fns.map((f) => ({ name: functionName(f), state: "ACTIVE" })) },
+    run: { services: fns.slice(1).map((f) => ({ name: "x/services/" + f })) },
+  };
+  const summary = summarize(noService, RUN);
+  assert.equal(summary[fns[0]].present, true);
+  assert.equal(summary[fns[0]].active, false);
+  assert.equal(allActive(summary), false);
+  const before = {
+    queues: [],
+    packages: [],
+    channels: [],
+    triggers: [],
+    subscriptions: [],
+    topics: [],
+    services: [],
+    sourceObjects: { uploads: [], sources: [] },
+  };
+  const kinds = ["queues"];
+  const copy = (name) => ({ ...before, sourceObjects: { uploads: [], sources: [name] } });
+  for (const name of [
+    "tqretryXYZ/function-source.zip",
+    "tqretry0123abc/function-source.zip",
+    "tqnone012345/function-source.zip",
+    "tqretry0123ab/function-source.zip.bak",
+    "tqretry0123ab/other.zip",
+  ])
+    assert.equal(
+      inventoryDifferences({ before, after: copy(name), kinds }).differences.length,
+      1,
+      name,
+    );
+  for (const role of ROLE_IDS)
+    assert.deepEqual(
+      inventoryDifferences({ before, after: copy(role + "0123ab/function-source.zip"), kinds })
+        .differences,
+      [],
+      role,
+    );
+});

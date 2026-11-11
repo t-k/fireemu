@@ -223,3 +223,25 @@ test("the server's createTime is a second origin for the times, and is null when
   assert.equal(out.cases.b.deliveries[0].startFromCreateMs, null);
   assert.equal(out.cases.c.deliveries[0].startFromCreateMs, null);
 });
+
+test("an end frame is paired with the start that has its start time, not with any start of the same retry count", () => {
+  const frames = [
+    start("a", 100, 0),
+    start("a", 200, 0),
+    end("a", 200, 260, 0),
+    end("a", 100, 130, 0),
+  ];
+  const [first, second] = deliveriesOf(frames);
+  assert.equal(first.endedAt, at(130));
+  assert.equal(second.endedAt, at(260));
+});
+
+test("a case that was not sent has no deliveries at all, not an empty list", () => {
+  const out = judge({
+    runId: RUN,
+    program: { skipped: { kind: "create", sent: false, why: "x" } },
+    frames: [],
+  });
+  assert.equal("deliveries" in out.cases.skipped, false);
+  assert.deepEqual(out.findings, []);
+});

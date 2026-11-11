@@ -116,6 +116,9 @@ export function createWorld({
   seedFunctions = [],
   seedPackages = [],
   repositoryPolicies = { "keep-recent": { id: "keep-recent" } },
+  uploadName = null,
+  baselineUploads = [],
+  logVisibleAfterMs = 0,
 } = {}) {
   const FNS = functionsOf(runId);
   const w = {
@@ -134,7 +137,9 @@ export function createWorld({
       ? new Map(
           sourceBuckets(NUMBER).map((name) => [
             name,
-            ["old-upload.zip"].slice(name.startsWith("gcf-v2-uploads") ? 0 : 1),
+            ["old-upload.zip", ...(name.startsWith("gcf-v2-uploads") ? baselineUploads : [])].slice(
+              name.startsWith("gcf-v2-uploads") ? 0 : 1,
+            ),
           ]),
         )
       : new Map(),
@@ -301,9 +306,10 @@ export function createWorld({
     for (const [name, items] of w.sourceBuckets) {
       if (name.startsWith("gcf-v2-uploads")) {
         w.upload =
+          uploadName ??
           "514cacbe-3258-46fd-9a02-54b7485b" + String(++w.insert).padStart(4, "0") + ".zip";
         if (uploadLines !== "refused") {
-          items.push(w.upload);
+          if (!items.includes(w.upload)) items.push(w.upload);
           w.generations.set(name + "/" + w.upload, String(1760000000000000 + w.insert));
         }
       } else for (const fn of FNS) items.push(fn + "/function-source.zip");
@@ -657,6 +663,7 @@ export function createWorld({
       const hits = w.entries.filter((e) => {
         const at = Date.parse(e.timestamp);
         if (at < Date.parse(from) || at > Date.parse(to)) return false;
+        if (at + logVisibleAfterMs > w.now) return false;
         return wantErrors
           ? e.severity === "ERROR"
           : typeof e.textPayload === "string" && e.textPayload.includes(FRAME_MARK);

@@ -188,8 +188,6 @@ export function cliPlan(action, options) {
           "--debug",
           ...(action === "dry-run" ? ["--dry-run"] : []),
         ];
-  if (action === "delete" && !/^[a-f0-9]{16}$/.test(options.runId ?? ""))
-    throw new Error("the CLI delete plan needs the run ID");
   return {
     args,
     cwd: options.workDir,

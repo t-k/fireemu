@@ -27,12 +27,33 @@ test('invalid combination inputs are rejected', () => {
   for (const change of invalid) assert.throws(() => buildCombination({ ...input, ...change }));
 });
 
+test('an empty runId is refused', () => {
+  assert.throws(() => buildCombination({ ...input, runId: '' }));
+});
+
+test('a version with trailing text is refused', () => {
+  assert.throws(() => buildCombination({ ...input, versions: { ...versions, fireemu: '0.49.0abc' } }));
+});
+
 test('parsed records reject unknown keys and unsupported schema versions', () => {
   const record = buildCombination(input);
   for (const value of [
     { ...record, schemaVersion: 2 }, { ...record, extra: true },
     { ...record, versions: { ...record.versions, extra: true } },
   ]) assert.throws(() => parseCombination(value));
+});
+
+test('an unknown flag is refused wherever it appears', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'sdk-latest-record-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  for (const [name, version] of [['fireemu', versions.fireemu], ['firebase', versions.firebase], ['firebase-admin', versions.firebaseAdmin]]) {
+    const packageDir = join(dir, 'node_modules', name);
+    await mkdir(packageDir, { recursive: true });
+    await writeFile(join(packageDir, 'package.json'), JSON.stringify({ version }));
+  }
+  const out = join(dir, 'record.json');
+  await assert.rejects(main(['--bogus', '--suite', 'light', '--install-dir', dir, '--out', out, '--smoke', 'storage']), /Unknown flag: --bogus/);
+  await assert.rejects(readFile(out), { code: 'ENOENT' });
 });
 
 test('reads installed versions and writes records without overwriting', async (t) => {

@@ -4,7 +4,12 @@ import { NUMBER, createWorld } from "./world.mjs";
 
 export const RUN = "0123456789abcdef";
 
-export async function go(worldOptions = {}, options = {}, wrapSend = (send) => send) {
+export async function go(
+  worldOptions = {},
+  options = {},
+  wrapSend = (send) => send,
+  wrapCli = (runCli) => runCli,
+) {
   const world = createWorld({ runId: RUN, ...worldOptions });
   const journal = [];
   const sleeps = [];
@@ -14,7 +19,7 @@ export async function go(worldOptions = {}, options = {}, wrapSend = (send) => s
     accessToken: "test-token-abcdefgh",
     save: async (row) => journal.push(row),
     send: wrapSend(world.send, world),
-    runCli: (o) => world.runCli(o),
+    runCli: wrapCli((o) => world.runCli(o), world),
     clock: () => world.now,
     sleep: async (ms) => {
       sleeps.push(ms);

@@ -143,3 +143,52 @@ test("a case that was not sent has no deliveries and no finding, and an answer k
   );
   assert.equal(maskNumber("none", null), "none");
 });
+
+// ---- properties -------------------------------------------------------------------------------------------------
+
+function* random(seed) {
+  let x = seed >>> 0 || 1;
+  while (true) {
+    x ^= x << 13;
+    x >>>= 0;
+    x ^= x >>> 17;
+    x ^= x << 5;
+    x >>>= 0;
+    yield x;
+  }
+}
+
+test("property: the deliveries of a case are its start frames sorted by time, whatever order the log returns them in", () => {
+  const gen = random(11);
+  for (let round = 0; round < 60; round++) {
+    const cases = ["a", "b", "c"];
+    const program = Object.fromEntries(cases.map((k, i) => [k, created(i * 100)]));
+    const frames = [];
+    const expected = Object.fromEntries(cases.map((k) => [k, []]));
+    for (let n = 0; n < 12; n++) {
+      const key = cases[gen.next().value % 3];
+      const ms = 1000 + (gen.next().value % 5000) + n * 7000;
+      frames.push(start(key, ms, expected[key].length));
+      expected[key].push(ms);
+      if (gen.next().value % 2) frames.push(end(key, ms, ms + 50, expected[key].length - 1));
+    }
+    const shuffled = frames.toSorted(() => (gen.next().value % 3) - 1);
+    const out = judge({ runId: RUN, program, frames: shuffled });
+    for (const key of cases) {
+      const times = out.cases[key].deliveries.map((d) => d.startedAt);
+      assert.deepEqual(times, times.toSorted(), "sorted");
+      assert.deepEqual(
+        out.cases[key].deliveries.map((d) => Date.parse(d.startedAt)).toSorted((x, y) => x - y),
+        expected[key].map((ms) => T0 + ms).toSorted((x, y) => x - y),
+      );
+      for (const d of out.cases[key].deliveries)
+        assert.equal(d.startMs, Date.parse(d.startedAt) - program[key].dispatchedAt);
+    }
+    // A frame of another run, added anywhere, changes no case.
+    const foreign = start("a", 123);
+    foreign.frame.run = "tqrun-fedcba9876543210";
+    const again = judge({ runId: RUN, program, frames: [foreign, ...shuffled] });
+    assert.deepEqual(again.cases, out.cases);
+    assert.equal(again.findings.length, out.findings.length + 1);
+  }
+});

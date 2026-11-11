@@ -335,16 +335,30 @@ export function createWorld({
         : action === "deploy"
           ? []
           : undefined;
+    // Queues Cloud Tasks refuses to create again (the recorded second pass of the Python check: exit 2, a function errored,
+    // the queue POST answered 400 twice).
+    const refused = action === "deploy" ? FNS.filter((id) => queueTombstones.has(id)) : [];
     return {
       action,
-      exitCode: 0,
+      exitCode: refused.length > 0 ? 2 : 0,
       signal: null,
       timedOut: false,
       error: null,
-      errored: 0,
+      errored: refused.length,
       unknownWrites: [],
       ...(uploadEvents ? { uploadEvents } : {}),
-      cliWrites: cliWrites ?? [],
+      cliWrites:
+        refused.length > 0
+          ? [
+              {
+                method: "POST",
+                url: `cloudtasks.googleapis.com/v2/projects/${PROJECT}/locations/${REGION}/queues`,
+                requests: refused.length,
+                statuses: refused.map(() => 400),
+                class: "retried",
+              },
+            ]
+          : (cliWrites ?? []),
       durationMs: 1,
     };
   };

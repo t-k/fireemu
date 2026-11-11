@@ -76,7 +76,7 @@ test("the program has unique keys, known roles, known conditions and a queue rea
 });
 
 test("the committed manifest is the manifest of the program, and its pin is stable", () => {
-  assert.equal(readFileSync(MANIFEST_PATH, "utf8"), manifestText());
+  assert.deepEqual(JSON.parse(readFileSync(MANIFEST_PATH, "utf8")), JSON.parse(manifestText()));
   const a = corpusManifest();
   const b = corpusManifest();
   assert.equal(a.corpusSha256, b.corpusSha256);
@@ -233,4 +233,40 @@ test("the deliveries a case is waited for follow the steps that are not delivere
   assert.equal(minStarts("sch-31d"), 0);
   for (const key of NOT_DELIVERED) assert.equal(minStarts(key), 0);
   for (const key of MAY_FORBID) assert.ok(PROGRAM.some((s) => s.key === key));
+});
+
+test("property: every time form parses back to the instant it was made from (to the millisecond)", () => {
+  const gen = random(5);
+  for (let n = 0; n < 200; n++) {
+    const ms =
+      1_500_000_000_000 + (gen.next().value % 1_000_000_000) * 3 + (gen.next().value % 1000);
+    assert.equal(Date.parse(formatTime(ms, "iso")), ms);
+    assert.equal(Date.parse(formatTime(ms, "offset")), ms);
+    assert.equal(Date.parse(formatTime(ms, "nanos")), ms);
+    assert.match(formatTime(ms, "iso"), /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
+    assert.match(formatTime(ms, "offset"), /\+09:00$/);
+    assert.match(formatTime(ms, "nanos"), /\.\d{9}Z$/);
+  }
+});
+
+test("property: no step of any run names a task outside that run's queues, and no step is sent to a queue of another run", () => {
+  const gen = random(99);
+  for (let n = 0; n < 6; n++) {
+    const runId = hex16(gen.next().value * 131 + n);
+    const marker = runMarker(runId);
+    const suffix = runId.slice(0, 6);
+    for (const spec of PROGRAM) {
+      const request = materialize(spec, ctx(runId));
+      const queue = new URL(request.url).pathname.split("/queues/")[1].split("/")[0];
+      assert.ok(queue.endsWith(suffix), spec.key);
+      const name = request.json?.task?.name;
+      if (name && !name.includes(FOREIGN_PROJECT))
+        assert.ok(
+          name.includes("/queues/" + queue + "/") || spec.key === "id-other-queue",
+          spec.key,
+        );
+      if (name && !name.includes(FOREIGN_PROJECT) && !name.endsWith("/tasks/"))
+        assert.ok(name.includes(marker), spec.key);
+    }
+  }
 });

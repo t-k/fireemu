@@ -456,7 +456,7 @@
     }
   ],
   "corpusPath": "conformance/src/task-queue-production/corpus.manifest.json",
-  "corpusSha256": "94ea38635670d6e317a8bc57a7602e6fc69babad139de1470d3e0e9dce0f3bcf",
+  "corpusSha256": "612cb3fbe3b38327e12e0fb0012295b16bdbfe144b84d457f775afcfec9834d5",
   "corpusContentSha256": "d9fb891867a1d9f13f151f0b0a43bf8d7f66c74c1a7c2d25ee6deb3b98781e8c",
   "recorder": "conformance/src/task-queue-production/record/run.mjs",
   "judge": "conformance/src/task-queue-production/record/judge.mjs",

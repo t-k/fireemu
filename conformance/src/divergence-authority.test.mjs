@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { STATUS } from "./config.mjs";
+import { REPO_ROOT, STATUS } from "./config.mjs";
 import { classifyScenario } from "./diff.mjs";
 import {
   readValidatedDivergenceRegister,
@@ -341,5 +341,62 @@ test("a fixture reached through a symbolic link out of the repository is refused
   } finally {
     rmSync(link, { force: true });
     rmSync(outside, { force: true });
+  }
+});
+
+test("a fixture reference that differs from the real file only in letter case is refused", () => {
+  // `conformance/fixtures/firestore/example.json` exists. A case-insensitive file system (the
+  // default on macOS and Windows) would open it through these spellings, and a case-sensitive one
+  // (Linux CI) would not, so the register would pass locally and fail in CI, or the reverse.
+  for (const fixture of [
+    "Conformance/fixtures/firestore/example.json#step",
+    "conformance/Fixtures/firestore/example.json#step",
+    "conformance/fixtures/firestore/Example.json#step",
+    "conformance/fixtures/firestore/example.JSON#step",
+  ]) {
+    assert.notDeepEqual(
+      validate(register(entry({ fixture }))),
+      [],
+      `expected ${JSON.stringify(fixture)} to be refused on every file system`,
+    );
+  }
+});
+
+/** The checked-in register, parsed fresh, with the baseline the loader derives from package.json. */
+function checkedInRegister() {
+  const read = (name) => JSON.parse(readFileSync(new URL(`../${name}`, import.meta.url), "utf8"));
+  return {
+    register: read("divergences.json"),
+    baseline: read("package.json").dependencies["firebase-tools"],
+  };
+}
+
+test("the checked-in register is accepted against the real repository, and a damaged copy is refused", () => {
+  const { register: real, baseline } = checkedInRegister();
+  assert.deepEqual(validateDivergenceRegister(real, baseline, { root: REPO_ROOT }), []);
+
+  const [firstKey] = Object.keys(real.divergences);
+  const damage = {
+    "a fixture that does not exist": (authority) => {
+      authority.fixture = "conformance/fixtures/does-not-exist.json#step";
+    },
+    "a fixture whose letter case is wrong": (authority) => {
+      authority.fixture = authority.fixture.replace("conformance/", "Conformance/");
+    },
+    "an unverified authority": (authority) => {
+      authority.kind = "unverified";
+    },
+    "another baseline": (authority) => {
+      authority.officialBaseline = { package: "firebase-tools", version: "0.0.0" };
+    },
+  };
+  for (const [name, change] of Object.entries(damage)) {
+    const copy = structuredClone(real);
+    change(copy.divergences[firstKey].authority);
+    assert.notDeepEqual(
+      validateDivergenceRegister(copy, baseline, { root: REPO_ROOT }),
+      [],
+      `expected the real register with ${name} to be refused`,
+    );
   }
 });

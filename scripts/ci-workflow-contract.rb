@@ -4,6 +4,7 @@ require "json"
 require "yaml"
 require "rbconfig"
 require_relative "actions-security-contract"
+require_relative "release-marker-contract"
 
 ROOT = File.expand_path("..", __dir__)
 ActionsSecurityContract.check!(ROOT)
@@ -161,24 +162,9 @@ end
   assert(cached.empty?, "release #{job} must not restore a cache")
 end
 release_build = release.dig("jobs", "build")
-# Only a binary built here writes its release tag as the schema URL; a build from source between
-# releases reports the last release's version but embeds main's newer schema (review of DX-05).
-build_daemon = release_build.fetch("steps").find { |step| step["name"] == "build the daemon" }
-assert(build_daemon&.dig("env", "FIREEMU_RELEASE_BUILD") == "1", "release must mark the daemon build with FIREEMU_RELEASE_BUILD=1")
-assert(
-  release_build.fetch("steps").any? { |step| step["name"] == "the binary writes the schema URL of its own release tag" && step["run"].to_s.include?("init --yes") },
-  "release must check that the built binary writes its release tag as the schema URL"
-)
-reproducible_builds = release.dig("jobs", "reproducible", "steps").select { |step| step["run"].to_s.include?("cargo build --release --locked -p fireemu") }
-assert(
-  reproducible_builds.size == 2 && reproducible_builds.all? { |step| step.dig("env", "FIREEMU_RELEASE_BUILD") == "1" },
-  "both reproducibility builds must set FIREEMU_RELEASE_BUILD=1 like the published build"
-)
-Dir.glob(File.join(ROOT, ".github", "workflows", "*.yml")).each do |path|
-  next if File.basename(path) == "release.yml"
-
-  assert(!File.read(path).include?("FIREEMU_RELEASE_BUILD"), "only release.yml may set FIREEMU_RELEASE_BUILD (#{File.basename(path)})")
-end
+# Only the binary the release workflow publishes may carry FIREEMU_RELEASE_BUILD=1 (see the module).
+ReleaseMarkerContract.check!(ROOT)
+raise "Release marker regression fixtures failed" unless system(RbConfig.ruby, File.join(__dir__, "release-marker-contract.test.rb"))
 release_build_runs = release_build.fetch("steps").map { |step| step["run"] }.compact.join("\n")
 assert(!release_build_runs.include?("cargo nextest"), "release platform builds must not duplicate the workspace test suite")
 assert(release.dig("jobs", "publish", "needs").include?("test"), "release publish must depend on the dedicated test job")

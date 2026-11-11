@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 
 // Every value the package exports at runtime has a declaration, and every declared value exists at
@@ -31,6 +31,11 @@ export const exactlyTheRuntimeExports: Equal<keyof typeof declared, ${union}> = 
   }
 }
 
+// An `import()` specifier is a URL, not a path: `%20` and `100%` in a checkout path must be encoded.
+export async function runtimeExports(name, directory = packageDirectory) {
+  return Object.keys(await import(pathToFileURL(join(directory, `${name}.mjs`)).href)).sort();
+}
+
 export function stripComments(text) {
   return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 }
@@ -47,7 +52,7 @@ test('the package exposes exactly the declared subpaths, each with a shipped dec
 
 for (const name of ['testing', 'control']) {
   test(`fireemu/${name}: runtime value exports and declared value exports are the same set`, async () => {
-    const runtime = Object.keys(await import(join(packageDirectory, `${name}.mjs`))).sort();
+    const runtime = await runtimeExports(name);
     assert(runtime.length > 0);
     compileProbe(name, runtime);
   });
@@ -64,13 +69,16 @@ test('the probe fails when a runtime export has no declaration or a declaration 
   assert.equal(stripComments('// any\n/** any */ export type A = any;').match(/\bany\b/g)?.length, 1);
 });
 
-test('a checkout path with spaces, percent signs and non-ASCII characters is read as the real path', () => {
+test('a checkout path with spaces, percent signs and non-ASCII characters works for the real import and the compiler', async () => {
   const base = mkdtempSync(join(tmpdir(), 'fireemu types '));
   try {
     const checkout = join(base, 'my checkout %20 100% 空白', 'npm', 'fireemu');
-    mkdirSync(checkout, { recursive: true });
-    for (const file of ['control.d.mts', 'control.mjs', 'testing.d.mts', 'testing.mjs']) copyFileSync(join(packageDirectory, file), join(checkout, file));
-    compileProbe('control', ['createControlClient'], checkout);
+    cpSync(packageDirectory, checkout, { recursive: true, filter: source => !source.includes('node_modules') });
+    for (const name of ['testing', 'control']) {
+      const runtime = await runtimeExports(name, checkout);
+      assert.deepEqual(runtime, await runtimeExports(name));
+      compileProbe(name, runtime, checkout);
+    }
     assert.throws(() => compileProbe('control', ['createControlClient', 'undeclaredExport'], checkout));
   } finally {
     rmSync(base, { recursive: true, force: true });

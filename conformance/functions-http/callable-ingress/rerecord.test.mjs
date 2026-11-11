@@ -220,6 +220,20 @@ test("the wrapper's envelope on every refusal row, in both passes, is recorded a
   );
 });
 
+test("a run in which the function answered every request is settled: nothing needs review", () => {
+  const result = judgeRerecord(run(standard(answers.control)), BASELINE);
+  assert.equal(result.verdict, "recorded");
+  assert.equal(result.needsReview, false);
+  assert.deepEqual(result.timingDiffers, []);
+  assert.ok(
+    result.rows.every((row) =>
+      row.passes.every((p) => ["function-answer", "valid-token-answer"].includes(p.class)),
+    ),
+  );
+  // a valid token alone does not need review either
+  assert.equal(result.rows[1].passes[0].class, "valid-token-answer");
+});
+
 test("the front end's page on the refusal rows is recognized as that page", () => {
   const result = judgeRerecord(run(standard(answers.page)), BASELINE);
   assert.equal(result.verdict, "recorded");
@@ -769,33 +783,37 @@ test("a deflate-compressed answer is decoded; a 204 and a 304 answer without a b
   }
 });
 
-test("an aborted request is abandoned, and an informational status is a failure", async () => {
-  await withServer(
-    () => {},
-    async (origin) => {
-      const controller = new AbortController();
-      const transport = createTransport({ delayMs: 0 });
-      const pending = transport.fetchImpl(`${origin}/`, {
-        ...init(null),
-        signal: controller.signal,
-      });
-      setTimeout(() => controller.abort(), 50);
-      await assert.rejects(pending, /abort/i);
-      transport.close();
-    },
-  );
-  await withServer(
-    (req, res) => {
-      res.writeHead(199);
-      res.end();
-    },
-    async (origin) => {
-      const transport = createTransport({ delayMs: 0 });
-      await assert.rejects(transport.fetchImpl(`${origin}/`, init(null)));
-      transport.close();
-    },
-  );
-});
+test(
+  "an aborted request is abandoned, and an informational status is a failure",
+  { timeout: 8000 },
+  async () => {
+    await withServer(
+      () => {},
+      async (origin) => {
+        const controller = new AbortController();
+        const transport = createTransport({ delayMs: 0 });
+        const pending = transport.fetchImpl(`${origin}/`, {
+          ...init(null),
+          signal: controller.signal,
+        });
+        setTimeout(() => controller.abort(), 50);
+        await assert.rejects(pending, /abort/i);
+        transport.close();
+      },
+    );
+    await withServer(
+      (req, res) => {
+        res.writeHead(199);
+        res.end();
+      },
+      async (origin) => {
+        const transport = createTransport({ delayMs: 0 });
+        await assert.rejects(transport.fetchImpl(`${origin}/`, init(null)));
+        transport.close();
+      },
+    );
+  },
+);
 
 test("an https request goes through the https module with ALPN limited to http/1.1, a keep-alive agent and the same head", async () => {
   await withServer(
@@ -1132,6 +1150,7 @@ async function fakeRun({
   useTransport = false,
   failProgram = null,
   vanishAtLastRequest = false,
+  numberHost = false,
 } = {}) {
   const world = await deployWorld({
     deployScript,
@@ -1175,7 +1194,12 @@ async function fakeRun({
       world.budget.take(kind);
       return { status: 200, value: url.endsWith("accounts:lookup") ? {} : {}, bytes: 2 };
     }
-    return world.control(method, url, body, kind, allowed);
+    const reply = await world.control(method, url, body, kind, allowed);
+    if (numberHost && url.endsWith("/functions/fireemuCallableProbe") && reply.status === 200) {
+      reply.value.serviceConfig.uri =
+        "https://fireemucallableprobe-123456789012.us-central1.run.app";
+    }
+    return reply;
   };
   const sent = [];
   let index = 0;
@@ -1466,6 +1490,27 @@ test("fake world: with the real transport the captures carry the transport facts
   }
 });
 
+test("fake world: a host with the project number in it is recorded with the placeholder, and the run still writes its files", async () => {
+  const { world, result, files } = await fakeRun({ useTransport: true, numberHost: true });
+  try {
+    assert.equal(result.verdict, "recorded", files["judgement.json"]);
+    assert.equal(result.exitCode, 0, "no file was refused for holding the project number");
+    for (const recorded of JSON.parse(files["captures.json"])) {
+      assert.equal(
+        recorded.transport.host,
+        "fireemucallableprobe-{{projectNumber}}.us-central1.run.app",
+      );
+      assert.equal(recorded.transport.hostForm, "service-{{projectNumber}}.region.run.app");
+      assert.ok(
+        recorded.transport.requestHead.includes("host: fireemucallableprobe-{{projectNumber}}."),
+      );
+    }
+    assert.ok(!Object.values(files).some((text) => text.includes("123456789012")));
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
 test("fake world: the facts file holds the function, service and policy fields and the project number nowhere", async () => {
   const { world, files, collector } = await fakeRun();
   try {
@@ -1688,6 +1733,37 @@ test("productionDeps wraps the control it is given so that the facts are collect
   assert.deepEqual(calls[0].slice(0, 2), ["adc", "budget"]);
   assert.equal(collector.facts.functions.length, 1);
   assert.equal(deps.createBudget, base.createBudget);
+});
+
+test("the upload helper of the recorder is given the recorder's cap, not the one-deployment cap of the bearer recorder", async () => {
+  const { productionDeps: bearerDeps } = await import("../bearer-observation.mjs");
+  const dir = await mkdtemp(join(tmpdir(), "rerecord-uploads-"));
+  const control = async () => ({ status: 200, value: { items: [] }, bytes: 2 });
+  try {
+    const attempt = async (deps, name) => {
+      const budget = deps.createBudget();
+      for (let i = 0; i < 10; i += 1) budget.take("upload");
+      await mkdir(join(dir, name), { recursive: true });
+      const uploads = deps.openUploads({
+        runDir: join(dir, name),
+        projectNumber: "123456789012",
+        control,
+        budget,
+      });
+      try {
+        await uploads.beginDeploy("k");
+      } catch (error) {
+        return error.message;
+      }
+      return "started";
+    };
+    const recorder = productionDeps();
+    assert.doesNotMatch(await attempt(recorder.deps, "a"), /budget is short/);
+    recorder.close();
+    assert.match(await attempt(bearerDeps(), "b"), /upload request budget is short/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("productionDeps reads the reviewed sources", async () => {

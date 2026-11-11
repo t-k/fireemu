@@ -66,7 +66,7 @@
     "conformance/src/hosting-production/record.mjs": "25764bd5374a6c6e9ff943d1fa64ffa6b6d7408b915b12cf668e0b2bd4a2b847",
     "conformance/src/hosting-production/strict-replay.test.mjs": "9454519e5c375706a423cac628ea8f8f8666a7be97a27267e51e554884e07c32",
     "conformance/src/hosting/run.mjs": "8a47bab9322b0ad283e16fcbbc0f05ce0e5fcaebfeddeecf88865c267b22f72c",
-    "conformance/src/release-strict-regression.test.mjs": "f072dd78352ba2e31c8d627f258e50232b0184a6993b965a54856193854fd78d",
+    "conformance/src/release-strict-regression.test.mjs": "d2881547bd6bc33c9f5b2d35aaa90f288b639bd2387eafa8514a6f877d4fc8fc",
     "conformance/src/rtdb-finite-families-closure.test.mjs": "0fb70d489213edca6b71670ffe20fc92138cd0cdf0a07f7e3dff93aaa2303303",
     "conformance/src/rtdb-functions/breadth-compare.test.mjs": "5fcac52df61d08ceb9297081aa98c12ef6c0bc91ecff537e52122e0cde46e8dc",
     "conformance/src/rtdb-functions/breadth-judge.mjs": "57bf34e08d09184e7ba5895c69f39e58f34921c703cd8a22e27622bb48b599ac",

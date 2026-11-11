@@ -69,12 +69,19 @@ export function createContext({ side, variant, hosts, shared }) {
       return literal;
     },
 
-    /** Records the normalized result of `fn`, or the normalized error it threw. */
-    async step(id, fn) {
+    /**
+     * Records the normalized result of `fn`, or the normalized error it threw.
+     *
+     * `generated` declares, by path, the fields whose value the server or the SDK generates and
+     * the two sides therefore cannot share (see `compileGenerated` in normalize.mjs for the path
+     * syntax): `{ "data.at": "timestamp", "id": "auto-id" }`. Every other string is recorded
+     * exactly, whatever it looks like.
+     */
+    async step(id, fn, { generated } = {}) {
       if (steps.some((s) => s.id === id)) throw new Error(`duplicate step id ${id}`);
       let value;
       try {
-        value = normalize(await fn());
+        value = normalize(await fn(), { generated });
       } catch (error) {
         value = normalizeError(error);
       }

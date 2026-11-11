@@ -647,7 +647,7 @@ const fn destination_is_missing(kind: std::io::ErrorKind) -> bool {
 #[cfg(test)]
 mod writer_tests {
     use super::{replace_config, replace_config_with, WriterOps, REAL_OPS};
-    use std::io::{Error, ErrorKind, Write as _};
+    use std::io::{Error, Write as _};
     use std::path::{Path, PathBuf};
 
     /// A directory removed with everything in it when dropped, also after a failed assertion.
@@ -679,7 +679,7 @@ mod writer_tests {
     }
 
     fn io_error() -> Error {
-        Error::new(ErrorKind::Other, "injected")
+        Error::other("injected")
     }
 
     /// Writes half of the bytes and then fails, as a full disk would.

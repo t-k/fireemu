@@ -17,6 +17,7 @@ const run = new URL("./storage-rules-s9/run.mjs", import.meta.url).pathname;
 const scratch = mkdtempSync(join(tmpdir(), "s9-cli-"));
 after(() => rmSync(scratch, { recursive: true, force: true }));
 
+const LAUNCH = { FIREEMU_STORAGE_RULES_LAUNCH: "s9" };
 const cli = (args, env = {}) =>
   spawnSync(process.execPath, [run, ...args], {
     encoding: "utf8",
@@ -80,31 +81,29 @@ describe("storage rules s9 command line", () => {
       );
     }
     assert.match(
-      cli(["record-production", "--plan", "s9", "--out", join(scratch, "c")]).stderr,
+      cli(["record-production", "--plan", "s9", "--out", join(scratch, "c")], LAUNCH).stderr,
       /--baseline is required/,
     );
     assert.match(
-      cli([
-        "record-production",
-        "--plan",
-        "s9",
-        "--baseline",
-        "present",
-        "--out",
-        join(scratch, "d"),
-      ]).stderr,
+      cli(
+        ["record-production", "--plan", "s9", "--baseline", "present", "--out", join(scratch, "d")],
+        LAUNCH,
+      ).stderr,
       /baseline is neither/,
     );
     assert.match(
-      cli([
-        "record-production",
-        "--plan",
-        "s9",
-        "--baseline",
-        "projects/other/rulesets/x",
-        "--out",
-        join(scratch, "e"),
-      ]).stderr,
+      cli(
+        [
+          "record-production",
+          "--plan",
+          "s9",
+          "--baseline",
+          "projects/other/rulesets/x",
+          "--out",
+          join(scratch, "e"),
+        ],
+        LAUNCH,
+      ).stderr,
       /baseline is neither/,
     );
   });

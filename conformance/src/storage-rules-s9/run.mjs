@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { withProjectLocks } from "../storage-rules/project-locks.mjs";
-import { createLocalDeps, createProductionDeps, fetchNet } from "./deps.mjs";
+import { armSending, createLocalDeps, createProductionDeps, fetchNet, isArmed } from "./deps.mjs";
 import { installEgressGuard } from "../storage-signed-put/egress.mjs";
 import { renderLoads, renderTable } from "./judge.mjs";
 import { observe, readback } from "./observe.mjs";
@@ -143,6 +143,7 @@ export function finish(out, report, extra, log = console, plan = S9_PLAN) {
 }
 
 export function adcToken(exec = execFileSync) {
+  if (!isArmed()) throw new Error("the owner credential is read only after the launch flag");
   try {
     return exec("gcloud", ["auth", "application-default", "print-access-token"], {
       encoding: "utf8",
@@ -221,6 +222,7 @@ export async function recordProductionRun({
     if (FORBIDDEN_ENV.some((pattern) => pattern.test(name)))
       throw new Error(`refusing to start with ${name} set`);
   }
+  armSending(env, plan.id);
   const baseline = validateBaseline(requested, PROJECT);
   const runId = newId();
   const pin = pins(exec);
@@ -310,6 +312,7 @@ export async function recoverRun({
   }
   const header = JSON.parse(readFileSync(join(dir, "run-header.json"), "utf8"));
   const plan = planFor(header.plan ?? "s9");
+  armSending(env, plan.id);
   const baseline = validateBaseline(header.baseline, PROJECT);
   let entryRulesets;
   try {
@@ -416,6 +419,7 @@ async function recordLocal() {
  */
 export async function readbackRun({
   dir,
+  env = process.env,
   exec = execFileSync,
   guardEgress = installEgressGuard,
   net = fetchNet,
@@ -426,6 +430,7 @@ export async function readbackRun({
   const header = JSON.parse(readFileSync(join(dir, "run-header.json"), "utf8"));
   const entry = JSON.parse(readFileSync(join(dir, "entry.json"), "utf8")).entryRulesets;
   const plan = planFor(header.plan ?? "s9");
+  armSending(env, plan.id);
   let unknowns = null;
   try {
     const list = JSON.parse(readFileSync(join(dir, "run-report.json"), "utf8")).unknowns;

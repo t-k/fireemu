@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
 
+import { LAUNCH_FLAG } from "./storage-rules-s9/deps.mjs";
 import { observe } from "./storage-rules-s9/observe.mjs";
 import { BUCKET, PROJECT } from "./storage-rules-s9/plan.mjs";
 import { CASE_PLAN } from "./storage-rules-s9/plan-case.mjs";
@@ -328,7 +329,7 @@ describe("the recover command", () => {
     const final = await recoverRun({
       dir,
       exec: gitExec,
-      env: {},
+      env: { [LAUNCH_FLAG]: "case" },
       guardEgress() {},
       pid: 7,
       now: () => new Date("2026-11-12T00:00:00.000Z"),
@@ -373,7 +374,7 @@ describe("the recover command", () => {
         if (cmd === "gcloud") seen.gcloud += 1;
         return gitExec(cmd, args);
       },
-      env: { PATH: "/bin", HOME: "/h" },
+      env: { PATH: "/bin", HOME: "/h", [LAUNCH_FLAG]: "s9" },
       guardEgress: (hosts) => seen.egress.push(hosts),
       pid: 9,
       now: () => new Date("2026-11-12T01:02:03.456Z"),
@@ -428,7 +429,7 @@ describe("the recover command", () => {
       recoverRun({
         dir,
         exec: (cmd, args) => (args.includes("rev-parse") ? `${"a".repeat(40)}\n` : " M x\n"),
-        env: {},
+        env: { [LAUNCH_FLAG]: "case" },
         guardEgress: () => (touched += 1),
         locks: async () => (touched += 1),
         now: () => new Date("2026-11-12T02:00:00.000Z"),
@@ -445,7 +446,7 @@ describe("the recover command", () => {
     const common = {
       dir,
       exec: gitExec,
-      env: {},
+      env: { [LAUNCH_FLAG]: "case" },
       guardEgress() {},
       pid: 7,
       locks: async (opts, use) => use({ confirmClosed: () => assert.fail("must not close") }),

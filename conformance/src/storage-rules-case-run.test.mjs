@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
 
-import { createProductionDeps } from "./storage-rules-s9/deps.mjs";
+import { LAUNCH_FLAG, createProductionDeps } from "./storage-rules-s9/deps.mjs";
 import { observe, readback } from "./storage-rules-s9/observe.mjs";
 import { BUCKET, PROJECT, S9_PLAN } from "./storage-rules-s9/plan.mjs";
 import { CASE_PLAN } from "./storage-rules-s9/plan-case.mjs";
@@ -75,12 +75,13 @@ describe("choosing the family", () => {
 
 describe("the run of the case family", () => {
   function setup(over = {}) {
+    const plan = over.plan ?? CASE_PLAN;
     const seen = { locks: [], observer: [] };
     const options = {
-      plan: CASE_PLAN,
+      plan,
       baseline: baselineName,
       outPath: fresh(),
-      env: { PATH: "/bin" },
+      env: { PATH: "/bin", [LAUNCH_FLAG]: plan.id },
       exec: execWith(),
       newId: () => "sr-0123abcd",
       pid: 4242,
@@ -214,7 +215,7 @@ describe("a token that outlives its hour (S9 review SF1)", () => {
       outPath: join(dir, "out"),
       lockDir: join(dir, "locks"),
       legacyLock: join(dir, "legacy.lock"),
-      env: {},
+      env: { [LAUNCH_FLAG]: "case" },
       exec: execWith(tokens),
       newId: () => "sr-0123abcd",
       pid: process.pid,
@@ -252,7 +253,7 @@ describe("a read that fails in transport does not keep the lock (S9 review SF4)"
       outPath: join(dir, "out"),
       lockDir: join(dir, "locks"),
       legacyLock: join(dir, "legacy.lock"),
-      env: {},
+      env: { [LAUNCH_FLAG]: "case" },
       exec: execWith(),
       newId: () => "sr-0123abcd",
       pid: process.pid,
@@ -361,6 +362,7 @@ describe("the A2 read-back does not close what the run left open (S9 review SF3)
     const seen = [];
     const common = {
       dir,
+      env: { [LAUNCH_FLAG]: "case" },
       exec: execWith(),
       guardEgress() {},
       now: () => new Date("2026-11-12T00:00:00.000Z"),
@@ -393,6 +395,7 @@ describe("the A2 read-back does not close what the run left open (S9 review SF3)
     let plan;
     await readbackRun({
       dir,
+      env: { [LAUNCH_FLAG]: "s9" },
       exec: execWith(),
       guardEgress() {},
       now: () => new Date("2026-11-12T00:00:00.000Z"),

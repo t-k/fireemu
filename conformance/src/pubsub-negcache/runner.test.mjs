@@ -769,7 +769,8 @@ test("a wall clock that is exactly used up stops the recording", async () => {
   const { run } = record({
     caps: { ...CAPS, wallMs: 1000, cleanupReserveMs: 0 },
     wrap: async (base, req, meta, clock) => {
-      await clock.sleep(1000);
+      // The topic create itself takes 600 ms on the fake production, so 400 ms here uses the 1000 ms up exactly.
+      await clock.sleep(400);
       return base(req, meta);
     },
   });

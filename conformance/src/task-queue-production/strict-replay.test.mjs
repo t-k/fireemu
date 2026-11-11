@@ -26,7 +26,11 @@ test(
       ["task-queue-production-pass-1.json", "task-queue-production-strict-vs-pass-1.json"],
       ["task-queue-production-pass-2.json", "task-queue-production-strict-vs-pass-2.json"],
     ]) {
-      const result = compareStrict(local, json(pass));
+      // A loaded runner delays a process start by more than a second, so the replay allows twice the committed tolerance; the
+      // committed comparison files are held to the tolerance itself (published.test.mjs).
+      const result = compareStrict(local, json(pass), {
+        tolerance: { gapMs: 3000, firstMs: 3000 },
+      });
       const committed = json(committedName);
       assert.equal(
         result.summary.structure.MISMATCH ?? 0,

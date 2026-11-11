@@ -1,5 +1,6 @@
 // The log reads: the filters name only the run's services and a closed window, and the parsers keep only frames that came
 // from the origin of the function they name, once each, and count everything else.
+import "./isolation.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { FRAME_MARK, PROJECT, REGION, functionsOf } from "../plan.mjs";

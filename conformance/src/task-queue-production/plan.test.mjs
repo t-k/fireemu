@@ -1,4 +1,5 @@
 // The names and pins of the recording: the forms the guard, the cleanup and the read-back rely on.
+import "./record/isolation.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import {

@@ -1,6 +1,7 @@
 // The deployed fixture, run in this process against a stand-in request and response: the frames it prints, the status each
 // scripted answer becomes, and that nothing secret is printed. The SDK's own request handling runs (FUNCTIONS_EMULATOR makes
 // it skip the token check, as it does under an emulator); Cloud Tasks itself does not exist here.
+import "./record/isolation.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, symlinkSync, writeFileSync } from "node:fs";

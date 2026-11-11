@@ -1,6 +1,7 @@
 // The deploy side: the SDK's own discovery of the committed fixture, what a discovery must declare, the CLI plan, and the
 // readiness reads. The upload receipt, the inventory and the IAM comparison are the Python Functions check's, whose tests are
 // not repeated; what this file adds is what the run's suffix and the task queue functions change.
+import "./isolation.mjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";

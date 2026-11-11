@@ -1,6 +1,7 @@
 // Checks of the orchestrator that each stand against one decision: the preflight's own stops, the answers it must not
 // believe, the cleanup's second look at what it deleted, and the times the judge starts from. Every test fails when its
 // decision is removed (the hand mutants of the mutation record name them).
+import "./isolation.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PROGRAM } from "../corpus.mjs";

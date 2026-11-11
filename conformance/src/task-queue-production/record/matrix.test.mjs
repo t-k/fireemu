@@ -1,5 +1,6 @@
 // The unknown and ambiguous answers of a recording, and what stops it: each case of the pre-submission checklist section 3
 // (never mixed), the stops before anything is created, the stops during the program, and the cleanup's rules.
+import "./isolation.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PROGRAM } from "../corpus.mjs";

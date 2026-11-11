@@ -1,4 +1,5 @@
 // The read-back: it sends only reads, it settles only absence, and it closes nothing the run left open.
+import "./isolation.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PROJECT, REGION, functionOfRole, functionsOf, queueName } from "../plan.mjs";

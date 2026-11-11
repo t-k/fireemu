@@ -1,5 +1,6 @@
 // What the judge reports: deliveries joined to the case that asked for them, times from the send, and the findings that a
 // reader of the recording must not miss.
+import "./isolation.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { runMarker } from "../plan.mjs";

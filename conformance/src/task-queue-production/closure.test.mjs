@@ -1,5 +1,6 @@
 // The TASK-QUEUE-FUNCTIONS closure record at the IMPLEMENTING stage: its structure, its scope, the pin of the program, and
 // that it claims only what the two recordings and the committed comparisons show.
+import "./record/isolation.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";

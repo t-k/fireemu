@@ -1,5 +1,6 @@
 // The orchestrator against the in-memory world: the clean run, what stops it before anything is created, and the shape of
 // what it sends and records.
+import "./isolation.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PROGRAM } from "../corpus.mjs";

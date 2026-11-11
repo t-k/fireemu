@@ -1,5 +1,6 @@
 // The program of the recording: its shape, the pin of its manifest, and the properties the guard and the recorder rely on
 // (a step is time-free once reduced to its shape; every task carries the run's marker; every name stays in the run's queues).
+import "./record/isolation.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";

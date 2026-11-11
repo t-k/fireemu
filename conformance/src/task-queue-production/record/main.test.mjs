@@ -1,5 +1,6 @@
 // The command line: the arguments, the environment, the checks that need no network, and the rule that nothing is sent
 // without `--send` and the approved packet digest. The send path runs against the in-memory world.
+import "./isolation.mjs";
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

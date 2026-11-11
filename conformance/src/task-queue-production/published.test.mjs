@@ -1,5 +1,6 @@
 // The committed recordings (masked projections), their comparisons and the committed local replay: nothing is sent or started
 // here. The comparisons are rebuilt from the committed projections and must equal the committed files byte for byte.
+import "./record/isolation.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";

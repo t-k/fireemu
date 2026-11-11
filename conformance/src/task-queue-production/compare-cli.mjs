@@ -18,12 +18,13 @@ const load = (path) => JSON.parse(readFileSync(path, "utf8"));
 export const compareRuns = (a, b) => compareProjections(a, b, { noTimingClaim: NO_TIMING_CLAIM });
 
 /** fireemu against a recording: the known differences apply. */
-export const compareStrict = (local, recording) =>
+export const compareStrict = (local, recording, { tolerance } = {}) =>
   compareProjections(recording, local, {
     noTimingClaim: NO_TIMING_CLAIM,
     knownDifferences: KNOWN_DIFFERENCES,
     // A queue with maxAttempts 100 keeps retrying until the run ends: the attempts compared are the first ones both sides made.
     attemptJitter: { "window-six": 100 },
+    ...(tolerance ? { tolerance } : {}),
   });
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

@@ -1,5 +1,6 @@
 // The allowlist: every request of the program passes, and nothing else does (another run's names, another host, a body that
 // is not a step of the program, a mutation of anything the run did not create).
+import "./isolation.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PROGRAM, materialize } from "../corpus.mjs";

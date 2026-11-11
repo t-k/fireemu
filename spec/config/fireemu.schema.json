@@ -849,6 +849,17 @@
           "default": "both",
           "description": "Which of the project's two default buckets exist under strict. A production project has one: <project>.firebasestorage.app when Storage was set up after 2024-10-30, <project>.appspot.com before. A local run cannot know which, so both exist by default. Name the one your project has: the other name then counts as an undeclared bucket, so its first write prints the undeclared-bucket note and the bucket resource answers 404 (production answers 404 for the name your project does not have). The emulator profile ignores this key."
         },
+        "cors": {
+          "type": "object",
+          "additionalProperties": { "type": "array", "items": { "type": "object" } },
+          "description": "Per-bucket CORS configuration under strict, as the Cloud Storage cors JSON: an object from bucket name to a list of rules {origin, method, responseHeader, maxAgeSeconds}. A listed bucket answers an OPTIONS preflight and a request that carries an Origin on the JSON API, the XML API (signed URLs and the form upload included) and the Firebase API's media reads (alt=media) with the first matching rule's CORS headers, or with none when no rule matches, as Cloud Storage does; [] is a bucket with no CORS configuration (what a new bucket in production has). A bucket that is not listed keeps the permissive answer. A request from a non-local Origin is refused (403) whatever a rule lists. The emulator profile rejects this key."
+        },
+        "signedUrlKeys": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "maxItems": 32,
+          "description": "Files holding the public keys V4 signed URLs are verified against under strict: a PEM public key, a PEM private key (only its public half is kept), a service-account JSON (private_key, client_email) or an RSA JWK, each at least 2048 bits. A V4 request whose signature does not verify against the canonical request, its signed headers included, answers 403 SignatureDoesNotMatch with the calculated StringToSign and CanonicalRequest. Unset or empty, the signature is not verified. V2 signed URLs are not verified. The files are read when the daemon starts; one that cannot be used stops the start. The emulator profile rejects this key."
+        },
         "undeclaredBuckets": {
           "enum": ["create", "warn", "refuse"],
           "default": "warn",

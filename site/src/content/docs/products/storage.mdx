@@ -81,6 +81,8 @@ maxStoredBytes = 1073741824
 | `storage.defaultBucket` | Which of the project's two default buckets exist under `strict` ([below](#buckets-that-do-not-exist)). |
 | `storage.buckets`, `storage.publicBuckets` | Declare buckets, and buckets whose public URL needs no credential. Ignored by the `emulator` profile. |
 | `storage.undeclaredBuckets` | What an object operation on a bucket nothing declared does under `strict`: `"warn"` (default) serves the first write, creates the bucket and prints one note; `"create"` does the same silently; `"refuse"` answers production's 404 ([below](#buckets-that-do-not-exist)). The `emulator` profile always creates the bucket silently. |
+| `storage.cors` | Per-bucket CORS configuration in the Cloud Storage `cors` JSON, applied under `strict` ([below](#bucket-cors)). A bucket that is not listed keeps the permissive answer. |
+| `storage.signedUrlKeys` | Public keys (or the private key or service-account JSON a test signed with) that V4 signed URLs are verified against under `strict` ([below](#signed-url-signatures)). Unset, the signature is not verified. |
 | `storage.maxStoredBytes` | A local cap on stored bytes. A write that would pass it is refused with HTTP 402 (`storage.maxStoredBytes limit exceeded`); see [Limit the stored bytes](#limit-the-stored-bytes). Production has no such limit. |
 | `storage.maxObjectBytes` | Per-object size limit, default 256 MiB (maximum 2143289343). Larger uploads are refused with HTTP 413; see [Limit the stored bytes](#limit-the-stored-bytes). |
 | `storage.bufferedBodyBudgetBytes` | Process-wide budget for buffered request bodies, default 1 GiB. A request past it gets HTTP 503 with `Retry-After: 1`. |
@@ -96,6 +98,43 @@ To make a bucket-name typo fail the test, set `storage.undeclaredBuckets` to `"r
 Each name must be one Cloud Storage accepts. `storage.publicBuckets` lists buckets whose objects the public URL serves without a credential, and also counts as declaring them. `storage.buckets` and `storage.publicBuckets` are ignored by the `emulator` profile.
 
 A production project has one default bucket: `<project>.firebasestorage.app` if Storage was set up after 2024-10-30, `<project>.appspot.com` before. A local run cannot know which, so both exist by default. To catch an app configuration copied from the other kind of project, set `storage.defaultBucket` to `"firebasestorage.app"` or `"appspot.com"` (default `"both"`): the other name then counts as an undeclared bucket, so its first write prints the note and `GET /storage/v1/b/{bucket}` answers 404.
+
+## Bucket CORS
+
+Production answers a browser's cross-origin request according to the bucket's CORS configuration, and a new bucket has none, so a page that uploads or downloads in Playwright against a permissive local server can fail in production. Under `strict`, `storage.cors` maps a bucket name to its rules in the Cloud Storage `cors` JSON:
+
+```json
+{
+  "storage": {
+    "cors": {
+      "demo-app.appspot.com": [
+        {
+          "origin": ["http://localhost:3000"],
+          "method": ["GET", "PUT"],
+          "responseHeader": ["Content-Type", "x-goog-content-length-range"],
+          "maxAgeSeconds": 3600
+        }
+      ]
+    }
+  }
+}
+```
+
+A bucket that is listed follows its rules; a bucket that is not listed keeps the permissive answer, and `[]` is a bucket with no CORS configuration, as a new bucket in production is. For a request that carries an `Origin`, the first rule whose `origin` (or `*`) and `method` (or `*`) match decides:
+
+- An actual request gets `Access-Control-Allow-Origin` (the origin, or `*` for a rule that lists `*`), `Vary: Origin` when the origin was echoed, and `Access-Control-Expose-Headers` for the `responseHeader` list.
+- A preflight (`OPTIONS`) additionally needs every header in `Access-Control-Request-Headers` to be in `responseHeader` (or `*`), and then also gets `Access-Control-Allow-Methods`, `Access-Control-Allow-Headers` and `Access-Control-Max-Age` (`maxAgeSeconds`, 3600 when unset).
+- A request no rule matches is answered without any CORS header, and succeeds all the same: the browser refuses to hand the answer to the page.
+
+The rules apply to the JSON API, the XML API (including signed URLs and the form upload) and the media reads of the Firebase API (`alt=media`, which is what a download URL is). The Firebase API's JSON answers and its resumable protocol keep the permissive answer, because the Firebase API sends its own CORS headers for them. The server still refuses a request whose `Origin` is not a local one (403), whatever a rule lists, so a rule is exercised by a page served from `localhost` or a loopback address. The `emulator` profile rejects the key, because the official emulator ignores bucket CORS.
+
+- **Measured against production.** On a bucket with no CORS configuration, the XML API answered an `OPTIONS` preflight and a `PUT` with an `Origin` with `200` and no `Access-Control-*` header (two recordings). Everything about a bucket that has rules follows Cloud Storage's documentation and was not observed: whether `*` is answered as `*` or as the echoed origin, the value of `Access-Control-Allow-Methods`, the default `maxAgeSeconds`, the status of a preflight no rule matches, and the Firebase API's media reads with a configuration.
+
+## Signed URL signatures
+
+Cloud Storage verifies a V4 signed URL against the signing service account's public key. fireemu has no such account, so by default it checks the expiry and the signed headers' presence but not the signature. To check it, register the key a test signs with in `storage.signedUrlKeys`, a list of file paths: a PEM public key, a PEM private key (only its public half is kept), a service-account JSON (`private_key`, `client_email`) or an RSA JWK. Under `strict`, a V4 request whose signature does not verify is answered `403 SignatureDoesNotMatch` with the `StringToSign` and `CanonicalRequest` the server calculated, the body production gave when a signature was altered, when the `Content-Type` or the range header differed from the signed one, and when the object name differed (four recorded causes). The canonical request is the one Cloud Storage documents: the method, the percent-encoded path, the sorted query without `X-Goog-Signature`, the signed headers with their values (`host` is the `Host` the request arrived with, with or without its port: the Admin SDK signs the host name alone for a local endpoint, so a URL it builds verifies as it is), the signed header list and `UNSIGNED-PAYLOAD`. A key file that cannot be read, is not RSA or is shorter than 2048 bits stops the start. A service account's `client_email` ties its key to that account's credentials. Only public keys are kept in memory and nothing about a key is logged.
+
+V2 signed URLs are not verified, only the signed headers the server reads (`Content-Type`, `x-goog-content-length-range` and the other headers it forwards) can be part of a signature that verifies, and the `emulator` profile rejects the key. This is a local check of what a test signed, not an authorization boundary.
 
 ## Security Rules
 
@@ -132,7 +171,7 @@ The details of each refusal follow; nothing is omitted from them.
 <details>
 <summary>An expired signed URL</summary>
 
-A V4 or V2 signed URL past its lifetime answers 400 `ExpiredToken`, and a V4 lifetime over seven days or an unreadable `X-Goog-Date` answers 400. The signature itself is not verified, because that needs the signing service account's key; any signature is accepted.
+A V4 or V2 signed URL past its lifetime answers 400 `ExpiredToken`, and a V4 lifetime over seven days or an unreadable `X-Goog-Date` answers 400. The signature itself is not verified unless `storage.signedUrlKeys` registers the key it was made with ([Signed URL signatures](#signed-url-signatures)), because that needs the signing service account's key; without one, any signature is accepted.
 
 </details>
 
@@ -141,7 +180,7 @@ A V4 or V2 signed URL past its lifetime answers 400 `ExpiredToken`, and a V4 lif
 
 `PUT /{bucket}/{object}` accepts a V4 signed URL for local uploads. Set `FIREBASE_STORAGE_EMULATOR_HOST` to the host and port without a scheme, or `STORAGE_EMULATOR_HOST` to the HTTP URL, before initializing the Admin SDK. The SDK still needs signing credentials; a locally generated test service account key can be used for development. Strict mode rejects an unsigned upload. This upload path stores `Content-Type`; other object metadata and conditional write headers are not supported. Only `Content-Type` and `x-goog-content-length-range` are forwarded for this use; arbitrary signed extension headers are not supported. The range is inclusive.
 - **Measured against production** (a real Firebase project, 2026-11-03, `getSignedUrl` V4 `write` for `image/png` with `x-goog-content-length-range: 0,10485760`, two recordings of 16 cases). A signed header missing from the request is `400 MalformedSecurityHeader` naming it (`content-type` and the range header were measured). A body above or below the range is `400 EntityTooLarge` or `400 EntityTooSmall`. An expired URL is `400 ExpiredToken` naming the end of the signed lifetime. These refusals, and the success headers (`ETag`, `x-goog-generation`, `x-goog-metageneration`, `x-goog-hash`, `x-goog-stored-content-length`, `x-goog-stored-content-encoding`), have production's body and values in both profiles. Under `strict`, a URL that names every signing parameter but the signature is `400 MissingSecurityHeader`, and the range header sent without being among the signed headers is `400 MalformedSecurityHeader`; the `emulator` profile keeps accepting both, as it did before (what firebase-tools 15.28.2 does with them was not measured).
-- **Not verified, a documented difference.** Production answers `403 SignatureDoesNotMatch` when the signature is altered, when the `Content-Type` or the range value differs from the signed one, and when the object name differs from the signed one. fireemu has no key to check a signature with and accepts all four in both profiles, so changes to the method or signed header values cannot be authenticated; do not use this behavior as an authorization check. CORS is permissive in both profiles: a successful `OPTIONS` preflight answers `204` with CORS headers, and a `PUT` that carries an `Origin` gets them. Production depends on the bucket's CORS configuration and answered `200` with no CORS headers for a bucket that has none; bucket CORS configuration is not modelled. This remains a documented difference.
+- **Not verified by default, a documented difference.** Production answers `403 SignatureDoesNotMatch` when the signature is altered, when the `Content-Type` or the range value differs from the signed one, and when the object name differs from the signed one. fireemu has no key to check a signature with unless `storage.signedUrlKeys` registers one (see [Signed URL signatures](#signed-url-signatures)), and otherwise accepts all four in both profiles, so changes to the method or signed header values cannot be authenticated; do not use this behavior as an authorization check. Without `storage.cors`, CORS is permissive in both profiles: a successful `OPTIONS` preflight answers `204` with CORS headers, and a `PUT` that carries an `Origin` gets them. Production depends on the bucket's CORS configuration and answered `200` with no CORS headers for a bucket that has none; list the bucket in `storage.cors` to get that under `strict` ([Bucket CORS](#bucket-cors)).
 - Under `strict`, every occurrence of `X-Goog-SignedHeaders` is enforced, including repeated, differently cased and percent-encoded names. Conflicting repeated `X-Goog-Date`, `X-Goog-Expires` or `Expires` values return `400 InvalidArgument`; remove the conflicting parameters. That refusal has not been observed in production. The `emulator` profile keeps its existing query interpretation.
 
 </details>

@@ -299,6 +299,53 @@ fn cors(
     b
 }
 
+/// The bucket CORS configuration that decides the CORS headers of a request: under the strict
+/// profile, the one `storage.cors` lists for the request's bucket. The Firebase API sends its own
+/// CORS headers on everything but its media reads (the answers a download URL serves), so only
+/// those follow the bucket's configuration there.
+fn bucket_cors_for(
+    state: &StorageState,
+    method: &str,
+    path: &str,
+    query: &str,
+) -> Option<crate::storage_cors::BucketCors> {
+    if !state.is_strict() {
+        return None;
+    }
+    let (bucket, firebase) = crate::storage::cors_bucket(method, path)?;
+    if firebase && !query.split('&').any(|pair| pair == "alt=media") {
+        return None;
+    }
+    state.rules.bucket_cors(&bucket)
+}
+
+/// The answer to a preflight on a bucket `storage.cors` configures: the `200` with no body that
+/// Cloud Storage's XML API gave a preflight on a bucket without CORS (recorded), plus the CORS
+/// headers of the first rule that matches the request, if any.
+fn configured_preflight(
+    cors: &crate::storage_cors::BucketCors,
+    origin: Option<&str>,
+    headers: &hyper::HeaderMap,
+) -> Response<StorageBody> {
+    let mut builder = Response::builder()
+        .status(200)
+        .header("cache-control", "private, max-age=0")
+        .header("content-type", "text/html; charset=UTF-8");
+    let text = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+    if let (Some(origin), Some(method)) = (origin, text("access-control-request-method")) {
+        if let Some(matched) =
+            cors.preflight(origin, method, text("access-control-request-headers"))
+        {
+            for (name, value) in matched {
+                builder = builder.header(name, value);
+            }
+        }
+    }
+    builder
+        .body(plain(Bytes::new()))
+        .unwrap_or_else(|_| Response::new(plain(Bytes::new())))
+}
+
 /// The refusal a body that was not accepted turns into.
 /// The body of every Storage answer.
 type StorageBody = BoxBody<Bytes, std::convert::Infallible>;
@@ -419,7 +466,17 @@ async fn respond(
             .body(plain(Bytes::from_static(b"forbidden origin")))
             .unwrap_or_else(|_| Response::new(plain(Bytes::new()))));
     }
+    // A bucket `storage.cors` lists decides its own CORS headers, a preflight included.
+    let bucket_cors = bucket_cors_for(
+        &state,
+        req.method().as_str(),
+        req.uri().path(),
+        req.uri().query().unwrap_or(""),
+    );
     if req.method() == hyper::Method::OPTIONS {
+        if let Some(cors) = &bucket_cors {
+            return Ok(configured_preflight(cors, origin.as_deref(), req.headers()));
+        }
         // The preflight the official emulator's `cors` middleware answers: the requested
         // headers reflected, the express method list, and both Vary members.
         //
@@ -457,6 +514,7 @@ async fn respond(
             .unwrap_or_else(|_| Response::new(plain(Bytes::new()))));
     }
     let method = req.method().as_str().to_owned();
+    let request_method = method.clone();
     let path = req.uri().path().to_owned();
     let query = req.uri().query().unwrap_or("").to_owned();
     let host = req
@@ -607,17 +665,35 @@ async fn respond(
     let mut builder = Response::builder()
         .status(StatusCode::from_u16(response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR));
     if !framed {
-        builder = cors(
-            // Defence in depth: a body typed text/plain that happens to look like markup is
-            // never sniffed as HTML on this origin. It does not change how an explicit
-            // text/html content-type renders, so it is not a substitute for typing
-            // caller-influenced bodies as text/plain -- see storage::gcs_no_such_object.
-            builder.header("x-content-type-options", "nosniff"),
-            origin.as_deref(),
-        );
+        // Defence in depth: a body typed text/plain that happens to look like markup is
+        // never sniffed as HTML on this origin. It does not change how an explicit
+        // text/html content-type renders, so it is not a substitute for typing
+        // caller-influenced bodies as text/plain -- see storage::gcs_no_such_object.
+        builder = builder.header("x-content-type-options", "nosniff");
+        if bucket_cors.is_none() {
+            builder = cors(builder, origin.as_deref());
+        }
     }
     let body = body_of(&response);
-    for (k, v) in response.headers {
+    let mut response_headers = response.headers;
+    if let Some(configured) = &bucket_cors {
+        // The bucket's rules replace every CORS header the permissive answer carries.
+        response_headers.retain(|(k, _)| !k.to_ascii_lowercase().starts_with("access-control-"));
+        let matched = origin
+            .as_deref()
+            .and_then(|origin| configured.actual(origin, &request_method));
+        for (k, v) in matched.unwrap_or_default() {
+            let repeated_vary = k == "vary"
+                && response_headers.iter().any(|(name, value)| {
+                    name.eq_ignore_ascii_case("vary")
+                        && value.split(',').any(|part| part.trim() == "Origin")
+                });
+            if !repeated_vary {
+                response_headers.push((k, v));
+            }
+        }
+    }
+    for (k, v) in response_headers {
         builder = builder.header(k, v);
     }
     match builder.body(body) {

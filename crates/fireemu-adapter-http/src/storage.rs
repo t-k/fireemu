@@ -203,6 +203,11 @@ pub struct StorageRulesRegistry {
     /// The buckets `storage.publicBuckets` lists: every object in them is readable without a
     /// credential, as a bucket whose IAM grants `allUsers` the object viewer role is.
     public_buckets: std::sync::RwLock<std::collections::BTreeSet<String>>,
+    /// The buckets `storage.cors` configures, each with its rules (strict profile only).
+    bucket_cors: std::sync::RwLock<BTreeMap<String, crate::storage_cors::BucketCors>>,
+    /// The public keys V4 signed URLs are verified against (`storage.signedUrlKeys`); none means
+    /// the signature is not verified.
+    signer_keys: std::sync::RwLock<crate::storage_signature::SignerKeys>,
     /// What happens to an operation on a bucket nothing declared (`storage.undeclaredBuckets`).
     undeclared_buckets: std::sync::RwLock<UndeclaredBuckets>,
     /// Where the first write to a bucket nothing declared is reported, once per bucket.
@@ -284,6 +289,8 @@ impl StorageRulesRegistry {
             configured_buckets: std::sync::RwLock::default(),
             default_buckets: std::sync::RwLock::default(),
             public_buckets: std::sync::RwLock::default(),
+            bucket_cors: std::sync::RwLock::default(),
+            signer_keys: std::sync::RwLock::default(),
             undeclared_buckets: std::sync::RwLock::default(),
             unknown_bucket_notice: std::sync::RwLock::default(),
             noticed_unknown_buckets: Mutex::default(),
@@ -302,6 +309,8 @@ impl StorageRulesRegistry {
             configured_buckets: std::sync::RwLock::default(),
             default_buckets: std::sync::RwLock::default(),
             public_buckets: std::sync::RwLock::default(),
+            bucket_cors: std::sync::RwLock::default(),
+            signer_keys: std::sync::RwLock::default(),
             undeclared_buckets: std::sync::RwLock::default(),
             unknown_bucket_notice: std::sync::RwLock::default(),
             noticed_unknown_buckets: Mutex::default(),
@@ -369,6 +378,37 @@ impl StorageRulesRegistry {
 
     fn default_buckets(&self) -> DefaultBuckets {
         self.default_buckets.read().map(|d| *d).unwrap_or_default()
+    }
+
+    /// Replaces the CORS configuration of the listed buckets (strict profile only); a bucket
+    /// that is not listed keeps the permissive answer.
+    pub fn set_bucket_cors(&self, cors: BTreeMap<String, crate::storage_cors::BucketCors>) {
+        if let Ok(mut slot) = self.bucket_cors.write() {
+            *slot = cors;
+        }
+    }
+
+    /// The CORS configuration of `bucket`, if `storage.cors` lists it.
+    pub(crate) fn bucket_cors(&self, bucket: &str) -> Option<crate::storage_cors::BucketCors> {
+        self.bucket_cors
+            .read()
+            .ok()
+            .and_then(|cors| cors.get(bucket).cloned())
+    }
+
+    /// Registers the public keys V4 signed URLs are verified against (strict profile only).
+    /// An empty set turns the verification off.
+    pub fn set_signer_keys(&self, keys: crate::storage_signature::SignerKeys) {
+        if let Ok(mut slot) = self.signer_keys.write() {
+            *slot = keys;
+        }
+    }
+
+    fn signer_keys(&self) -> crate::storage_signature::SignerKeys {
+        self.signer_keys
+            .read()
+            .map(|keys| keys.clone())
+            .unwrap_or_default()
     }
 
     /// Selects what an operation on a bucket nothing declared does (strict profile only).
@@ -4041,6 +4081,38 @@ fn unknown_bucket_written(
     (!exists).then(|| bucket.clone())
 }
 
+/// The bucket a request addresses and whether it is the Firebase API (`/v0`), for the CORS
+/// decision: the bucket of the route `method` and `path` resolve to. A preflight names no method
+/// of its own, so each verb a browser may ask for is tried. `None` for a path that names no bucket.
+pub(crate) fn cors_bucket(method: &str, path: &str) -> Option<(String, bool)> {
+    let methods: &[&str] = if method == "OPTIONS" {
+        // POST first: the upload route is not a bucket named `upload` for the object read.
+        &["POST", "GET", "PUT", "DELETE"]
+    } else {
+        std::slice::from_ref(&method)
+    };
+    methods.iter().find_map(|m| {
+        let bucket = match route(m, path).ok()? {
+            Route::FbBucket { bucket }
+            | Route::FbObject { bucket, .. }
+            | Route::GcsList { bucket }
+            | Route::GcsBucket { bucket }
+            | Route::GcsBucketShort { bucket }
+            | Route::GcsObject { bucket, .. }
+            | Route::GcsAcl { bucket, .. }
+            | Route::GcsAclEntry { bucket, .. }
+            | Route::GcsCopy { bucket, .. }
+            | Route::GcsUpload { bucket }
+            | Route::FormUpload { bucket }
+            | Route::XmlStyle { bucket, .. } => bucket,
+            Route::SetRules | Route::FbRoot | Route::GcsListBuckets | Route::NotImplemented => {
+                return None
+            }
+        };
+        Some((bucket, path.starts_with("/v0/")))
+    })
+}
+
 /// `storage.undeclaredBuckets: "refuse"` (strict only): a request naming a bucket that does not
 /// exist (see [`bucket_exists`]) is answered as Cloud Storage answers a bucket nobody created,
 /// whichever operation it is: 404 `The specified bucket does not exist.` on the JSON API
@@ -7194,7 +7266,7 @@ fn xml_read_admission(
     use crate::storage_xml::{check_signed_url, SignedUrl};
     refuse_conflicting_signing_parameter(state, req)?;
     match check_signed_url(params, now_unix_seconds(state)) {
-        SignedUrl::Valid => return Ok(()),
+        SignedUrl::Valid => return verify_signed_url(state, req),
         SignedUrl::Expired => {
             return Err(xml_error(
                 400,
@@ -7280,6 +7352,7 @@ fn xml_style_put(
         SignedUrl::Valid | SignedUrl::Absent => {}
     }
     check_signed_headers(state, &req, params)?;
+    verify_signed_url(state, &req)?;
     check_content_length_range(&req)?;
     let b = bucket_name(bucket)?;
     let n = upload_object_name(state, name)?;
@@ -7319,6 +7392,66 @@ fn xml_style_put(
                 .unwrap_or_else(|| "identity".to_owned()),
         )
         .with_header("x-goog-stored-content-length", stored.size.to_string()))
+}
+
+/// `storage.signedUrlKeys`: under strict, with a key registered, a V4 signed URL whose signature
+/// does not verify against the canonical request (method, path, query, signed headers) is refused
+/// with production's 403 `SignatureDoesNotMatch` (RECORDED, storage-signed-put: an altered
+/// signature, a changed `Content-Type`, a changed range header and another object name), which
+/// carries the `StringToSign` and `CanonicalRequest` the server calculated. Without a key, or
+/// without a V4 signature, nothing is checked here. A header the handler does not forward is not
+/// on the request the signature sees (`check_signed_headers` has refused it by then).
+fn verify_signed_url(state: &StorageState, req: &StorageRequest) -> Result<(), StorageResponse> {
+    use crate::storage_signature::{verify_v4, SignedRequest, Verdict};
+    if !state.is_strict() {
+        return Ok(());
+    }
+    let keys = state.rules.signer_keys();
+    if keys.is_empty() {
+        return Ok(());
+    }
+    let mut headers: BTreeMap<String, Vec<String>> = req
+        .headers
+        .iter()
+        .filter(|(name, _)| name.as_str() != DUPLICATED_HEADERS_KEY)
+        .map(|(name, value)| (name.clone(), vec![value.clone()]))
+        .collect();
+    if let Some(host) = &req.host {
+        headers.insert("host".to_owned(), vec![host.clone()]);
+    }
+    let verdict = verify_v4(
+        &keys,
+        &SignedRequest {
+            method: &req.method,
+            path: &req.path,
+            query: &req.query,
+            headers: &headers,
+        },
+    );
+    let Verdict::Mismatch {
+        string_to_sign,
+        canonical_request,
+    } = verdict
+    else {
+        return Ok(());
+    };
+    let mut response = xml_error(
+        403,
+        "SignatureDoesNotMatch",
+        "Access denied.",
+        Some("The request signature we calculated does not match the signature you provided. Check your Google secret key and signing method."),
+    );
+    let body = String::from_utf8_lossy(&response.body).into_owned();
+    response.body = bytes::Bytes::from(body.replacen(
+        "</Error>",
+        &format!(
+            "<StringToSign>{}</StringToSign><CanonicalRequest>{}</CanonicalRequest></Error>",
+            xml_escape(&string_to_sign),
+            xml_escape(&canonical_request)
+        ),
+        1,
+    ));
+    Err(response)
 }
 
 /// The XML API's answer to a request header it finds malformed (recorded 2026-11-03).

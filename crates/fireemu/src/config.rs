@@ -1099,6 +1099,13 @@ pub struct RuntimeConfig {
     pub storage_buckets: Vec<String>,
     /// `storage.publicBuckets`: buckets whose objects the public URL serves without a credential.
     pub storage_public_buckets: Vec<String>,
+    /// `storage.cors`: the CORS rules of the buckets it lists, as the Cloud Storage `cors` JSON
+    /// (validated when read); a bucket that is not listed keeps the permissive answer. Strict
+    /// profile only.
+    pub storage_cors: std::collections::BTreeMap<String, Value>,
+    /// `storage.signedUrlKeys`: files holding the public keys V4 signed URLs are verified against
+    /// (empty: the signature is not verified). Strict profile only.
+    pub storage_signed_url_keys: Vec<String>,
     /// `storage.defaultBucket`: which of the project's two default bucket names exist under
     /// strict (`"both"` by default).
     pub storage_default_bucket: fireemu_adapter_http::storage::DefaultBuckets,
@@ -1824,6 +1831,8 @@ impl Default for RuntimeConfig {
                 fireemu_adapter_http::storage_server::DEFAULT_BODY_BUDGET_BYTES,
             storage_buckets: Vec::new(),
             storage_public_buckets: Vec::new(),
+            storage_cors: std::collections::BTreeMap::new(),
+            storage_signed_url_keys: Vec::new(),
             storage_default_bucket: fireemu_adapter_http::storage::DefaultBuckets::Both,
             storage_undeclared_buckets: profile.undeclared_buckets(),
             database_create_time: None,
@@ -2251,6 +2260,8 @@ impl RuntimeConfig {
             "storage.bufferedBodyBudgetBytes" => Some(json!(self.storage_buffered_body_budget_bytes)),
             "storage.buckets" => Some(json!(self.storage_buckets)),
             "storage.publicBuckets" => Some(json!(self.storage_public_buckets)),
+            "storage.cors" => Some(json!(self.storage_cors)),
+            "storage.signedUrlKeys" => Some(json!(self.storage_signed_url_keys)),
             "storage.defaultBucket" => Some(json!(match self.storage_default_bucket {
                 fireemu_adapter_http::storage::DefaultBuckets::Both => "both",
                 fireemu_adapter_http::storage::DefaultBuckets::FirebaseStorageApp => {
@@ -2862,6 +2873,56 @@ fn parse_storage_buckets(key: &str, value: &Value) -> Result<Vec<String>, Config
         }
     }
     Ok(buckets)
+}
+
+/// `storage.cors`: an object from a bucket name Cloud Storage accepts to that bucket's `cors`
+/// list. Each list is validated as the server will read it, so a typo fails the start.
+fn parse_storage_cors(
+    value: &Value,
+) -> Result<std::collections::BTreeMap<String, Value>, ConfigError> {
+    let object = value.as_object().ok_or_else(|| {
+        ConfigError("storage.cors must be an object from bucket name to CORS rules".to_owned())
+    })?;
+    let mut cors = std::collections::BTreeMap::new();
+    for (bucket, rules) in object {
+        if let Some(reason) = fireemu_core_storage::name::bucket_name_violation(bucket) {
+            return Err(ConfigError(format!(
+                "storage.cors names {bucket:?}, which is not a bucket name Cloud Storage accepts: {reason}"
+            )));
+        }
+        fireemu_adapter_http::storage_cors::BucketCors::from_json(rules)
+            .map_err(|e| ConfigError(format!("storage.cors[{bucket:?}] {e}")))?;
+        cors.insert(bucket.clone(), rules.clone());
+    }
+    Ok(cors)
+}
+
+/// `storage.signedUrlKeys`: an array of file paths. The files are read when the daemon starts.
+fn parse_storage_signed_url_keys(value: &Value) -> Result<Vec<String>, ConfigError> {
+    let paths = value.as_array().ok_or_else(|| {
+        ConfigError("storage.signedUrlKeys must be an array of file paths".to_owned())
+    })?;
+    if paths.len() > fireemu_adapter_http::storage_signature::MAX_KEYS {
+        return Err(ConfigError(format!(
+            "storage.signedUrlKeys lists more than {} files",
+            fireemu_adapter_http::storage_signature::MAX_KEYS
+        )));
+    }
+    let mut listed: Vec<String> = Vec::with_capacity(paths.len());
+    for (index, path) in paths.iter().enumerate() {
+        let path = path
+            .as_str()
+            .filter(|p| !p.is_empty() && !p.contains('\0'))
+            .ok_or_else(|| {
+                ConfigError(format!(
+                    "storage.signedUrlKeys[{index}] must be a non-empty file path string"
+                ))
+            })?;
+        if !listed.iter().any(|existing| existing == path) {
+            listed.push(path.to_owned());
+        }
+    }
+    Ok(listed)
 }
 
 /// Reads `host` and `port` of one `emulators.<name>` entry onto the current address.
@@ -5819,6 +5880,24 @@ impl RuntimeConfig {
             if let Some(value) = storage.get("publicBuckets") {
                 cfg.storage_public_buckets = parse_storage_buckets("publicBuckets", value)?;
             }
+            if let Some(value) = storage.get("cors") {
+                cfg.storage_cors = parse_storage_cors(value)?;
+                if !cfg.storage_cors.is_empty() && cfg.profile != CompatibilityProfile::Strict {
+                    return Err(ConfigError(
+                        "storage.cors requires the strict profile".to_owned(),
+                    ));
+                }
+            }
+            if let Some(value) = storage.get("signedUrlKeys") {
+                cfg.storage_signed_url_keys = parse_storage_signed_url_keys(value)?;
+                if !cfg.storage_signed_url_keys.is_empty()
+                    && cfg.profile != CompatibilityProfile::Strict
+                {
+                    return Err(ConfigError(
+                        "storage.signedUrlKeys requires the strict profile".to_owned(),
+                    ));
+                }
+            }
             if let Some(value) = storage.get("undeclaredBuckets") {
                 use fireemu_adapter_http::storage::UndeclaredBuckets;
                 let mode =
@@ -6590,6 +6669,8 @@ mod tests {
             ),
             ("storage.buckets", json!([]), "default"),
             ("storage.publicBuckets", json!([]), "default"),
+            ("storage.cors", json!({}), "default"),
+            ("storage.signedUrlKeys", json!([]), "default"),
             ("storage.defaultBucket", json!("both"), "default"),
             (
                 "storage.undeclaredBuckets",
@@ -7675,6 +7756,85 @@ mod tests {
         assert_eq!(cfg.storage_undeclared_buckets, Create);
         cfg.set_profile(CompatibilityProfile::Strict);
         assert_eq!(cfg.storage_undeclared_buckets, Warn);
+    }
+
+    #[test]
+    fn storage_cors_is_validated_per_bucket_and_needs_the_strict_profile() {
+        let read = |profile: &str, cors: Value| {
+            RuntimeConfig::from_json(
+                &json!({"schemaVersion": 1, "profile": profile, "storage": {"cors": cors}}),
+            )
+        };
+        let rule = json!([{"origin": ["http://localhost:3000"], "method": ["GET"]}]);
+        let config = read(
+            "strict",
+            json!({"demo-app.appspot.com": rule, "other-bucket": []}),
+        )
+        .unwrap();
+        assert_eq!(config.storage_cors.len(), 2);
+        assert_eq!(config.storage_cors["other-bucket"], json!([]));
+        assert!(RuntimeConfig::default().storage_cors.is_empty());
+        // An empty object configures nothing and is accepted by both profiles.
+        assert!(read("emulator", json!({})).unwrap().storage_cors.is_empty());
+        assert_eq!(
+            read("emulator", json!({"demo-app.appspot.com": rule})),
+            Err(ConfigError(
+                "storage.cors requires the strict profile".to_owned()
+            ))
+        );
+        for (bad, needle) in [
+            (json!([]), "storage.cors must be an object"),
+            (json!({"AB": []}), "not a bucket name"),
+            (
+                json!({"valid-bucket": {}}),
+                "storage.cors[\"valid-bucket\"] must be an array",
+            ),
+            (
+                json!({"valid-bucket": [{"origins": ["*"]}]}),
+                "[0]: has an unknown key",
+            ),
+        ] {
+            let error = read("strict", bad.clone()).unwrap_err();
+            assert!(error.0.contains(needle), "{bad}: {error}");
+        }
+    }
+
+    #[test]
+    fn storage_signed_url_keys_are_file_paths_for_the_strict_profile() {
+        let read = |profile: &str, keys: Value| {
+            RuntimeConfig::from_json(
+                &json!({"schemaVersion": 1, "profile": profile, "storage": {"signedUrlKeys": keys}}),
+            )
+        };
+        assert!(RuntimeConfig::default().storage_signed_url_keys.is_empty());
+        assert_eq!(
+            read("strict", json!(["a.pem", "b.json", "a.pem"]))
+                .unwrap()
+                .storage_signed_url_keys,
+            ["a.pem", "b.json"]
+        );
+        assert!(read("emulator", json!([]))
+            .unwrap()
+            .storage_signed_url_keys
+            .is_empty());
+        assert_eq!(
+            read("emulator", json!(["a.pem"])),
+            Err(ConfigError(
+                "storage.signedUrlKeys requires the strict profile".to_owned()
+            ))
+        );
+        for bad in [
+            json!("a.pem"),
+            json!([1]),
+            json!([""]),
+            json!(["a\u{0}b"]),
+            json!([null]),
+        ] {
+            let error = read("strict", bad.clone()).unwrap_err();
+            assert!(error.0.contains("storage.signedUrlKeys"), "{bad}: {error}");
+        }
+        let many: Vec<String> = (0..33).map(|i| format!("k{i}.pem")).collect();
+        assert!(read("strict", json!(many)).is_err());
     }
 
     #[test]

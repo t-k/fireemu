@@ -115,6 +115,39 @@ assert(windows_runs.include?("cargo nextest run -p fireemu --bin fireemu --test 
 assert(!windows_runs.include?("--partition"), "Windows platform tests must not be partitioned")
 assert(platform_steps[platform_tests_index]["run"].include?('cargo nextest run --workspace --profile pr --partition count:${{ matrix.shard }}'), "macOS platform tests must use the matrix partition")
 
+latest = load_workflow("sdk-latest.yml")
+latest_trigger = latest["on"] || latest[true]
+assert(latest_trigger.keys.sort == %w[pull_request push schedule workflow_dispatch], "sdk-latest must have exactly the intended triggers")
+assert(latest_trigger.fetch("schedule").map { |entry| entry.fetch("cron") } == ["0 4 * * *", "0 3 * * 2"], "sdk-latest must run daily and weekly")
+assert(latest_trigger.dig("workflow_dispatch", "inputs", "suite", "options") == %w[light broad], "sdk-latest dispatch must offer light and broad")
+assert(latest["permissions"] == { "contents" => "read" }, "sdk-latest must only read contents")
+latest_jobs = latest.fetch("jobs")
+assert(latest_jobs.keys.sort == %w[latest-sdk-under-exec published-broad published-light], "sdk-latest must have exactly three jobs")
+latest_steps = latest_jobs.values.flat_map do |job|
+  assert(!job.key?("permissions"), "sdk-latest jobs must inherit permissions")
+  timeout = job["timeout-minutes"]
+  assert(timeout.is_a?(Integer) && (1..60).cover?(timeout), "sdk-latest jobs must have a timeout at most 60 minutes")
+  job.fetch("steps")
+end
+latest_steps.each do |step|
+  text = YAML.dump(step)
+  %w[secrets. git\ push gh\ pr create-pull-request actions/cache@].each do |forbidden|
+    assert(!text.include?(forbidden), "sdk-latest steps must not contain #{forbidden}")
+  end
+  uses = step["uses"].to_s
+  assert(uses.empty? || uses.match?(/@[0-9a-f]{40}\z/), "sdk-latest actions must be pinned")
+  assert(!step.fetch("with", {}).key?("cache"), "sdk-latest setup-node must not cache") if uses.start_with?("actions/setup-node@")
+  assert(step.dig("with", "save-if") == "false", "sdk-latest rust-cache must not save") if uses.start_with?("Swatinem/rust-cache@")
+end
+uploads = latest_steps.select { |step| step["uses"].to_s.start_with?("actions/upload-artifact@") }
+assert(uploads.map { |step| step.dig("with", "name") }.sort == %w[sdk-latest-combination-broad sdk-latest-combination-light], "sdk-latest must upload both combinations")
+uploads.each do |step|
+  assert(step.dig("with", "if-no-files-found") == "error" && step.dig("with", "retention-days") == 90, "sdk-latest artifacts must be required and retained for 90 days")
+end
+assert(latest_jobs.dig("published-light", "if") == "(github.event_name == 'schedule' && github.event.schedule == '0 4 * * *') || (github.event_name == 'workflow_dispatch' && inputs.suite == 'light')", "light must run only on daily schedule or light dispatch")
+assert(latest_jobs.dig("published-broad", "if") == "(github.event_name == 'schedule' && github.event.schedule == '0 3 * * 2') || (github.event_name == 'workflow_dispatch' && inputs.suite == 'broad')", "broad must run only on weekly schedule or broad dispatch")
+assert(latest_jobs.dig("latest-sdk-under-exec", "if") == "github.event_name != 'schedule' || github.event.schedule == '0 3 * * 2'", "source build must skip the daily schedule")
+
 sdk = load_workflow("functions-sdk-discovery.yml")
 sdk_trigger = sdk["on"] || sdk[true]
 assert(!sdk_trigger.key?("pull_request_target"), "SDK discovery must not use pull_request_target")
@@ -437,7 +470,7 @@ assert(measure_runs.include?("tools/bench/report.py"), "benchmark measure must r
 benchmark_report = benchmark.dig("jobs", "measure", "steps").find { |step| step["run"]&.include?("tools/bench/report.py") }
 assert(benchmark_report["if"] == "always()", "benchmark report must run on failed trials too")
 
-%w[ci.yml compatibility-inventory.yml conformance.yml functions-sdk-discovery.yml quint.yml].each do |name|
+%w[ci.yml compatibility-inventory.yml conformance.yml functions-sdk-discovery.yml quint.yml sdk-latest.yml].each do |name|
   bounded = load_workflow(name)
   assert(bounded.dig("concurrency", "group") == "${{ github.workflow }}-${{ github.ref }}", "#{name} must cancel stale runs for the same ref")
   assert(bounded.dig("concurrency", "cancel-in-progress") == true, "#{name} must enable stale-run cancellation")
@@ -459,6 +492,7 @@ assert(load_workflow("functions-sdk-discovery.yml").dig("jobs", "real-sdk-discov
   "conformance.yml" => %w[conformance],
   "functions-sdk-discovery.yml" => %w[real-sdk-discovery],
   "quint.yml" => %w[quint],
+  "sdk-latest.yml" => %w[latest-sdk-under-exec published-light published-broad],
 }.each do |name, jobs|
   workflow = load_workflow(name)
   jobs.each do |job|

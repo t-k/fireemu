@@ -9,7 +9,14 @@ name: sdk-latest
 
 on:
   workflow_dispatch:
+    inputs:
+      suite:
+        description: "Which published-package suite to run. The source build always runs on dispatch."
+        type: choice
+        options: [light, broad]
+        default: broad
   schedule:
+    - cron: '0 4 * * *'
     - cron: '0 3 * * 2'
   pull_request:
     paths:
@@ -20,6 +27,8 @@ on:
       - crates/fireemu-adapter-http/src/storage*.rs
       - tools/sdk-smoke/storage.mjs
       - tools/sdk-smoke/client.mjs
+      - tools/sdk-smoke/sdk-latest-record.mjs
+      - tools/sdk-smoke/sdk-latest-record.test.mjs
       - tools/sdk-smoke/fireemu.smoke.json
       - tools/sdk-smoke/package.json
       - tools/sdk-smoke/package-lock.json
@@ -33,6 +42,8 @@ on:
       - crates/fireemu-adapter-http/src/storage*.rs
       - tools/sdk-smoke/storage.mjs
       - tools/sdk-smoke/client.mjs
+      - tools/sdk-smoke/sdk-latest-record.mjs
+      - tools/sdk-smoke/sdk-latest-record.test.mjs
       - tools/sdk-smoke/fireemu.smoke.json
       - tools/sdk-smoke/package.json
       - tools/sdk-smoke/package-lock.json
@@ -49,6 +60,7 @@ env:
 
 jobs:
   latest-sdk-under-exec:
+    if: github.event_name != 'schedule' || github.event.schedule == '0 3 * * 2'
     # Bound cache tokens even when latest SDK runtime code calls the cache API directly.
     cache-mode: read
     runs-on: ubuntu-latest
@@ -67,6 +79,8 @@ jobs:
         with:
           key: sdk-latest
           save-if: "false"
+      - name: test SDK combination records
+        run: node --test tools/sdk-smoke/sdk-latest-record.test.mjs
       - name: build fireemu from this commit
         run: cargo build --locked -p fireemu
       # Not the lockfile: the point is the release a new user gets today. The smokes are copied
@@ -115,3 +129,105 @@ jobs:
           echo "::group::storage-appcheck-admin (Storage App Check enforced)"
           "$bin" exec --config "$appcheck_config" --project demo-app --only storage --hub-port 0 -- node storage-appcheck-admin.mjs
           echo "::endgroup::"
+
+  published-light:
+    if: (github.event_name == 'schedule' && github.event.schedule == '0 4 * * *') || (github.event_name == 'workflow_dispatch' && inputs.suite == 'light')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+      - name: install published packages
+        run: |
+          set -eu
+          dir="$RUNNER_TEMP/sdk-latest-published"
+          mkdir -p "$dir"
+          cd "$dir"
+          npm init -y
+          npm install --no-audit --no-fund fireemu@latest firebase@latest firebase-admin@latest
+      - name: prepare smokes and report versions
+        run: |
+          set -eu
+          dir="$RUNNER_TEMP/sdk-latest-published"
+          cp tools/sdk-smoke/storage.mjs tools/sdk-smoke/client.mjs "$dir/"
+          cd "$dir"
+          for package in fireemu firebase firebase-admin; do
+            version="$(node -p "require('./node_modules/$package/package.json').version")"
+            echo "- $package $version" >> "$GITHUB_STEP_SUMMARY"
+          done
+      - name: run published package smokes
+        run: |
+          set -eu
+          cd "$RUNNER_TEMP/sdk-latest-published"
+          ./node_modules/.bin/fireemu exec --project demo-app --hub-port 0 -- node storage.mjs
+          ./node_modules/.bin/fireemu exec --project demo-app --hub-port 0 -- node client.mjs
+      - name: record passing combination
+        run: |
+          set -eu
+          dir="$RUNNER_TEMP/sdk-latest-published"
+          mkdir -p "$RUNNER_TEMP/sdk-latest-combination"
+          node "$GITHUB_WORKSPACE/tools/sdk-smoke/sdk-latest-record.mjs" --suite light --install-dir "$dir" --out "$RUNNER_TEMP/sdk-latest-combination/sdk-latest-combination.json" --smoke storage --smoke client --run-id "$GITHUB_RUN_ID"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sdk-latest-combination-light
+          path: ${{ runner.temp }}/sdk-latest-combination/sdk-latest-combination.json
+          if-no-files-found: error
+          retention-days: 90
+
+  published-broad:
+    if: (github.event_name == 'schedule' && github.event.schedule == '0 3 * * 2') || (github.event_name == 'workflow_dispatch' && inputs.suite == 'broad')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+      - name: install published packages
+        run: |
+          set -eu
+          dir="$RUNNER_TEMP/sdk-latest-published"
+          mkdir -p "$dir"
+          cd "$dir"
+          npm init -y
+          npm install --no-audit --no-fund fireemu@latest firebase@latest firebase-admin@latest firebase-functions@latest
+      - name: prepare smokes and report versions
+        run: |
+          set -eu
+          dir="$RUNNER_TEMP/sdk-latest-published"
+          cp tools/sdk-smoke/storage.mjs tools/sdk-smoke/client.mjs tools/sdk-smoke/functions.mjs tools/sdk-smoke/auth.mjs tools/sdk-smoke/server-timestamp-transaction-query.mjs tools/sdk-smoke/fireemu.auth.json tools/sdk-smoke/fireemu.smoke.json "$dir/"
+          cp -R tools/sdk-smoke/functions-project "$dir/functions-project"
+          cd "$dir"
+          for package in fireemu firebase firebase-admin firebase-functions; do
+            version="$(node -p "require('./node_modules/$package/package.json').version")"
+            echo "- $package $version" >> "$GITHUB_STEP_SUMMARY"
+          done
+      - name: run published package smokes
+        env:
+          FIREEMU_FUNCTIONS_HOST: 127.0.0.1:5001
+        run: |
+          set -eu
+          cd "$RUNNER_TEMP/sdk-latest-published"
+          ./node_modules/.bin/fireemu exec --project demo-app --hub-port 0 -- node storage.mjs
+          ./node_modules/.bin/fireemu exec --project demo-app --hub-port 0 -- node client.mjs
+          ./node_modules/.bin/fireemu exec --config fireemu.smoke.json --project demo-app --functions functions-project --functions-port 5001 --hub-port 0 -- node functions.mjs
+          ./node_modules/.bin/fireemu exec --config fireemu.auth.json --project demo-app --only auth -- node auth.mjs
+          ./node_modules/.bin/fireemu exec --project demo-app --hub-port 0 -- node server-timestamp-transaction-query.mjs
+      - name: record passing combination
+        run: |
+          set -eu
+          dir="$RUNNER_TEMP/sdk-latest-published"
+          mkdir -p "$RUNNER_TEMP/sdk-latest-combination"
+          node "$GITHUB_WORKSPACE/tools/sdk-smoke/sdk-latest-record.mjs" --suite broad --install-dir "$dir" --out "$RUNNER_TEMP/sdk-latest-combination/sdk-latest-combination.json" --smoke storage --smoke client --smoke functions --smoke auth --smoke firestore-listen-transaction --run-id "$GITHUB_RUN_ID"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sdk-latest-combination-broad
+          path: ${{ runner.temp }}/sdk-latest-combination/sdk-latest-combination.json
+          if-no-files-found: error
+          retention-days: 90

@@ -343,7 +343,9 @@ describe("an answer nobody could read, and a release that cannot be put back", (
       "the live ruleset is never deleted",
     );
     assert.ok(
-      report.problems.some((p) => /is the live release's ruleset/.test(p)),
+      report.problems.includes(
+        `cleanup: ${live.split("/").pop()} is the live release's ruleset and is not deleted`,
+      ),
       JSON.stringify(report.problems),
     );
     assert.equal(report.closureReady, false);

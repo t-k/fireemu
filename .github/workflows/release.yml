@@ -193,7 +193,7 @@ jobs:
         if: matrix.platform.os == 'darwin'
         run: brew install gnu-tar
 
-      # FIREEMU_RELEASE_BUILD marks the binary as a release build, so `fireemu init` writes the
+      # The release-build marker set below makes the binary a release build, so `fireemu init` writes the
       # schema URL of this release's tag (any other build writes the `main` location: a build
       # from source between releases reports the last release's version but embeds a newer
       # schema). The tag is checked to equal the workspace version in the plan job.
@@ -215,7 +215,7 @@ jobs:
 
       - name: the binary writes the schema URL of its own release tag
         shell: bash
-        # A build that lost FIREEMU_RELEASE_BUILD would write the `main` location into every
+        # A build that lost the release-build marker would write the `main` location into every
         # generated configuration. Cross-compiled artifacts are checked on the host build.
         run: |
           if [ "${{ matrix.platform.cross }}" = "true" ]; then

@@ -112,6 +112,26 @@ class ReleaseMarkerContractTest < Minitest::Test
     refused(edit { |doc| steps = doc["jobs"]["build"]["steps"]; check = steps.delete(find.(doc)); steps.unshift(check) })
   end
 
+  def test_the_marker_name_may_not_appear_in_a_comment_or_any_other_raw_line
+    refused(RELEASE + "\n# #{M} marks the release build\n")
+    refused(RELEASE.sub("jobs:\n", "# #{M}\njobs:\n"))
+    refused(RELEASE.sub("name: build the daemon\n", "name: build the daemon # #{M}\n"))
+    refused(RELEASE.sub(/^(\s+)#{M}: "1"\n/, "\\0\\1#{M}: \"1\" # again\n"))
+    # A fourth pinned-shape line is refused by the placement check, not by a count.
+    refused(RELEASE.sub("jobs:\n", "#{M}: \"1\"\njobs:\n"))
+    refused(RELEASE.sub(/^(\s+)#{M}: "1"\n/, "\\1#{M}: \"10\"\n"))
+    refused(RELEASE.sub(/^(\s+)#{M}: "1"\n/, "\\1#{M}: \"1\" # why\n"))
+    # The three pinned lines alone are fine, and a comment that does not name the marker is too.
+    assert_empty errors(RELEASE + "\n# the release-build marker is set on three steps\n")
+  end
+
+  def test_an_env_must_be_a_mapping_not_an_expression
+    refused(edit { |doc| doc["jobs"]["test"]["steps"].first["env"] = "${{ fromJSON(vars.EXTRA_ENV) }}" })
+    refused(edit { |doc| doc["jobs"]["test"]["env"] = "${{ fromJSON(vars.EXTRA_ENV) }}" })
+    refused(edit { |doc| doc["env"] = "${{ fromJSON(vars.EXTRA_ENV) }}" })
+    refused(edit { |doc| doc["jobs"]["build"]["steps"].find { |s| s["name"] == "build the daemon" }["env"] = "${{ fromJSON('{}') }}" })
+  end
+
   def test_no_other_file_under_dot_github_may_name_the_marker
     refused(RELEASE, ".github/workflows/ci.yml" => "env:\n  #{M}: \"1\"\n")
     refused(RELEASE, ".github/workflows/other.yaml" => "# #{M}\n")

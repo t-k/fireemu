@@ -5,6 +5,13 @@
 # URL of the release tag. Only the binary that the release workflow publishes may carry it: every
 # other build embeds the schema of `main`, which differs from the tag's schema between releases.
 #
+# Threat model: this guards against a maintainer's mistake in our own workflow files, such as a
+# stray workflow-level `env`, a replaced check or a marker copied into a test build. It is not a
+# defence against a deliberately obfuscated workflow (a split variable name, a `fromJSON` object,
+# shell tricks); a wrong marker in an ordinary build only makes that test binary write a tag URL,
+# and it cannot reach the published binary, whose URL the release workflow checks and whose bytes
+# the reproducibility builds compare. The checks stay cheap and structural: no shell parsing.
+#
 # The contract is closed: the marker is allowed in exactly three places (the step-level `env` of the
 # daemon build and of the two reproducibility builds), those steps run pinned commands, and the step
 # that checks the written URL is pinned too. Anything else that names the marker, in any workflow
@@ -73,6 +80,17 @@ module ReleaseMarkerContract
     found
   end
 
+  # Every `env` of the workflow, the jobs and the steps.
+  def self.each_env(doc)
+    yield ["env"], doc["env"] if doc.key?("env")
+    doc.fetch("jobs", {}).each do |job, body|
+      yield ["jobs", job, "env"], body["env"] if body.key?("env")
+      Array(body["steps"]).each_with_index do |step, index|
+        yield ["jobs", job, "steps", index, "env"], step["env"] if step.is_a?(Hash) && step.key?("env")
+      end
+    end
+  end
+
   def self.each_run(doc)
     doc.fetch("jobs", {}).each do |job, body|
       Array(body["steps"]).each_with_index do |step, index|
@@ -122,6 +140,16 @@ module ReleaseMarkerContract
       errors << "the URL check must run exactly the pinned command" unless check.first["run"] == CHECK_RUN
       steps = doc.dig("jobs", CHECK_STEP[0], "steps")
       errors << "the URL check must come after the daemon build" unless steps.index(check.first) > steps.index(step(doc, BUILD_STEP) || check.first)
+    end
+
+    # Every occurrence in the raw text, comments included (YAML parsing discards them), is a pinned
+    # `env` line; how many there are is checked through the parsed placement below.
+    raw = release_source.each_line.select { |line| line.include?(MARKER) }
+    errors << "#{MARKER} may appear in #{RELEASE} only as a pinned env line, never in a comment or another line: #{raw.map(&:strip).uniq.inspect}" unless raw.all? { |line| line.strip.match?(/\A#{MARKER}: ["']1["']\z/) }
+
+    # An `env` that is an expression instead of a mapping could carry the marker unseen.
+    each_env(doc) do |path, value|
+      errors << "env at #{path.join('.')} must be a mapping, not an expression" unless value.is_a?(Hash)
     end
 
     seen = occurrences(doc)

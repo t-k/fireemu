@@ -26,8 +26,8 @@ test("HTTP responses, connections, errors and timeout", async (t) => {
     port: server.address().port,
   });
   t.after(() => transport.close());
-  const send = (path, connPolicy = "dedicated") =>
-    transport.send({ method: "GET", path }, { conn: "cell", connPolicy, timeoutMs: 100 });
+  const send = (path, connPolicy = "dedicated", timeoutMs = 5000) =>
+    transport.send({ method: "GET", path }, { conn: "cell", connPolicy, timeoutMs });
   const first = await send("/");
   assert.equal(first.status, 201);
   assert.equal(first.bodyText, '{"ok":true}');
@@ -40,7 +40,7 @@ test("HTTP responses, connections, errors and timeout", async (t) => {
   assert.equal(headers[0].authorization, "Bearer test-authorization-value");
   assert.equal(headers.at(-1).connection, "close");
   assert.equal((await send("/large")).failure, "body-too-large");
-  assert.equal((await send("/timeout")).failure, "timeout");
+  assert.equal((await send("/timeout", "dedicated", 100)).failure, "timeout");
   const reset = await send("/reset");
   assert.equal(reset.failure, "ECONNRESET");
   assert.ok(!JSON.stringify([first, reset]).includes("test-authorization-value"));

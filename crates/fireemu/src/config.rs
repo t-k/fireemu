@@ -2027,15 +2027,76 @@ pub const NO_EFFECT_KEYS: [&str; 34] = [
     "trace.canonical",
 ];
 
+/// The start-up note for one key of [`NO_EFFECT_KEYS`]; `config lint` prints the same text.
+fn no_effect_note(key: &str) -> String {
+    match key {
+        "firestore.rules" => "firestore.rules is accepted but never read; set the Firestore rules file with rules.source (or firestore.rules in firebase.json)".to_owned(),
+        _ => format!("{key} is accepted for forward compatibility and currently has no effect"),
+    }
+}
+
 /// The start-up note for each key in [`NO_EFFECT_KEYS`] a configuration sets: the key loads
 /// (existing configurations keep working) and the note says it changes nothing.
 #[must_use]
 pub fn no_effect_notes(input: &Value) -> Vec<String> {
     explicit_no_effect_keys(input)
         .into_iter()
-        .map(|key| match key {
-            "firestore.rules" => "firestore.rules is accepted but never read; set the Firestore rules file with rules.source (or firestore.rules in firebase.json)".to_owned(),
-            _ => format!("{key} is accepted for forward compatibility and currently has no effect"),
+        .map(no_effect_note)
+        .collect()
+}
+
+/// A setting the configuration sets that the daemon accepts and never reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IneffectiveSetting {
+    pub key: &'static str,
+    /// The start-up note for the key.
+    pub note: String,
+    /// Whether an allow-list entry covers the key.
+    pub allowed: bool,
+}
+
+/// Whether the allow-list entry `pattern` covers `key`: the key itself, or `prefix.*` for every
+/// key below `prefix`.
+#[must_use]
+pub fn allow_entry_covers(pattern: &str, key: &str) -> bool {
+    pattern == key
+        || pattern.strip_suffix(".*").is_some_and(|prefix| {
+            key.strip_prefix(prefix)
+                .is_some_and(|rest| rest.starts_with('.'))
+        })
+}
+
+/// Refuses an allow-list entry that covers no configuration key: a misspelt entry would
+/// otherwise allow nothing and look as if it allowed something.
+///
+/// # Errors
+/// Names the first entry that covers no schema leaf.
+pub fn check_allow_entries(entries: &[String]) -> Result<(), String> {
+    let leaves: Vec<String> = config_schema()
+        .into_iter()
+        .filter(|(_, schema)| schema.get("properties").is_none())
+        .map(|(key, _)| key)
+        .collect();
+    for entry in entries {
+        if !leaves.iter().any(|leaf| allow_entry_covers(entry, leaf)) {
+            return Err(format!(
+                "{entry:?} names no configuration key (write a key such as bind or firestore.textSearch.fidelity, or a prefix such as firestore.textSearch.*)"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The [`NO_EFFECT_KEYS`] a configuration sets, in list order, each marked with whether `allow`
+/// covers it. This is the list the start-up notes name.
+#[must_use]
+pub fn ineffective_settings(input: &Value, allow: &[String]) -> Vec<IneffectiveSetting> {
+    explicit_no_effect_keys(input)
+        .into_iter()
+        .map(|key| IneffectiveSetting {
+            key,
+            note: no_effect_note(key),
+            allowed: allow.iter().any(|entry| allow_entry_covers(entry, key)),
         })
         .collect()
 }
@@ -6695,6 +6756,113 @@ mod tests {
                 "trace.enabled is accepted for forward compatibility and currently has no effect",
             ]
         );
+    }
+
+    /// `config lint`, the start-up notes and `config show` read one list: a document that sets
+    /// every listed key is flagged by all three, with the same text.
+    #[test]
+    fn lint_the_startup_notes_and_config_show_share_one_list() {
+        let mut input = json!({"schemaVersion": 1});
+        for key in NO_EFFECT_KEYS {
+            set_path(&mut input, key, json!(true));
+        }
+        let settings = ineffective_settings(&input, &[]);
+        let linted: Vec<&str> = settings.iter().map(|setting| setting.key).collect();
+        assert_eq!(linted, NO_EFFECT_KEYS);
+        let notes = no_effect_notes(&input);
+        assert_eq!(
+            notes,
+            settings.iter().map(|s| s.note.clone()).collect::<Vec<_>>()
+        );
+        let shown: Vec<String> = RuntimeConfig::default()
+            .config_show(&input)
+            .into_iter()
+            .filter(|row| row["source"] == NO_EFFECT_SOURCE)
+            .map(|row| row["key"].as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(shown, NO_EFFECT_KEYS);
+        for setting in &settings {
+            assert!(setting.note.starts_with(setting.key), "{}", setting.note);
+        }
+    }
+
+    #[test]
+    fn allow_entries_cover_a_key_or_the_keys_below_a_prefix_and_nothing_else() {
+        for (entry, key, covers) in [
+            ("bind", "bind", true),
+            ("bind", "bind2", false),
+            ("bin", "bind", false),
+            ("trace.*", "trace.enabled", true),
+            ("trace.*", "trace", false),
+            ("trace.*", "tracer.enabled", false),
+            (
+                "firestore.textSearch.*",
+                "firestore.textSearch.warnings.warningsAsErrors",
+                true,
+            ),
+            ("firestore.*", "firestore.rules", true),
+            ("firestore.textSearch.*", "firestore.rules", false),
+            ("*", "bind", false),
+            (".*", "bind", false),
+            ("", "bind", false),
+        ] {
+            assert_eq!(allow_entry_covers(entry, key), covers, "{entry} {key}");
+        }
+    }
+
+    #[test]
+    fn allow_entries_must_name_a_schema_leaf_or_a_prefix_of_some() {
+        let ok = [
+            "bind",
+            "trace.enabled",
+            "trace.*",
+            "firestore.textSearch.*",
+            "firestore.*",
+        ];
+        check_allow_entries(&ok.map(str::to_owned)).unwrap();
+        check_allow_entries(&[]).unwrap();
+        for bad in [
+            "bnd",
+            "trace",
+            "nothing.*",
+            "",
+            "*",
+            "trace.",
+            "trace.enabled.*",
+        ] {
+            let error = check_allow_entries(&["bind".to_owned(), bad.to_owned()]).unwrap_err();
+            assert!(error.contains(&format!("{bad:?}")), "{bad:?}: {error}");
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn lint_flags_exactly_the_startup_note_keys_and_allows_exactly_the_covered_ones(
+            mask in proptest::collection::vec(proptest::bool::ANY, NO_EFFECT_KEYS.len()),
+            allowed in proptest::collection::vec(proptest::bool::ANY, NO_EFFECT_KEYS.len()),
+        ) {
+            let mut input = json!({"schemaVersion": 1});
+            for (key, on) in NO_EFFECT_KEYS.iter().zip(&mask) {
+                if *on {
+                    set_path(&mut input, key, json!(true));
+                }
+            }
+            let allow: Vec<String> = NO_EFFECT_KEYS
+                .iter()
+                .zip(&allowed)
+                .filter(|(_, on)| **on)
+                .map(|(key, _)| (*key).to_owned())
+                .collect();
+            let settings = ineffective_settings(&input, &allow);
+            proptest::prop_assert_eq!(
+                settings.iter().map(|s| s.note.clone()).collect::<Vec<_>>(),
+                no_effect_notes(&input)
+            );
+            for setting in &settings {
+                proptest::prop_assert_eq!(setting.allowed, allow.iter().any(|a| a == setting.key));
+            }
+        }
+
     }
 
     proptest::proptest! {

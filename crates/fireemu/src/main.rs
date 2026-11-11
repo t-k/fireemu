@@ -320,7 +320,7 @@ fn main() -> ExitCode {
             }
             Err(e) => fail_for(command, &e),
         },
-        Some("config") => match config_show_command(&args[1..]) {
+        Some("config") => match config_command(&args[1..]) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => fail_for(command, &e),
         },
@@ -396,15 +396,48 @@ fn test_world_config_command(args: &[String]) -> Result<(), CliError> {
     Ok(())
 }
 
+const CONFIG_USAGE: &str = "usage: fireemu config show [--config <path>] [--firebase-json <path>] [--json]\n       fireemu config lint [--config <path>] [--firebase-json <path>] [--json] [--deny-ineffective] [--allow <key>]... [--allow-file <path>]";
+
+/// What `config lint` reads from the command line besides the shared file flags.
+#[derive(Default)]
+struct LintOptions {
+    deny: bool,
+    allow: Vec<String>,
+}
+
+/// Reads an allow-list file: one key or `prefix.*` per line; blank lines and `#` comments
+/// (whole-line or trailing) are ignored.
+fn read_allow_file(path: &str) -> Result<Vec<String>, CliError> {
+    let text = std::fs::read_to_string(path).map_err(|e| {
+        CliError::usage(format!(
+            "--allow-file {}: cannot read: {e}",
+            diagnostic_text(path)
+        ))
+    })?;
+    Ok(text
+        .lines()
+        .map(|line| line.split('#').next().unwrap_or("").trim())
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect())
+}
+
 #[allow(clippy::too_many_lines)]
-fn config_show_command(args: &[String]) -> Result<(), CliError> {
-    if args.first().map(String::as_str) != Some("show") {
-        return Err(CliError::usage(
-            "usage: fireemu config show [--config <path>] [--firebase-json <path>] [--json]",
-        ));
-    }
+fn config_command(args: &[String]) -> Result<(), CliError> {
+    let lint = match args.first().map(String::as_str) {
+        Some("show") => false,
+        Some("lint") => true,
+        Some(other) => {
+            return Err(CliError::usage(format!(
+                "unknown config command {}; {CONFIG_USAGE}",
+                diagnostic_text(other)
+            )))
+        }
+        None => return Err(CliError::usage(CONFIG_USAGE)),
+    };
     let mut flags = Vec::new();
     let mut json = false;
+    let mut lint_options = LintOptions::default();
     let mut index = 1;
     while index < args.len() {
         match args[index].as_str() {
@@ -419,6 +452,24 @@ fn config_show_command(args: &[String]) -> Result<(), CliError> {
                 flags.extend([args[index].clone(), value.clone()]);
                 index += 2;
             }
+            "--deny-ineffective" if lint => {
+                lint_options.deny = true;
+                index += 1;
+            }
+            "--allow" if lint => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| CliError::usage("--allow needs a value"))?;
+                lint_options.allow.push(value.clone());
+                index += 2;
+            }
+            "--allow-file" if lint => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| CliError::usage("--allow-file needs a value"))?;
+                lint_options.allow.extend(read_allow_file(value)?);
+                index += 2;
+            }
             other => {
                 return Err(CliError::usage(format!(
                     "unknown argument {}",
@@ -426,6 +477,9 @@ fn config_show_command(args: &[String]) -> Result<(), CliError> {
                 )))
             }
         }
+    }
+    if lint {
+        return config_lint(&flags, json, &lint_options);
     }
     let mut raw = parse_raw_options(&flags, OptionContext::Start)?;
     let origin = discover_project_config(&mut raw)?;
@@ -538,6 +592,78 @@ fn config_show_command(args: &[String]) -> Result<(), CliError> {
                 row["source"].as_str().expect("source")
             );
         }
+    }
+    Ok(())
+}
+
+/// `fireemu config lint`: loads the configuration as `up` does (so a configuration the daemon
+/// refuses fails here with the same message) and reports the settings it accepts and never
+/// reads. With `--deny-ineffective` a setting the allow list does not cover fails the command.
+fn config_lint(flags: &[String], json: bool, options: &LintOptions) -> Result<(), CliError> {
+    config::check_allow_entries(&options.allow)
+        .map_err(|e| CliError::usage(format!("--allow: {e}")))?;
+    let mut raw = parse_raw_options(flags, OptionContext::Start)?;
+    // The report below carries the notes; the loader would print each one a second time.
+    raw.verbosity = Verbosity::Quiet;
+    let origin = discover_project_config(&mut raw)?;
+    let (_, _, sources) =
+        load_project_config(&raw, &Selection::default()).map_err(note_discovered(&origin))?;
+    let (path, settings) = match &sources.canonical {
+        Some(path) => {
+            let document = config_document(&raw, path)
+                .map_err(note_discovered(&origin))?
+                .0;
+            (
+                Some(diagnostic_path(path).to_string()),
+                config::ineffective_settings(&document, &options.allow),
+            )
+        }
+        None => (None, Vec::new()),
+    };
+    let denied: Vec<&str> = settings
+        .iter()
+        .filter(|setting| !setting.allowed)
+        .map(|setting| setting.key)
+        .collect();
+    if json {
+        let report = serde_json::json!({
+            "config": path,
+            "ineffective": settings
+                .iter()
+                .map(|s| serde_json::json!({"key": s.key, "note": s.note, "allowed": s.allowed}))
+                .collect::<Vec<_>>(),
+            "denied": denied,
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).expect("lint report")
+        );
+    } else if let Some(path) = &path {
+        if settings.is_empty() {
+            println!("{path}: no ineffective settings");
+        }
+        for setting in &settings {
+            let label = if setting.allowed {
+                "allowed"
+            } else {
+                "ineffective"
+            };
+            println!("{label}: {} ({path})", setting.note);
+        }
+    } else {
+        println!("no fireemu.toml or fireemu.json to lint; nothing is checked");
+    }
+    if options.deny && !denied.is_empty() {
+        return Err(CliError::refused(format!(
+            "{}: {} {} accepted but {} no effect ({}); remove {}, or allow {} with --allow <key> or --allow-file <path>",
+            path.as_deref().unwrap_or("configuration"),
+            denied.len(),
+            if denied.len() == 1 { "setting is" } else { "settings are" },
+            if denied.len() == 1 { "has" } else { "have" },
+            denied.join(", "),
+            if denied.len() == 1 { "it" } else { "them" },
+            if denied.len() == 1 { "it" } else { "them" },
+        )));
     }
     Ok(())
 }

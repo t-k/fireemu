@@ -319,6 +319,27 @@ fn bucket_cors_for(
     state.rules.bucket_cors(&bucket)
 }
 
+/// `headers` with their CORS headers replaced by `matched`, the headers the bucket's rules gave
+/// the request (none when no rule matched). A `Vary: Origin` the answer already carries is not
+/// repeated.
+fn with_bucket_cors(
+    mut headers: Vec<(String, String)>,
+    matched: Option<crate::storage_cors::CorsHeaders>,
+) -> Vec<(String, String)> {
+    headers.retain(|(name, _)| !name.to_ascii_lowercase().starts_with("access-control-"));
+    for (name, value) in matched.unwrap_or_default() {
+        let repeated_vary = name == "vary"
+            && headers.iter().any(|(existing, listed)| {
+                existing.eq_ignore_ascii_case("vary")
+                    && listed.split(',').any(|part| part.trim() == "Origin")
+            });
+        if !repeated_vary {
+            headers.push((name, value));
+        }
+    }
+    headers
+}
+
 /// The answer to a preflight on a bucket `storage.cors` configures: the `200` with no body that
 /// Cloud Storage's XML API gave a preflight on a bucket without CORS (recorded), plus the CORS
 /// headers of the first rule that matches the request, if any.
@@ -677,21 +698,10 @@ async fn respond(
     let body = body_of(&response);
     let mut response_headers = response.headers;
     if let Some(configured) = &bucket_cors {
-        // The bucket's rules replace every CORS header the permissive answer carries.
-        response_headers.retain(|(k, _)| !k.to_ascii_lowercase().starts_with("access-control-"));
         let matched = origin
             .as_deref()
             .and_then(|origin| configured.actual(origin, &request_method));
-        for (k, v) in matched.unwrap_or_default() {
-            let repeated_vary = k == "vary"
-                && response_headers.iter().any(|(name, value)| {
-                    name.eq_ignore_ascii_case("vary")
-                        && value.split(',').any(|part| part.trim() == "Origin")
-                });
-            if !repeated_vary {
-                response_headers.push((k, v));
-            }
-        }
+        response_headers = with_bucket_cors(response_headers, matched);
     }
     for (k, v) in response_headers {
         builder = builder.header(k, v);
@@ -755,6 +765,95 @@ pub fn serve_storage_with_budget(
                 let _ = http1::Builder::new().serve_connection(io, svc).await;
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod bucket_cors_merge_tests {
+    use super::*;
+
+    fn pair(name: &str, value: &str) -> (String, String) {
+        (name.to_owned(), value.to_owned())
+    }
+
+    fn matched() -> crate::storage_cors::CorsHeaders {
+        vec![
+            pair("access-control-allow-origin", "http://localhost:3000"),
+            pair("vary", "Origin"),
+            pair("access-control-expose-headers", "Content-Type"),
+        ]
+    }
+
+    #[test]
+    fn the_rules_headers_replace_every_cors_header_and_keep_the_others() {
+        let merged = with_bucket_cors(
+            vec![
+                pair("content-type", "text/plain"),
+                pair("Access-Control-Allow-Origin", "*"),
+                pair("access-control-expose-headers", "x"),
+                pair("etag", "\"a\""),
+            ],
+            Some(matched()),
+        );
+        assert_eq!(
+            merged,
+            vec![
+                pair("content-type", "text/plain"),
+                pair("etag", "\"a\""),
+                pair("access-control-allow-origin", "http://localhost:3000"),
+                pair("vary", "Origin"),
+                pair("access-control-expose-headers", "Content-Type"),
+            ]
+        );
+    }
+
+    #[test]
+    fn no_matching_rule_leaves_no_cors_header_at_all() {
+        let merged = with_bucket_cors(
+            vec![pair("access-control-allow-origin", "*"), pair("etag", "a")],
+            None,
+        );
+        assert_eq!(merged, vec![pair("etag", "a")]);
+    }
+
+    #[test]
+    fn vary_origin_is_not_repeated_but_another_vary_does_not_hide_it() {
+        let count = |headers: &[(String, String)]| {
+            headers
+                .iter()
+                .filter(|(name, value)| name == "vary" && value == "Origin")
+                .count()
+        };
+        // Already present, as a separate line or inside a list, in any case of the name.
+        for existing in [
+            pair("vary", "Origin"),
+            pair("Vary", "Accept, Origin"),
+            pair("VARY", "Origin,X-Origin"),
+        ] {
+            let merged = with_bucket_cors(vec![existing.clone()], Some(matched()));
+            let varies = merged
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case("vary"))
+                .count();
+            assert_eq!(varies, 1, "{existing:?} is the only Vary line");
+            assert_eq!(
+                merged.len(),
+                3,
+                "{existing:?}: the allow-origin and expose headers follow"
+            );
+            assert!(merged
+                .iter()
+                .any(|(n, _)| n == "access-control-allow-origin"));
+        }
+        // A Vary without Origin does not count.
+        let merged = with_bucket_cors(vec![pair("vary", "X-Origin")], Some(matched()));
+        assert_eq!(count(&merged), 1);
+        // Another header that happens to mention Origin is not a Vary.
+        let merged = with_bucket_cors(vec![pair("x-note", "Origin")], Some(matched()));
+        assert_eq!(count(&merged), 1);
+        assert!(merged
+            .iter()
+            .any(|(n, v)| n == "access-control-allow-origin" && v == "http://localhost:3000"));
     }
 }
 

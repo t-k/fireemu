@@ -251,12 +251,11 @@ fn string_list(
         .collect()
 }
 
-/// An origin is `*` or a non-empty string without control characters, spaces or a path.
+/// An origin is `*` or a non-empty string of printable ASCII without spaces or backslashes (a
+/// carriage return or line feed is not printable, so a header cannot be split).
 fn valid_origin(origin: &str) -> bool {
     origin == "*"
-        || (!origin.is_empty()
-            && origin.bytes().all(|b| b.is_ascii_graphic() && b != b'\\')
-            && !origin.contains(['\r', '\n']))
+        || (!origin.is_empty() && origin.bytes().all(|b| b.is_ascii_graphic() && b != b'\\'))
 }
 
 /// A method is `*` or an upper-case HTTP method token.
@@ -430,6 +429,37 @@ mod tests {
         }
         let err = BucketCors::from_json(&json!([{}, {"origins": []}])).unwrap_err();
         assert!(err.0.starts_with("[1]: has an unknown key"), "{err}");
+    }
+
+    #[test]
+    fn the_size_limits_are_inclusive() {
+        let rules = vec![json!({}); MAX_RULES];
+        assert_eq!(
+            BucketCors::from_json(&json!(rules)).unwrap().rules.len(),
+            MAX_RULES
+        );
+        let entries = vec!["*"; MAX_ENTRIES];
+        assert!(BucketCors::from_json(&json!([{"origin": entries}])).is_ok());
+        let longest = "o".repeat(MAX_ENTRY_BYTES);
+        assert!(BucketCors::from_json(&json!([{"origin": [longest]}])).is_ok());
+    }
+
+    #[test]
+    fn a_configured_bucket_is_not_empty_and_errors_print_their_message() {
+        assert!(!cors(&json!([{"origin": ["*"], "method": ["*"]}])).is_empty());
+        assert!(!cors(&json!([{}])).is_empty());
+        let error = BucketCors::from_json(&json!({})).unwrap_err();
+        assert_eq!(error.to_string(), "must be an array of CORS rules");
+    }
+
+    #[test]
+    fn origins_may_not_carry_spaces_backslashes_or_line_breaks() {
+        for bad in ["a b", "a\\b", "a\rb", "a\nb", "a\tb", "", "\u{e9}"] {
+            assert!(!valid_origin(bad), "{bad:?}");
+        }
+        for good in ["*", "http://localhost:3000", "https://[::1]:5173"] {
+            assert!(valid_origin(good), "{good:?}");
+        }
     }
 
     proptest! {

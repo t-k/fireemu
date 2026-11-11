@@ -506,17 +506,45 @@ mod tests {
         extra: &[(&str, &str)],
         signed_headers: &[(&str, &str)],
     ) -> String {
+        sign_with(
+            key,
+            email,
+            method,
+            path,
+            extra,
+            signed_headers,
+            ALGORITHM,
+            true,
+        )
+    }
+
+    /// Like [`sign`], with the algorithm the URL names and whether it names a date at all. The
+    /// string to sign is always the one the server calculates, so a URL signed this way verifies
+    /// only if the server forgets to check the algorithm or the date.
+    #[allow(clippy::too_many_arguments)]
+    fn sign_with(
+        key: &RsaPrivateKey,
+        email: &str,
+        method: &str,
+        path: &str,
+        extra: &[(&str, &str)],
+        signed_headers: &[(&str, &str)],
+        algorithm: &str,
+        with_date: bool,
+    ) -> String {
         let names: Vec<&str> = signed_headers.iter().map(|(n, _)| *n).collect();
         let mut params: Vec<(String, String)> = vec![
-            ("X-Goog-Algorithm".into(), ALGORITHM.into()),
+            ("X-Goog-Algorithm".into(), algorithm.into()),
             (
                 "X-Goog-Credential".into(),
                 format!("{email}/20261103/auto/storage/goog4_request"),
             ),
-            ("X-Goog-Date".into(), "20261103T120000Z".into()),
             ("X-Goog-Expires".into(), "300".into()),
             ("X-Goog-SignedHeaders".into(), names.join(";")),
         ];
+        if with_date {
+            params.push(("X-Goog-Date".into(), "20261103T120000Z".into()));
+        }
         params.extend(
             extra
                 .iter()
@@ -536,8 +564,9 @@ mod tests {
         };
         let pairs = parse_query(&query).unwrap();
         let canonical = canonical_request(&request, &pairs);
+        let date = if with_date { "20261103T120000Z" } else { "" };
         let to_sign = format!(
-            "{ALGORITHM}\n20261103T120000Z\n20261103/auto/storage/goog4_request\n{}",
+            "{ALGORITHM}\n{date}\n20261103/auto/storage/goog4_request\n{}",
             hex(&Sha256::digest(canonical.as_bytes()))
         );
         let signature = SigningKey::<Sha256>::new(key.clone()).sign(to_sign.as_bytes());
@@ -791,6 +820,201 @@ mod tests {
         ] {
             assert_eq!(host_without_port(host), expected, "{host:?}");
         }
+    }
+
+    #[test]
+    fn a_url_that_names_another_algorithm_or_no_date_is_refused_even_if_signed() {
+        let key = test_key();
+        let keys = keys_for(&key);
+        let signed = [("host", "h")];
+        let ok = headers(&signed);
+        let verdict = |query: &str| {
+            verify_v4(
+                &keys,
+                &SignedRequest {
+                    method: "GET",
+                    path: "/b/o",
+                    query,
+                    headers: &ok,
+                },
+            )
+        };
+        let good = sign_with(&key, "sa@p", "GET", "/b/o", &[], &signed, ALGORITHM, true);
+        assert_eq!(verdict(&good), Verdict::Valid);
+        let other = sign_with(
+            &key,
+            "sa@p",
+            "GET",
+            "/b/o",
+            &[],
+            &signed,
+            "AWS4-HMAC-SHA256",
+            true,
+        );
+        assert!(matches!(verdict(&other), Verdict::Mismatch { .. }));
+        let undated = sign_with(&key, "sa@p", "GET", "/b/o", &[], &signed, ALGORITHM, false);
+        assert!(matches!(verdict(&undated), Verdict::Mismatch { .. }));
+        let neither = sign_with(
+            &key,
+            "sa@p",
+            "GET",
+            "/b/o",
+            &[],
+            &signed,
+            "AWS4-HMAC-SHA256",
+            false,
+        );
+        assert!(matches!(verdict(&neither), Verdict::Mismatch { .. }));
+    }
+
+    #[test]
+    fn base64url_decodes_every_character_class() {
+        // `-` is 62 and `_` is 63 (not `+` and `/`), padding is optional, anything else fails.
+        assert_eq!(base64url_decode("-_-_").unwrap(), [0xfb, 0xff, 0xbf]);
+        assert_eq!(base64url_decode("-_8").unwrap(), [0xfb, 0xff]);
+        assert_eq!(base64url_decode("aGk").unwrap(), b"hi");
+        assert_eq!(base64url_decode("aGk=").unwrap(), b"hi");
+        assert_eq!(base64url_decode("AQAB").unwrap(), [1, 0, 1]);
+        assert_eq!(
+            base64url_decode("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
+                .unwrap(),
+            [
+                0, 16, 131, 16, 81, 135, 32, 146, 139, 48, 211, 143, 65, 20, 147, 81, 85, 151, 97,
+                150, 155, 113, 215, 159, 130, 24, 163, 146, 89, 167, 162, 154, 171, 178, 219, 175,
+                195, 28, 179, 211, 93, 183, 227, 158, 187, 243, 223, 191
+            ]
+        );
+        for bad in ["+/", "a b", "a.b", "\u{e9}a"] {
+            assert!(base64url_decode(bad).is_none(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_jwk_alone_registers_the_key_it_names() {
+        let key = test_key();
+        let n = rsa::traits::PublicKeyParts::n(&key.to_public_key()).to_bytes_be();
+        let encoded = {
+            const ALPHABET: &[u8; 64] =
+                b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+            let mut out = String::new();
+            for chunk in n.chunks(3) {
+                let v = chunk
+                    .iter()
+                    .enumerate()
+                    .fold(0_u32, |a, (i, b)| a | (u32::from(*b) << (16 - 8 * i)));
+                for i in 0..=chunk.len() {
+                    out.push(char::from(ALPHABET[((v >> (18 - 6 * i)) & 63) as usize]));
+                }
+            }
+            out
+        };
+        assert!(
+            encoded.contains('-') || encoded.contains('_'),
+            "the modulus exercises both URL-safe characters"
+        );
+        let mut keys = SignerKeys::default();
+        keys.add_file_contents(
+            format!("{{\"kty\":\"RSA\",\"n\":\"{encoded}\",\"e\":\"AQAB\"}}").as_bytes(),
+        )
+        .unwrap();
+        let signed = [("host", "h")];
+        let query = sign(&key, "sa@p", "GET", "/b/o", &[], &signed);
+        let ok = headers(&signed);
+        let request = SignedRequest {
+            method: "GET",
+            path: "/b/o",
+            query: &query,
+            headers: &ok,
+        };
+        assert_eq!(verify_v4(&keys, &request), Verdict::Valid);
+    }
+
+    #[test]
+    fn a_service_account_email_that_cannot_be_one_ties_the_key_to_nothing() {
+        let key = test_key();
+        let pem = serde_json::to_string(&*key.to_pkcs8_pem(LineEnding::LF).unwrap()).unwrap();
+        let signed = [("host", "h")];
+        let ok = headers(&signed);
+        let long = "a".repeat(257);
+        for email in ["", "a/b@x", "a\rb@x", "a\nb@x", long.as_str()] {
+            let mut keys = SignerKeys::default();
+            let account = format!(
+                "{{\"client_email\":{},\"private_key\":{pem}}}",
+                serde_json::to_string(email).unwrap()
+            );
+            keys.add_file_contents(account.as_bytes()).unwrap();
+            let query = sign(&key, "other@p", "GET", "/b/o", &[], &signed);
+            let request = SignedRequest {
+                method: "GET",
+                path: "/b/o",
+                query: &query,
+                headers: &ok,
+            };
+            assert_eq!(
+                verify_v4(&keys, &request),
+                Verdict::Valid,
+                "{email:?} names no account"
+            );
+        }
+        // The longest acceptable address still ties the key.
+        let edge = format!("{}@p", "a".repeat(254));
+        let mut keys = SignerKeys::default();
+        let account = format!("{{\"client_email\":\"{edge}\",\"private_key\":{pem}}}");
+        keys.add_file_contents(account.as_bytes()).unwrap();
+        let other = sign(&key, "other@p", "GET", "/b/o", &[], &signed);
+        let request = SignedRequest {
+            method: "GET",
+            path: "/b/o",
+            query: &other,
+            headers: &ok,
+        };
+        assert!(matches!(
+            verify_v4(&keys, &request),
+            Verdict::Mismatch { .. }
+        ));
+    }
+
+    #[test]
+    fn the_file_size_and_key_size_limits_are_exact() {
+        use rand_core::SeedableRng as _;
+        let key = test_key();
+        let pem = key
+            .to_public_key()
+            .to_public_key_pem(LineEnding::LF)
+            .unwrap();
+        // Exactly the limit is read; one more byte is refused for its size.
+        let mut at_limit = pem.clone().into_bytes();
+        at_limit.resize(MAX_KEY_FILE_BYTES, b' ');
+        assert!(SignerKeys::default().add_file_contents(&at_limit).is_ok());
+        let mut over = pem.clone().into_bytes();
+        over.resize(MAX_KEY_FILE_BYTES + 1, b' ');
+        let error = SignerKeys::default().add_file_contents(&over).unwrap_err();
+        assert_eq!(error.to_string(), "a signing key file is too large");
+        // The list holds MAX_KEYS keys, no more.
+        let mut keys = SignerKeys::default();
+        for _ in 0..MAX_KEYS {
+            keys.add_file_contents(pem.as_bytes()).unwrap();
+        }
+        assert_eq!(keys.len(), MAX_KEYS);
+        let error = keys.add_file_contents(pem.as_bytes()).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!("more than {MAX_KEYS} signing keys")
+        );
+        // 2048 bits is accepted, shorter is refused.
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(0x10_24);
+        let small = RsaPrivateKey::new(&mut rng, 1024).unwrap();
+        let small_pem = small
+            .to_public_key()
+            .to_public_key_pem(LineEnding::LF)
+            .unwrap();
+        let error = SignerKeys::default()
+            .add_file_contents(small_pem.as_bytes())
+            .unwrap_err();
+        assert_eq!(error.to_string(), "a signing key is shorter than 2048 bits");
+        assert!(SignerKeys::default()
+            .add_file_contents(pem.as_bytes())
+            .is_ok());
     }
 
     #[test]

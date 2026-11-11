@@ -1363,3 +1363,128 @@ fn hosting_strict_gzip_follows_the_content_type_sent() {
     assert_eq!(encoded("/archive.zip"), None);
     assert_eq!(encoded("/empty.txt"), None);
 }
+
+/// A file whose configured `headers` rule sets `Content-Encoding` (a precompressed build, such as
+/// a Unity `*.br` file) is already encoded: strict sends its bytes as they are, with the header
+/// the rule gave, whatever the case of the name or the value. A rule that matches another path or
+/// sets another header changes nothing.
+#[test]
+fn hosting_strict_a_configured_content_encoding_is_never_recompressed() {
+    let big = BIG.repeat(100);
+    let rules = json(
+        r#"{"headers": [
+            {"source": "**/*.br", "headers": [{"key": "Content-Encoding", "value": "br"}]},
+            {"source": "/app.js", "headers": [{"key": "content-ENCODING", "value": "gzip"}]},
+            {"source": "/plain.txt", "headers": [{"key": "Content-Encoding", "value": "identity"}]},
+            {"source": "/shout.txt", "headers": [{"key": "CONTENT-ENCODING", "value": "BR"}]},
+            {"source": "/other/**", "headers": [{"key": "Content-Encoding", "value": "br"}]},
+            {"source": "**", "headers": [{"key": "X-Fixture", "value": "all"}]}
+        ],
+        "rewrites": [{"source": "/rewritten", "destination": "/free.txt"}]}"#,
+    );
+    for profile in ["strict", "exact"] {
+        let hosting = site(
+            "gzip-configured",
+            profile,
+            &rules,
+            &[
+                ("Build/game.wasm.br", &big),
+                ("app.js", &big),
+                ("plain.txt", &big),
+                ("shout.txt", &big),
+                ("free.txt", &big),
+                ("other/x.txt", &big),
+                ("404.html", &big),
+                ("index.html", "x"),
+            ],
+        );
+        let accept = [("Accept-Encoding", "gzip, deflate, br")];
+        for (target, encoding) in [
+            ("/Build/game.wasm.br", "br"),
+            ("/app.js", "gzip"),
+            ("/plain.txt", "identity"),
+            ("/shout.txt", "BR"),
+            ("/other/x.txt", "br"),
+        ] {
+            let reply = send(&hosting, "GET", target, &accept);
+            assert_eq!(reply.status, 200, "{profile} {target}");
+            assert_eq!(reply.header("content-encoding"), Some(encoding), "{target}");
+            assert_eq!(reply.header("content-length"), Some("4500"), "{target}");
+            assert_eq!(reply.body, big, "{profile} {target} is sent as it is");
+            let head = send(&hosting, "HEAD", target, &accept);
+            assert_eq!(head.header("content-encoding"), Some(encoding), "{target}");
+            assert_eq!(head.header("content-length"), Some("4500"), "HEAD {target}");
+        }
+        // near misses: a rule for another path, or for another header, leaves gzip alone
+        for target in ["/free.txt", "/other"] {
+            let reply = send(&hosting, "GET", target, &accept);
+            if target == "/free.txt" {
+                assert_eq!(reply.header("content-encoding"), Some("gzip"), "{target}");
+                assert_eq!(reply.header("x-fixture"), Some("all"));
+                assert_eq!(gunzip(&reply.bytes), big.as_bytes());
+            }
+        }
+        // the rule follows the request path, not the file a rewrite or the 404 page serves
+        let rewritten = send(&hosting, "GET", "/rewritten", &accept);
+        assert_eq!(rewritten.header("content-encoding"), Some("gzip"));
+        assert_eq!(gunzip(&rewritten.bytes), big.as_bytes());
+        let missing = send(&hosting, "GET", "/missing", &accept);
+        assert_eq!(missing.status, 404);
+        assert_eq!(missing.header("content-encoding"), Some("gzip"));
+    }
+    // a rule on the request path of a rewrite or on `/404.html` also stops the packing
+    let by_request = json(
+        r#"{"headers": [
+            {"source": "/rewritten", "headers": [{"key": "Content-Encoding", "value": "br"}]},
+            {"source": "/404.html", "headers": [{"key": "Content-Encoding", "value": "gzip"}]}
+        ],
+        "rewrites": [{"source": "/rewritten", "destination": "/free.txt"}]}"#,
+    );
+    let hosting = site(
+        "gzip-configured-paths",
+        "exact",
+        &by_request,
+        &[("free.txt", &big), ("404.html", &big), ("index.html", "x")],
+    );
+    let accept = [("Accept-Encoding", "gzip")];
+    let rewritten = send(&hosting, "GET", "/rewritten", &accept);
+    assert_eq!(rewritten.header("content-encoding"), Some("br"));
+    assert_eq!(rewritten.body, big);
+    let missing = send(&hosting, "GET", "/missing", &accept);
+    assert_eq!(missing.status, 404);
+    assert_eq!(missing.header("content-encoding"), Some("gzip"));
+    assert_eq!(
+        missing.body, big,
+        "the 404 page is not packed a second time"
+    );
+    assert_eq!(missing.header("content-length"), Some("4500"));
+}
+
+/// Every `Accept-Encoding` line of a request is one list; the first gzip member decides.
+#[test]
+fn hosting_strict_gzip_reads_every_accept_encoding_line() {
+    let big = BIG.repeat(100);
+    let hosting = site(
+        "gzip-lines",
+        "exact",
+        &json("{}"),
+        &[("big.txt", &big), ("index.html", "x")],
+    );
+    for (lines, gzipped) in [
+        (vec!["br", "gzip"], true),
+        (vec!["deflate", "gzip;q=0.5"], true),
+        (vec!["gzip;q=0", "gzip"], false),
+        (vec!["br", "deflate"], false),
+    ] {
+        let headers: Vec<(&str, &str)> = lines
+            .iter()
+            .map(|line| ("Accept-Encoding", *line))
+            .collect();
+        let reply = send(&hosting, "GET", "/big.txt", &headers);
+        assert_eq!(
+            reply.header("content-encoding").is_some(),
+            gzipped,
+            "{lines:?}"
+        );
+    }
+}

@@ -19,6 +19,17 @@ pub(super) fn within_limit(length: u64) -> bool {
     length > 0 && length <= MAX_GZIP_INPUT
 }
 
+/// [`accepts_gzip`] over every `Accept-Encoding` line of a request: several lines are one
+/// comma-separated list (RFC 9110), so `br` on one line and `gzip` on the next accepts gzip.
+pub(super) fn accepts_gzip_in(headers: &hyper::HeaderMap) -> bool {
+    let lines: Vec<&str> = headers
+        .get_all(hyper::header::ACCEPT_ENCODING)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .collect();
+    !lines.is_empty() && accepts_gzip(Some(&lines.join(", ")))
+}
+
 /// Whether `Accept-Encoding` accepts gzip: the first `gzip` member has a quality above zero.
 /// `x-gzip`, `*` and every other coding do not count (production recorded only `gzip` and `br`);
 /// a quality that is not a number from 0 to 1 refuses the member.
@@ -135,6 +146,34 @@ mod tests {
             assert!(!accepts_gzip(Some(form)), "{form:?} does not accept gzip");
         }
         assert!(!accepts_gzip(None));
+    }
+
+    #[test]
+    fn every_accept_encoding_line_is_one_list() {
+        let request = |lines: &[&[u8]]| {
+            let mut headers = hyper::HeaderMap::new();
+            for line in lines {
+                headers.append(
+                    hyper::header::ACCEPT_ENCODING,
+                    hyper::header::HeaderValue::from_bytes(line).unwrap(),
+                );
+            }
+            headers
+        };
+        assert!(!accepts_gzip_in(&request(&[])));
+        assert!(accepts_gzip_in(&request(&[b"gzip"])));
+        assert!(accepts_gzip_in(&request(&[b"br", b"gzip"])));
+        assert!(accepts_gzip_in(&request(&[
+            b"deflate",
+            b"br;q=0",
+            b"gzip;q=1"
+        ])));
+        assert!(!accepts_gzip_in(&request(&[b"br", b"deflate"])));
+        // the first gzip member decides, across lines too
+        assert!(!accepts_gzip_in(&request(&[b"gzip;q=0", b"gzip"])));
+        // a line that is not text is skipped, the others still count
+        assert!(accepts_gzip_in(&request(&[b"\xff", b"gzip"])));
+        assert!(!accepts_gzip_in(&request(&[b"\xff"])));
     }
 
     #[test]

@@ -156,6 +156,17 @@ enum HeaderPolicy {
     ExceptCacheControl,
 }
 
+/// A strict file answer that may be sent as gzip: the request accepts it and the file is
+/// compressible and within [`encoding::MAX_GZIP_INPUT`]. It rides on the response as an extension
+/// until the configured `headers` rules have run, because a rule that sets `Content-Encoding`
+/// (a precompressed `*.br` file) means the bytes are already encoded: `pack_gzip` then leaves them
+/// as they are. The handle is a duplicate of the open file, read from the start.
+#[derive(Clone)]
+struct GzipPending {
+    file: Arc<std::fs::File>,
+    length: u64,
+}
+
 /// What a response is, for the headers production adds to it (`finish_strict`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
@@ -367,47 +378,10 @@ impl Site {
             })
             .expect("asset headers")
     }
-    /// The whole file as a `200`-style answer (`status` is already on `builder`). With `gzip` a
-    /// file of one byte up to [`encoding::MAX_GZIP_INPUT`] is answered as gzip (rows `v01.gz-*`):
-    /// the answer is built here, the length of a gzip body being known only once it is packed, and
-    /// the file's own `ETag` stays. Anything else streams from the open file.
-    async fn whole_file(
-        builder: hyper::http::response::Builder,
-        asset: files::Asset,
-        head: bool,
-        gzip: bool,
-    ) -> Result<Response<Body>, Response<Body>> {
-        let length = asset.bytes;
-        if gzip && encoding::within_limit(length) {
-            let file = asset.file;
-            let Ok(Ok(packed)) =
-                tokio::task::spawn_blocking(move || encoding::gzip_reader(file, length)).await
-            else {
-                return Err(response(500, "Could not read the file", None));
-            };
-            return Ok(builder
-                .header("content-encoding", "gzip")
-                .header("content-length", packed.len())
-                .body(if head {
-                    full(Bytes::new())
-                } else {
-                    full(Bytes::from(packed))
-                })
-                .expect("asset headers"));
-        }
-        Ok(builder
-            .header("content-length", length)
-            .body(if head {
-                full(Bytes::new())
-            } else {
-                files::FileBody::new(asset.file, length).boxed()
-            })
-            .expect("asset headers"))
-    }
     /// A deployed file as the profile answers it. The emulator profile answers as the pinned oracle
     /// does (`file_response`); strict adds what production adds: a quoted SHA-256 `ETag`, `304`
     /// for a matching `If-None-Match` or a not older `If-Modified-Since`, and single `Range`s.
-    async fn serve_asset(
+    fn serve_asset(
         &self,
         path: &str,
         asset: files::Asset,
@@ -452,13 +426,29 @@ impl Site {
         };
         let result = match outcome {
             production::RangeOutcome::Whole => {
-                let compressible =
-                    mime::content_type(path).is_none_or(|(_, compressible)| compressible);
-                let gzip = compressible && encoding::accepts_gzip(header("accept-encoding"));
-                match Self::whole_file(builder.status(status), asset, head, gzip).await {
-                    Ok(answer) => Ok(answer),
-                    Err(refusal) => return refusal,
-                }
+                // rows `v01.gz-*`: gzip when the request accepts it, decided here and carried out
+                // by `pack_gzip` once the configured headers are known
+                let gzip = mime::content_type(path).is_none_or(|(_, compressible)| compressible)
+                    && encoding::within_limit(length)
+                    && encoding::accepts_gzip_in(request);
+                let pending = gzip.then(|| asset.file.try_clone().ok()).flatten();
+                builder
+                    .status(status)
+                    .header("content-length", length)
+                    .body(if head {
+                        full(Bytes::new())
+                    } else {
+                        files::FileBody::new(asset.file, length).boxed()
+                    })
+                    .map(|mut answer| {
+                        if let Some(file) = pending {
+                            answer.extensions_mut().insert(GzipPending {
+                                file: Arc::new(file),
+                                length,
+                            });
+                        }
+                        answer
+                    })
             }
             production::RangeOutcome::Unsatisfiable => {
                 let mut refusal = response(416, Bytes::new(), None);
@@ -490,6 +480,39 @@ impl Site {
             }
         };
         marked(result.expect("asset headers"), Kind::File)
+    }
+    /// Carries out a pending gzip answer (see [`GzipPending`]) unless a configured rule has set
+    /// `Content-Encoding`, whatever its value: such a file is sent as it is, with the header the
+    /// rule gave. The file is packed on a blocking thread; the answer holds the packed bytes,
+    /// the length of a gzip body being known only once it is packed (a `HEAD` reports it too).
+    async fn pack_gzip(answer: &mut Response<Body>, head: bool) {
+        let Some(GzipPending { file, length }) = answer.extensions_mut().remove::<GzipPending>()
+        else {
+            return;
+        };
+        if answer.headers().contains_key("content-encoding") {
+            return;
+        }
+        let Ok(Ok(packed)) =
+            tokio::task::spawn_blocking(move || encoding::gzip_reader(&*file, length)).await
+        else {
+            *answer = response(500, "Could not read the file", None);
+            return;
+        };
+        let headers = answer.headers_mut();
+        headers.insert(
+            "content-encoding",
+            hyper::header::HeaderValue::from_static("gzip"),
+        );
+        headers.insert(
+            "content-length",
+            hyper::header::HeaderValue::from(packed.len()),
+        );
+        *answer.body_mut() = if head {
+            full(Bytes::new())
+        } else {
+            full(Bytes::from(packed))
+        };
     }
     fn redirect(&self, destination: &str, status: u16, head: bool) -> Response<Body> {
         let mut result = response(
@@ -692,6 +715,7 @@ impl Site {
                 _ => HeaderPolicy::All,
             };
             self.custom_headers_with(&decoded, &mut result, policy);
+            Self::pack_gzip(&mut result, head).await;
         } else {
             self.custom_headers(&path, &mut result);
         }
@@ -724,21 +748,18 @@ impl Site {
                 target.push_str(query);
                 return Some(self.redirect(&target, 301, head));
             }
-            return Some(
-                self.serve_asset(
-                    &file,
-                    asset,
-                    // Production serves `/404.html` as the file it is (`v01.not-found-direct`).
-                    if path == "/404.html" && !self.strict {
-                        404
-                    } else {
-                        200
-                    },
-                    head,
-                    headers,
-                )
-                .await,
-            );
+            return Some(self.serve_asset(
+                &file,
+                asset,
+                // Production serves `/404.html` as the file it is (`v01.not-found-direct`).
+                if path == "/404.html" && !self.strict {
+                    404
+                } else {
+                    200
+                },
+                head,
+                headers,
+            ));
         }
         let has_slash = path.ends_with('/');
         let index = format!("{}/index.html", path.trim_end_matches('/'));
@@ -753,7 +774,7 @@ impl Site {
                     head,
                 ));
             }
-            return Some(self.serve_asset(&file, asset, 200, head, headers).await);
+            return Some(self.serve_asset(&file, asset, 200, head, headers));
         }
         if clean {
             let appended = if has_slash && slash.is_some() {
@@ -782,7 +803,7 @@ impl Site {
                         head,
                     ));
                 }
-                return Some(self.serve_asset(&file, asset, 200, head, headers).await);
+                return Some(self.serve_asset(&file, asset, 200, head, headers));
             }
         }
         None
@@ -943,15 +964,13 @@ impl Site {
                 if let Some((file, asset)) = self.asset(destination, &hyper::HeaderMap::new()).await
                 {
                     if self.strict {
-                        return self
-                            .serve_asset(
-                                &file,
-                                asset,
-                                if destination == "/404.html" { 404 } else { 200 },
-                                head,
-                                request.headers(),
-                            )
-                            .await;
+                        return self.serve_asset(
+                            &file,
+                            asset,
+                            if destination == "/404.html" { 404 } else { 200 },
+                            head,
+                            request.headers(),
+                        );
                     }
                     let etag_match = request
                         .headers()
@@ -978,9 +997,7 @@ impl Site {
             }
         }
         if let Some((file, asset)) = self.asset("/404.html", request.headers()).await {
-            let mut result = self
-                .serve_asset(&file, asset, 404, head, request.headers())
-                .await;
+            let mut result = self.serve_asset(&file, asset, 404, head, request.headers());
             self.custom_headers("/404.html", &mut result);
             return result;
         }

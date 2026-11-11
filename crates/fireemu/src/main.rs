@@ -405,15 +405,24 @@ struct LintOptions {
     allow: Vec<String>,
 }
 
-/// Reads an allow-list file: one key or `prefix.*` per line; blank lines and `#` comments
+/// Reads an allow-list file (UTF-8, LF or CRLF line endings, optional byte order mark): one key or `prefix.*` per line; blank lines and `#` comments
 /// (whole-line or trailing) are ignored.
 fn read_allow_file(path: &str) -> Result<Vec<String>, CliError> {
-    let text = std::fs::read_to_string(path).map_err(|e| {
+    let bytes = std::fs::read(path).map_err(|e| {
         CliError::usage(format!(
             "--allow-file {}: cannot read: {e}",
             diagnostic_text(path)
         ))
     })?;
+    let text = String::from_utf8(bytes).map_err(|_| {
+        CliError::usage(format!(
+            "--allow-file {}: the file is not valid UTF-8 (save it as UTF-8, with or without a byte order mark)",
+            diagnostic_text(path)
+        ))
+    })?;
+    // A UTF-8 byte order mark (Windows editors add one) belongs to no entry; `lines` already
+    // accepts both LF and CRLF endings.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
     Ok(text
         .lines()
         .map(|line| line.split('#').next().unwrap_or("").trim())
@@ -485,29 +494,7 @@ fn config_command(args: &[String]) -> Result<(), CliError> {
     let origin = discover_project_config(&mut raw)?;
     let (mut cfg, project_root, sources) =
         load_project_config(&raw, &Selection::default()).map_err(note_discovered(&origin))?;
-    let rc = if matches!(origin, ConfigOrigin::Discovered(_)) {
-        discovered_firebaserc(&project_root).map_err(note_discovered(&origin))?
-    } else {
-        read_firebaserc(&project_root)?
-    };
-    let project = resolve_project(rc.as_ref(), None)?;
-    if let Some(project) = &project {
-        cfg.auth_project.clone_from(project);
-    }
-    if !cfg.storage_rules_by_target.is_empty() {
-        let rc = rc.as_ref().ok_or_else(|| {
-            CliError::refused(
-                "firebase.json declares Storage targets but the project has no .firebaserc",
-            )
-        })?;
-        let project = cfg.auth_project.clone();
-        cfg.resolve_storage_rules_targets(rc, &project)?;
-    }
-    // firebase-tools resolves the rules targets only for a database it starts.
-    if cfg.database_enabled {
-        cfg.database_rules_resolved =
-            cfg.database_rules_by_instance(rc.as_ref(), &cfg.auth_project)?;
-    }
+    let project = resolve_project_dependent_config(&mut cfg, &origin, &project_root)?;
     let input = match &sources.canonical {
         Some(path) => config_document(&raw, path)?.0,
         None => serde_json::Value::Null,
@@ -596,6 +583,40 @@ fn config_command(args: &[String]) -> Result<(), CliError> {
     Ok(())
 }
 
+/// The checks `config show` makes after loading, which `up` also makes: the `.firebaserc`,
+/// the project it names, the Storage rules targets and the Database rules instances. Returns
+/// the project the `.firebaserc` resolves, if any.
+fn resolve_project_dependent_config(
+    cfg: &mut RuntimeConfig,
+    origin: &ConfigOrigin,
+    project_root: &Path,
+) -> Result<Option<String>, CliError> {
+    let rc = if matches!(origin, ConfigOrigin::Discovered(_)) {
+        discovered_firebaserc(project_root).map_err(note_discovered(origin))?
+    } else {
+        read_firebaserc(project_root)?
+    };
+    let project = resolve_project(rc.as_ref(), None)?;
+    if let Some(project) = &project {
+        cfg.auth_project.clone_from(project);
+    }
+    if !cfg.storage_rules_by_target.is_empty() {
+        let rc = rc.as_ref().ok_or_else(|| {
+            CliError::refused(
+                "firebase.json declares Storage targets but the project has no .firebaserc",
+            )
+        })?;
+        let project = cfg.auth_project.clone();
+        cfg.resolve_storage_rules_targets(rc, &project)?;
+    }
+    // firebase-tools resolves the rules targets only for a database it starts.
+    if cfg.database_enabled {
+        cfg.database_rules_resolved =
+            cfg.database_rules_by_instance(rc.as_ref(), &cfg.auth_project)?;
+    }
+    Ok(project)
+}
+
 /// `fireemu config lint`: loads the configuration as `up` does (so a configuration the daemon
 /// refuses fails here with the same message) and reports the settings it accepts and never
 /// reads. With `--deny-ineffective` a setting the allow list does not cover fails the command.
@@ -606,8 +627,9 @@ fn config_lint(flags: &[String], json: bool, options: &LintOptions) -> Result<()
     // The report below carries the notes; the loader would print each one a second time.
     raw.verbosity = Verbosity::Quiet;
     let origin = discover_project_config(&mut raw)?;
-    let (_, _, sources) =
+    let (mut cfg, project_root, sources) =
         load_project_config(&raw, &Selection::default()).map_err(note_discovered(&origin))?;
+    resolve_project_dependent_config(&mut cfg, &origin, &project_root)?;
     let (path, settings) = match &sources.canonical {
         Some(path) => {
             let document = config_document(&raw, path)

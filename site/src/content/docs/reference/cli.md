@@ -210,7 +210,7 @@ fireemu config lint --deny-ineffective --allow bind --allow 'firestore.textSearc
 ```
 
 - `--allow <key>` names a setting that may be present although it has no effect, for example a key you keep for a later release. `prefix.*` covers every key below `prefix`. The option can be repeated. Allowed settings are still listed, marked `allowed`, and do not fail the check.
-- `--allow-file <path>` reads allow-list entries from a file, one per line. Blank lines and `#` comments (whole-line or trailing) are ignored. Use it when the list is long or should be reviewed in version control.
+- `--allow-file <path>` reads allow-list entries from a file, one per line. The file must be UTF-8; a byte order mark and CRLF line endings are accepted, and any other encoding is a usage error (exit code 2). Blank lines and `#` comments (whole-line or trailing) are ignored. Use it when the list is long or should be reviewed in version control.
 - An entry that names no configuration key (a typo, or a table such as `trace` instead of `trace.*`) is a usage error with exit code 2, so a misspelt entry cannot silently allow nothing.
 - `--json` prints `config` (the file checked, or `null`), `ineffective` (each setting with `key`, `note` and `allowed`) and `denied` (the keys that fail under `--deny-ineffective`).
 - Only the canonical configuration (`fireemu.toml` or `fireemu.json`) is checked. When none is found, the command says so and exits 0.

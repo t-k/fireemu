@@ -210,7 +210,7 @@ const CONFIG_OPTIONS: &[OptionSpec] = &[
     opt(&["--json"], Value::None, "show: print key, value, source and description records as JSON. lint: print the report as JSON. Default: plain text."),
     opt(&["--deny-ineffective"], Value::None, "lint only: exit 1 when the configuration sets a key that is accepted but has no effect and no --allow entry covers it. Default: the report is informational and the exit code is 0."),
     opt(&["--allow"], Value::Required("<key>"), "lint only: a key (or prefix.* for every key below prefix) that may be set although it has no effect, for example a key kept for a later release. May be repeated. Default: none."),
-    opt(&["--allow-file"], Value::Required("<path>"), "lint only: read --allow entries from a file, one per line; blank lines and # comments are ignored."),
+    opt(&["--allow-file"], Value::Required("<path>"), "lint only: read --allow entries from a UTF-8 file (a byte order mark and CRLF line endings are accepted), one per line; blank lines and # comments are ignored."),
 ];
 
 const EXPORT_OPTIONS: &[OptionSpec] = &[

@@ -409,3 +409,118 @@ fn every_flag_is_read_wherever_it_stands_among_the_others() {
         );
     }
 }
+
+#[test]
+fn lint_makes_the_same_project_checks_as_config_show() {
+    // A .firebaserc that does not parse is refused by `config show` after the configuration
+    // loads; lint must not report a configuration `up` would refuse as clean.
+    let dir = project("firebaserc", "fireemu.toml", "schemaVersion = 1\n");
+    std::fs::write(dir.join(".firebaserc"), "{not json").unwrap();
+    let show = fireemu(&dir, &["config", "show", "--config", "fireemu.toml"]);
+    let lint = fireemu(&dir, &["config", "lint", "--config", "fireemu.toml"]);
+    assert_eq!(show.status.code(), Some(1), "{}", stderr(&show));
+    assert_eq!(lint.status.code(), Some(1), "{}", stderr(&lint));
+    assert!(
+        stderr(&lint).contains("does not parse"),
+        "{}",
+        stderr(&lint)
+    );
+    assert_eq!(stderr(&lint), stderr(&show));
+}
+
+#[test]
+fn lint_names_exactly_the_notes_a_run_prints_when_it_loads_the_configuration() {
+    // `config show` loads through the code `up` and `exec` use, which prints one `note:` line
+    // per ineffective setting. The lint report must say the same thing about the same file.
+    let text = "schemaVersion = 1\nbind = \"127.0.0.1\"\n[auth]\nenabled = false\n[trace]\nenabled = true\ncanonical = false\n[firestore]\nrules = \"firestore.rules\"\n[firestore.textSearch]\nfidelity = \"deterministic-basic\"\n";
+    let dir = project("notes", "fireemu.toml", text);
+    let load = fireemu(&dir, &["config", "show", "--config", "fireemu.toml"]);
+    assert!(load.status.success(), "{}", stderr(&load));
+    let startup: Vec<String> = stderr(&load)
+        .lines()
+        .filter_map(|line| line.strip_prefix("note: fireemu.toml: "))
+        .map(str::to_owned)
+        .collect();
+    assert!(startup.len() >= 5, "{}", stderr(&load));
+    let lint = fireemu(&dir, &["config", "lint", "--config", "fireemu.toml"]);
+    assert!(lint.status.success(), "{}", stderr(&lint));
+    let linted: Vec<String> = stdout(&lint)
+        .lines()
+        .filter_map(|line| line.strip_prefix("ineffective: "))
+        .map(|line| {
+            line.strip_suffix(" (fireemu.toml)")
+                .unwrap_or(line)
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(linted, startup);
+}
+
+#[test]
+fn an_allow_file_may_carry_a_byte_order_mark_and_crlf_line_endings() {
+    let dir = project("encoding", "fireemu.toml", TOML);
+    for (name, bytes) in [
+        (
+            "bom.txt",
+            &b"\xEF\xBB\xBFbind\ntrace.*\nfirestore.textSearch.*\n"[..],
+        ),
+        (
+            "crlf.txt",
+            &b"bind\r\ntrace.*\r\n# comment\r\nfirestore.textSearch.*\r\n"[..],
+        ),
+        (
+            "both.txt",
+            &b"\xEF\xBB\xBF# first\r\nbind\r\ntrace.*\r\nfirestore.textSearch.*"[..],
+        ),
+    ] {
+        std::fs::write(dir.join(name), bytes).unwrap();
+        let output = fireemu(
+            &dir,
+            &[
+                "config",
+                "lint",
+                "--config",
+                "fireemu.toml",
+                "--deny-ineffective",
+                "--allow-file",
+                name,
+            ],
+        );
+        assert!(output.status.success(), "{name}: {}", stderr(&output));
+    }
+}
+
+#[test]
+fn an_allow_file_that_is_not_utf8_is_a_usage_error_naming_the_file() {
+    let dir = project("not-utf8", "fireemu.toml", TOML);
+    // Latin-1 text, and UTF-16 with its byte order mark: neither is UTF-8.
+    for (name, bytes) in [
+        ("latin1.txt", &b"bind # caf\xE9\n"[..]),
+        ("utf16.txt", &b"\xFF\xFEb\0i\0n\0d\0\n\0"[..]),
+    ] {
+        std::fs::write(dir.join(name), bytes).unwrap();
+        let output = fireemu(
+            &dir,
+            &[
+                "config",
+                "lint",
+                "--config",
+                "fireemu.toml",
+                "--allow-file",
+                name,
+            ],
+        );
+        assert_eq!(output.status.code(), Some(2), "{name}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains(name),
+            "{name}: {}",
+            stderr(&output)
+        );
+        assert!(
+            stderr(&output).contains("not valid UTF-8"),
+            "{name}: {}",
+            stderr(&output)
+        );
+        assert_eq!(stdout(&output), "");
+    }
+}

@@ -32,6 +32,7 @@
 
 use std::collections::BTreeMap;
 
+use fireemu_core_types::codec;
 use rsa::pkcs1::DecodeRsaPrivateKey as _;
 use rsa::pkcs1::DecodeRsaPublicKey as _;
 use rsa::pkcs1v15::{Signature, VerifyingKey};
@@ -419,22 +420,13 @@ pub fn parse_query(query: &str) -> Option<Vec<(String, String)>> {
         .collect()
 }
 
+/// `text` with its escapes decoded (a `+` stays a plus), or `None` for a malformed escape or a
+/// result that is not UTF-8. The escape rule lives in the shared codec.
 fn percent_decode(text: &str) -> Option<String> {
-    let bytes = text.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' {
-            let pair = bytes.get(i + 1..i + 3)?;
-            let digits = std::str::from_utf8(pair).ok()?;
-            out.push(u8::from_str_radix(digits, 16).ok()?);
-            i += 3;
-        } else {
-            out.push(bytes[i]);
-            i += 1;
-        }
+    if !codec::percent_escapes_are_well_formed(text) {
+        return None;
     }
-    String::from_utf8(out).ok()
+    String::from_utf8(codec::percent_decode_bytes(text, codec::PlusMode::Literal)).ok()
 }
 
 fn is_unreserved(byte: u8) -> bool {
@@ -474,13 +466,10 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 fn unhex(text: &str) -> Option<Vec<u8>> {
-    if text.is_empty() || text.len() % 2 != 0 || !text.is_ascii() {
+    if text.is_empty() {
         return None;
     }
-    text.as_bytes()
-        .chunks(2)
-        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok())
-        .collect()
+    codec::hex_decode(text)
 }
 
 #[cfg(test)]

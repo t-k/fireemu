@@ -138,7 +138,7 @@ fn exec_dump_on_failure_and_success() {
                 "--dump-on-failure",
                 out,
                 "--",
-                "sh",
+                "/bin/sh",
                 "-c",
                 &script,
             ],

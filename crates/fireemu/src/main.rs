@@ -4258,6 +4258,8 @@ mod config_reload_tests {
             "shutdown must remove the spill directory while the state is still alive"
         );
         drop(state);
+        // Leave the shared root only if no other process left a directory in it.
+        let _ = std::fs::remove_dir(spill_root());
     }
 
     /// Every ruleset slot the daemon creates at start carries the profile's meaning of a lone

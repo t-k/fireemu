@@ -94,6 +94,8 @@ jobs:
       skip: ${{ steps.validate.outputs.skip }}
       fail_on_new_critical: ${{ steps.validate.outputs.fail_on_new_critical }}
       files: ${{ steps.validate.outputs.files }}
+      regex: ${{ steps.validate.outputs.regex }}
+      packages: ${{ steps.validate.outputs.packages }}
       ref: ${{ steps.validate.outputs.ref }}
       base: ${{ steps.validate.outputs.base }}
       package: ${{ steps.validate.outputs.package }}
@@ -189,7 +191,7 @@ jobs:
           }
           ref_sha=$(resolve "$INPUT_REF") || fail "ref is not a branch of this repository, nor a commit of one"
           base_sha=$(resolve "$INPUT_BASE") || fail "base is not a branch of this repository, nor a commit of one"
-          job=$INPUT_JOB mode=$INPUT_JOB package=$INPUT_PACKAGE files="" skip=false fail_on_new_critical=false
+          job=$INPUT_JOB mode=$INPUT_JOB package=$INPUT_PACKAGE files="" regex="" packages="" skip=false fail_on_new_critical=false
           case "$INPUT_JOB" in
             nightly)
               # Only a successful scheduled nightly moves the base; failed, cancelled and skipped
@@ -246,17 +248,15 @@ jobs:
               files=${files# }
               ;;
             critical)
+              # The list and the helper that turns it into one regex come from the commit under test. The
+              # regex has no spaces and goes to cargo mutants --re; no other value of the list reaches a command.
               job=mutants base_sha="" package="" fail_on_new_critical=true
-              mapfile -t entries < <(git -C "$RUNNER_TEMP/repo.git" show "$ref_sha:tools/ci/mutation-critical.txt" | sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d')
-              (( ${#entries[@]} > 0 )) || fail "tools/ci/mutation-critical.txt lists no file"
-              for entry in "${entries[@]}"; do
-                read -r -a tokens <<< "$entry"
-                for token in "${tokens[@]}"; do
-                  [[ $token =~ ^!?[A-Za-z0-9_./*-]{1,200}$ && $token != *..* && $token != *//* ]] || fail "the critical list names a bad file"
-                  files="$files $token"
-                done
-              done
-              files=${files# }
+              git -C "$RUNNER_TEMP/repo.git" show "$ref_sha:tools/ci/critical-selection.py" > "$RUNNER_TEMP/critical-selection.py"
+              git -C "$RUNNER_TEMP/repo.git" show "$ref_sha:tools/ci/mutation-critical.txt" > "$RUNNER_TEMP/mutation-critical.txt"
+              regex=$(python3 "$RUNNER_TEMP/critical-selection.py" --regex "$RUNNER_TEMP/mutation-critical.txt") || fail "tools/ci/mutation-critical.txt is not a valid list"
+              [[ -n $regex && $regex != *[[:space:]]* ]] || fail "the critical selection must be one regex without spaces"
+              packages=$(python3 "$RUNNER_TEMP/critical-selection.py" --packages "$RUNNER_TEMP/mutation-critical.txt") || fail "tools/ci/mutation-critical.txt names no package"
+              [[ $packages =~ ^[a-z0-9][a-z0-9-]{0,63}( [a-z0-9][a-z0-9-]{0,63})*$ ]] || fail "the critical list names a bad package"
               ;;
           esac
           matrix=$(seq 0 $((shards - 1)) | paste -sd, -)
@@ -265,6 +265,8 @@ jobs:
             echo "mode=$mode"
             echo "skip=$skip"
             echo "fail_on_new_critical=$fail_on_new_critical"
+            echo "regex=$regex"
+            echo "packages=$packages"
             echo "files=$files"
             echo "ref=$ref_sha"
             echo "base=$base_sha"
@@ -319,6 +321,11 @@ jobs:
       # What is mutated: the Rust diff against the base (a dispatch, the nightly), or one package of the
       # rotation, whole or by file (the weekly). Counted first, so that a diff without a mutant (a test-only
       # change) ends here instead of leaving a run with no result for the summary to refuse.
+      # The critical list is checked against this tree (paths exist, scoped functions are defined), so a stale
+      # entry fails the run before any shard starts.
+      - name: check the critical list against the tree
+        if: needs.plan.outputs.mode == 'critical'
+        run: python3 tools/ci/critical-selection.py --check tools/ci/mutation-critical.txt .
       - name: select the mutants
         id: select
         env:
@@ -326,11 +333,18 @@ jobs:
           BASE: ${{ needs.plan.outputs.base }}
           PACKAGE: ${{ needs.plan.outputs.package }}
           FILES: ${{ needs.plan.outputs.files }}
+          REGEX: ${{ needs.plan.outputs.regex }}
+          PACKAGES: ${{ needs.plan.outputs.packages }}
         run: |
           set -euo pipefail
           args=()
-          if [[ $MODE == weekly || $MODE == critical ]]; then
-            if [[ $MODE == weekly ]]; then args+=(-p "$PACKAGE"); fi
+          if [[ $MODE == critical ]]; then
+            # Selected by name and by package: --file did not filter in a measurement, and --re filters only
+            # within the packages given with -p (see tools/ci/critical-selection.py).
+            for package in $PACKAGES; do args+=(-p "$package"); done
+            args+=(--re "$REGEX")
+          elif [[ $MODE == weekly ]]; then
+            args+=(-p "$PACKAGE")
             for file in $FILES; do
               if [[ $file == '!'* ]]; then
                 args+=(--exclude "${file#!}")

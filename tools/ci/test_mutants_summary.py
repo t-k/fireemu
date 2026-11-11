@@ -532,6 +532,21 @@ class SurvivorsTest(unittest.TestCase):
             line, column = rng.randrange(1, 100000), rng.randrange(1, 100000)
             self.assertEqual(summary.survivor_key(f"dir/f.rs:{line}:{column}: replace foo"), "dir/f.rs: replace foo")
 
+    def test_scoped_critical_lines_give_their_file_pattern(self):
+        self.assertEqual(summary.critical_pattern("crates/a/src/eval.rs @ request_path  # 11, auth"), "crates/a/src/eval.rs")
+        self.assertEqual(summary.critical_pattern("crates/a/src/jwt.rs  # 273"), "crates/a/src/jwt.rs")
+        self.assertEqual(summary.critical_pattern("crates/a/src/fault.rs"), "crates/a/src/fault.rs")
+        self.critical.write_text("# header\ncritical/a.rs @ build_request  # 2\n")
+        for name, expected in [
+            ("critical/a.rs:3:4: replace other -> bool with true", 0),
+            ("critical/a.rs:3:4: replace build_request -> bool with true", 2),
+            ("critical/a.rs:3:4: replace build_request_with_resource -> bool with true", 0),
+        ]:
+            with self.subTest(name=name):
+                self.root = Path(tempfile.mkdtemp(dir=self.tmp.name))
+                write_shard(self.root, 0, [mutant(name, "MissedMutant")])
+                self.assertEqual(self.run_summary("--fail-on-new-critical")[0], expected)
+
     def test_accepted_survivor_does_not_fail(self):
         name = "critical/a.rs:12:9: replace foo"
         self.survivors.write_text("# Reason\ncritical/a.rs: replace foo   \n")

@@ -73,6 +73,26 @@ def survivor_key(raw_name: str) -> str:
     return re.sub(r"^(.*?):[0-9]+:[0-9]+: ", r"\1: ", raw_name, count=1, flags=re.DOTALL)
 
 
+def critical_pattern(line: str) -> str:
+    """The file pattern of a critical-list line: the path before any comment or ` @` function list."""
+    return line.split("#", 1)[0].split(" @", 1)[0].strip()
+
+
+def scoped_critical_regex(path: Path):
+    """A regex over mutant names for the scoped lines (`<path> @ <function> ...`) of the critical list,
+    in the form tools/ci/critical-selection.py prints; None when the list has no scoped line."""
+    alternatives = []
+    for raw in read_entries(path):
+        body = raw.split("#", 1)[0].strip()
+        if " @" not in body:
+            continue
+        file_part, _, names = body.partition(" @")
+        alt = "|".join(re.escape(name) for name in names.split())
+        head = re.escape(file_part.strip())
+        alternatives.append(f"^{head}:[0-9]+:[0-9]+:\\s.*(in|replace)\\s({alt})(\\s|$)")
+    return "(" + "|".join(alternatives) + ")" if alternatives else None
+
+
 def read_entries(path: Path):
     """Read keys or patterns while preserving leading spaces."""
     return [line for raw in path.read_text().splitlines()
@@ -338,7 +358,8 @@ def main(argv):
     args = parser.parse_args(argv)
     try:
         accepted = set(read_entries(args.survivors)) if args.survivors is not None else set()
-        critical = read_entries(args.critical) if args.critical is not None else []
+        lines = read_entries(args.critical) if args.critical is not None else []
+        critical = [critical_pattern(line) for line in lines if " @" not in line.split("#", 1)[0]]
     except (OSError, UnicodeError) as error:
         print(f"mutants-summary: cannot read survivor or critical list: {clean(str(error))}", file=sys.stderr)
         return 1
@@ -348,10 +369,16 @@ def main(argv):
         keys = [survivor_key(name) for name in raw_missed]
         summary["accepted_survivors"] = sum(key in accepted for key in keys)
         summary["new_survivors"] = sorted(key for key in keys if key not in accepted)
-        summary["new_critical_survivors"] = [
-            key for key in summary["new_survivors"]
-            if any(fnmatch.fnmatchcase(key.split(": ", 1)[0], pattern) for pattern in critical)
-        ]
+        scoped = scoped_critical_regex(args.critical) if args.critical is not None else None
+        new_critical = set()
+        for key, raw in zip(keys, raw_missed):
+            if key in accepted:
+                continue
+            file_part = key.split(": ", 1)[0]
+            whole_file = any(fnmatch.fnmatchcase(file_part, pattern) for pattern in critical)
+            if whole_file or (scoped is not None and re.search(scoped, raw)):
+                new_critical.add(key)
+        summary["new_critical_survivors"] = sorted(new_critical)
     args.out_dir.mkdir(parents=True, exist_ok=True)
     (args.out_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
     (args.out_dir / "summary.md").write_text(markdown(summary))

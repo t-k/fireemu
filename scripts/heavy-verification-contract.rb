@@ -169,7 +169,9 @@ def violations(source, toolchain_channel: nil)
   errors << "the summary upload must fail when there is no summary (if-no-files-found: error)" unless upload && upload.dig("with", "if-no-files-found") == "error"
   mutate_runs = (workflow.dig("jobs", "mutants", "steps") || []).map { |step| step["run"].to_s }.select { |run| run.include?("cargo mutants") }
   selection = (workflow.dig("jobs", "mutants", "steps") || []).find { |step| step["id"] == "select" }
-  errors << "critical selection must use files without a package" unless selection && selection["run"].to_s.include?('if [[ $MODE == weekly || $MODE == critical ]]; then') && selection["run"].to_s.include?('if [[ $MODE == weekly ]]; then args+=(-p "$PACKAGE"); fi')
+  errors << "critical selection must go by name (--re \"$REGEX\") within the packages of the list (-p \"$package\") and never by --file" unless selection && selection["run"].to_s.include?('if [[ $MODE == critical ]]; then') && selection["run"].to_s.include?('for package in $PACKAGES; do args+=(-p "$package"); done') && selection["run"].to_s.include?('args+=(--re "$REGEX")') && selection.dig("env", "PACKAGES").to_s.gsub(/\s+/, "") == "${{needs.plan.outputs.packages}}" && selection["run"].to_s.include?('elif [[ $MODE == weekly ]]; then') && selection["run"].to_s.include?('args+=(-p "$PACKAGE")') && selection.dig("env", "REGEX").to_s.gsub(/\s+/, "") == "${{needs.plan.outputs.regex}}"
+  check = (workflow.dig("jobs", "mutants", "steps") || []).find { |step| step["name"].to_s == "check the critical list against the tree" }
+  errors << "the mutants job must check the critical list against the tree before it mutates (critical-selection.py --check)" unless check && check["if"].to_s.gsub(/\s+/, "") == "needs.plan.outputs.mode=='critical'" && check["run"].to_s.include?("python3 tools/ci/critical-selection.py --check tools/ci/mutation-critical.txt .")
   # The selection step only lists the mutants (--list); the shard run is the one that mutates.
   mutate_runs = mutate_runs.reject { |run| run.include?("--list") && !run.include?("--shard") }
   shardings = mutate_runs.flat_map { |run| run.scan(/--sharding[= ]\S*/) }
@@ -202,6 +204,7 @@ def violations(source, toolchain_channel: nil)
       errors << "plan must validate #{variable}" unless validate["run"].to_s.include?(variable) && validate.fetch("env", {}).key?(variable)
     end
     script = validate["run"].to_s
+    errors << "plan must expose regex" unless workflow.dig("jobs", "plan", "outputs", "regex") == "${{ steps.validate.outputs.regex }}" && script.include?('echo "regex=$regex"')
     errors << "plan must expose fail_on_new_critical" unless workflow.dig("jobs", "plan", "outputs", "fail_on_new_critical") == "${{ steps.validate.outputs.fail_on_new_critical }}" && script.include?('echo "fail_on_new_critical=$fail_on_new_critical"')
     errors << "critical dispatch must be allowed" unless Array(trigger.dig("workflow_dispatch", "inputs", "job", "options")).include?("critical") && script.include?("mutants | nextest | linux-measure | nightly | weekly | critical)")
     { "23 3 * * *" => "nightly INPUT_SHARDS=8", "41 4 * * 6" => "weekly INPUT_SHARDS=16", "17 5 * * 1,3,5" => "critical INPUT_SHARDS=16" }.each do |cron, mapping|
@@ -213,8 +216,8 @@ def violations(source, toolchain_channel: nil)
     critical = script[/^  critical\)\n(.*?)^    ;;/m, 1].to_s
     errors << "nightly must enable fail_on_new_critical" unless nightly.include?("job=mutants fail_on_new_critical=true") && script.include?("skip=false fail_on_new_critical=false")
     errors << "weekly must report only" if weekly.include?("fail_on_new_critical=true")
-    errors << "critical files must come from the ref and be nonempty" unless critical.include?('show "$ref_sha:tools/ci/mutation-critical.txt"') && critical.include?('(( ${#entries[@]} > 0 )) || fail') && critical.include?('job=mutants base_sha="" package="" fail_on_new_critical=true')
-    errors << "critical file tokens must be validated" unless critical.include?('[[ $token =~ ^!?[A-Za-z0-9_./*-]{1,200}$ && $token != *..* && $token != *//* ]] || fail "the critical list names a bad file"')
+    errors << "critical selection must read the helper and the list from the ref" unless critical.include?('show "$ref_sha:tools/ci/critical-selection.py"') && critical.include?('show "$ref_sha:tools/ci/mutation-critical.txt"') && critical.include?('--regex "$RUNNER_TEMP/mutation-critical.txt"') && critical.include?('job=mutants base_sha="" package="" fail_on_new_critical=true')
+    errors << "critical regex must be validated: one line, no spaces, or the plan fails" unless critical.include?('[[ -n $regex && $regex != *[[:space:]]* ]] || fail') && critical.include?('|| fail "tools/ci/mutation-critical.txt is not a valid list"')
     errors << "plan must refuse a run from the default branch and from a tag" unless script.include?("$GITHUB_REF") && script.include?("refs/heads/$DEFAULT_BRANCH") && script.include?("refs/tags/")
     errors << "plan must resolve the ref and the base inside this repository" unless script.include?("for-each-ref --contains") && script.include?("refs/heads/$value")
     errors << "plan must pin the locale (export LC_ALL=C) before it matches a pattern" unless script.include?("export LC_ALL=C")

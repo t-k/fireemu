@@ -16,11 +16,9 @@ end
 
 tracked_files = IO.popen(["git", "-C", ROOT, "ls-files", "-z"], &:read).split("\0")
 assert($?.success?, "cannot list tracked files")
-critical_patterns = File.readlines(File.join(ROOT, "tools/ci/mutation-critical.txt"), chomp: true).map { |line| line.sub(/\s*#.*$/, "").strip }.reject(&:empty?)
-assert(!critical_patterns.empty?, "mutation-critical.txt must contain a pattern")
-critical_patterns.each do |pattern|
-  assert(tracked_files.any? { |path| File.fnmatch?(pattern, path) }, "critical pattern matches no tracked file: #{pattern}")
-end
+raise "critical-selection.py --check failed" unless system("python3", File.join(ROOT, "tools/ci/critical-selection.py"), "--check", File.join(ROOT, "tools/ci/mutation-critical.txt"), ROOT)
+regex = IO.popen(["python3", File.join(ROOT, "tools/ci/critical-selection.py"), "--regex", File.join(ROOT, "tools/ci/mutation-critical.txt")], &:read).to_s.strip
+assert(!regex.empty? && !regex.match?(/\s/), "the critical selection must be one regex without spaces")
 File.readlines(File.join(ROOT, "tools/ci/mutation-survivors.txt"), chomp: true).each do |line|
   next if line.strip.empty? || line.lstrip.start_with?("#")
   match = /\A(.+?): (.+)\z/.match(line)

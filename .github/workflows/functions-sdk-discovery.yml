@@ -115,3 +115,25 @@ jobs:
         run: cargo test -p fireemu --test functions_runtime_selection
       - name: verify runner trust boundaries and log attribution
         run: node --test tools/runner-node/*.test.mjs
+      # The Functions smoke drives the real firebase-admin and firebase-functions SDKs through the
+      # daemon: the three checks whose shapes differ by profile (custom event datacontenttype, task
+      # queue name, withAuthContext principal) run once per profile. It sat outside every workflow
+      # until 2026-11-12, and three of its checks had drifted from the recorded shapes unnoticed.
+      - name: build the fireemu binary for the Functions smoke
+        run: cargo build -p fireemu
+      - name: Functions smoke expectations
+        run: node --test tools/sdk-smoke/functions-expect.test.mjs
+      - name: Functions smoke (strict profile)
+        working-directory: tools/sdk-smoke
+        env:
+          FIREEMU_SMOKE_PROFILE: strict
+        run: >-
+          ../../target/debug/fireemu exec --config fireemu.smoke.json --project demo-app
+          --functions functions-project --functions-port 5001 --hub-port 0 -- node functions.mjs
+      - name: Functions smoke (emulator profile)
+        working-directory: tools/sdk-smoke
+        env:
+          FIREEMU_SMOKE_PROFILE: emulator
+        run: >-
+          ../../target/debug/fireemu exec --config fireemu.smoke-emulator.json --project demo-app
+          --functions functions-project --functions-port 5001 --hub-port 0 -- node functions.mjs

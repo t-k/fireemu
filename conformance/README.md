@@ -66,10 +66,16 @@ collides with the default emulator ports or with `tools/sdk-smoke`.
 
 `src/normalize.mjs`, and only that: RFC 3339 instants, twenty-character generated ids, JWTs,
 UUID-shaped opaque codes, object generations, and the `host:port` the two sides deliberately
-bind differently. Ordering is normalized only where a scenario opts in and the ordering is
-documented as unspecified (`listCollections`, `listAll`). Statuses, error codes, error messages,
-payload shapes, listener sequences and Rules decisions are never touched -- they are the
-comparison.
+bind differently. A value is replaced because of what its field *means*, not because of how it
+looks: a scenario declares the generated fields of a step by path
+(`ctx.step(id, fn, { generated: { "data.at": "timestamp", "body[].readTime": "timestamp" } })`),
+and only a value of the declared shape at a declared path becomes a placeholder. A string the
+scenario wrote itself -- a twenty-character name, an RFC 3339 literal in a document field -- and
+a `Date` or SDK `Timestamp` that nobody declared generated are recorded exactly, down to the
+nanosecond, even when their shape equals a generated one. Ordering is normalized only where a
+scenario opts in and the ordering is documented as unspecified (`listCollections`, `listAll`).
+Statuses, error codes, error messages, payload shapes, listener sequences and Rules decisions
+are never touched -- they are the comparison.
 
 Every document id, email address and object name is derived from the scenario id, never from a
 clock or a counter, so a re-record produces a byte-identical fixture tree.

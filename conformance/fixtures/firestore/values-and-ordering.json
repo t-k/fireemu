@@ -49,7 +49,12 @@
             "ref": "conf_values/all-types"
           },
           "aString": "hello é 日本語",
-          "aTimestamp": "<timestamp>",
+          "aTimestamp": {
+            "timestamp": {
+              "seconds": 1583298367,
+              "nanoseconds": 8000000
+            }
+          },
           "aTrue": true,
           "anArray": [
             1,

@@ -39,6 +39,29 @@ const fn opt(flags: &'static [&'static str], value: Value, text: &'static str) -
     }
 }
 
+const DUMP_OPTIONS: &[OptionSpec] = &[
+    opt(
+        &["--url"],
+        Value::Required("<control-url>"),
+        "Loopback control API URL.",
+    ),
+    opt(
+        &["--out"],
+        Value::Required("<dir>"),
+        "Directory for the bundle.",
+    ),
+    opt(
+        &["--config"],
+        Value::Required("<path>"),
+        "Configuration file.",
+    ),
+    opt(
+        &["--firebase-json"],
+        Value::Required("<path>"),
+        "Firebase configuration file.",
+    ),
+];
+
 /// The options of `up` and `exec` (and, parsed the same way, `capabilities`).
 pub const DAEMON_OPTIONS: &[OptionSpec] = &[
     opt(
@@ -243,17 +266,19 @@ pub enum Topic {
     Up,
     Exec,
     Export,
+    Dump,
     Doctor,
     Capabilities,
     Config,
 }
 
 /// Every topic, in the order the overall help lists them.
-pub const TOPICS: [Topic; 7] = [
+pub const TOPICS: [Topic; 8] = [
     Topic::Init,
     Topic::Up,
     Topic::Exec,
     Topic::Export,
+    Topic::Dump,
     Topic::Doctor,
     Topic::Capabilities,
     Topic::Config,
@@ -268,6 +293,7 @@ impl Topic {
             "up" | "emulators:start" => Some(Self::Up),
             "exec" | "emulators:exec" => Some(Self::Exec),
             "emulators:export" => Some(Self::Export),
+            "dump" => Some(Self::Dump),
             "doctor" => Some(Self::Doctor),
             "capabilities" => Some(Self::Capabilities),
             _ => None,
@@ -282,6 +308,7 @@ impl Topic {
             Self::Up => "up",
             Self::Exec => "exec",
             Self::Export => "emulators:export",
+            Self::Dump => "dump",
             Self::Doctor => "doctor",
             Self::Capabilities => "capabilities",
         }
@@ -296,6 +323,7 @@ impl Topic {
             }
             Self::Exec => "start the emulators, run a command, stop them (alias: emulators:exec)",
             Self::Export => "export the state of a running suite to a directory",
+            Self::Dump => "write diagnostics from a running daemon",
             Self::Doctor => "check the installation: binary, UI, Functions runner, Node.js",
             Self::Capabilities => "print the capability manifest of the resolved profile as JSON",
         }
@@ -307,6 +335,7 @@ impl Topic {
             Self::Config => CONFIG_OPTIONS,
             Self::Up | Self::Exec | Self::Capabilities => DAEMON_OPTIONS,
             Self::Export => EXPORT_OPTIONS,
+            Self::Dump => DUMP_OPTIONS,
             Self::Doctor => DOCTOR_OPTIONS,
         }
     }
@@ -318,6 +347,7 @@ impl Topic {
             Self::Up => "  fireemu up [options]\n  fireemu emulators:start [options]\n",
             Self::Exec => "  fireemu exec [options] \"shell script\"\n  fireemu exec [options] -- <command...>\n  fireemu emulators:exec [options] \"shell script\"\n  fireemu emulators:exec [options] -- <command...>\n",
             Self::Export => "  fireemu emulators:export <dir> [options]\n",
+            Self::Dump => "  fireemu dump --url <control-url> --out <dir> [--config <path>] [--firebase-json <path>]\n",
             Self::Doctor => "  fireemu doctor [--connect <control url> | --export-dir <path>]\n",
             Self::Capabilities => "  fireemu capabilities [options]\n",
         }
@@ -328,8 +358,9 @@ impl Topic {
             Self::Config => "Loads the configuration files and defaults as up does, without the command-line overrides of up (--project, --only, the port flags), and without starting the emulators. Prints every schema leaf in schema order. Missing values are (unset), or null in JSON with source unset; values unavailable from the runtime use explicit file values or defaults marked default (schema).\n\n`config lint` loads the configuration the same way (a configuration the daemon refuses fails with the same message) and lists the keys it sets that the daemon accepts but does not read, with the note `up` prints for each. With --deny-ineffective it exits 1 when any such key is not covered by --allow or --allow-file, so a CI job can fail on a setting that does nothing. Allowed keys are listed and do not fail.",
             Self::Init => "Creates fireemu.toml in the current directory and prints the command to start with it. It never overwrites an existing file unless --force is given. An existing fireemu.json must be removed before creating fireemu.toml.",
             Self::Up => "Serves the selected emulators (Firestore, Auth, Storage and App Check; Functions when a codebase is configured, and with it Eventarc and Cloud Tasks; Pub/Sub when configured; the Realtime Database when configured) plus the control API, the Emulator Hub and the UI on loopback until Ctrl-C.",
-            Self::Exec => "Starts the same emulators as `up`, runs the command with the emulator host environment variables (FIRESTORE_EMULATOR_HOST, FIREBASE_AUTH_EMULATOR_HOST, and so on) once every listener is bound, stops everything when the command exits, and exits with the command's status. On Unix, a command ended by signal n gives 128 + n, and SIGINT and SIGTERM are forwarded to it.\n\nWith \"shell script\" (the official form) the script is run by the system shell. With `--` the command is run as exactly that program and argv, without a shell. Everything after `--` belongs to the command, including --help; a `--help` inside the script text is script text.",
+            Self::Exec => "Starts the same emulators as `up`, runs the command with the emulator host environment variables (FIRESTORE_EMULATOR_HOST, FIREBASE_AUTH_EMULATOR_HOST, and so on) once every listener is bound, stops everything when the command exits, and exits with the command's status. On Unix, a command ended by signal n gives 128 + n, and SIGINT and SIGTERM are forwarded to it.\n\nWith \"shell script\" (the official form) the script is run by the system shell. With --dump-on-failure <dir>, write a diagnostics bundle before stopping the daemon if the command fails. With `--` the command is run as exactly that program and argv, without a shell. Everything after `--` belongs to the command, including --help; a `--help` inside the script text is script text.",
             Self::Export => "Asks the suite that is already running for the project (found through its Emulator Hub locator file) to write its state to <dir>, in the format --import reads. Not available on Windows.",
+            Self::Dump => "Writes bundle.json and bundle.html from a running daemon. bundle.json is the parsed response re-serialised with redacted configuration, not the raw response bytes. Requires FIREEMU_CONTROL_TOKEN.",
             Self::Doctor => "Reports the Fireemu binary, UI, Functions runner and Node.js that this installation finds, and suggests a remedy for each problem.",
             Self::Capabilities => "Prints the capability manifest for the profile the options resolve to. It accepts the same options as `up` and validates them the same way, but only --config (the profile it names) changes the result.",
         }

@@ -1833,6 +1833,42 @@ async fn serve_suite(
             }
         }
     };
+    if matches!(outcome, Ok(Some(code)) if code != 0) {
+        if let Some(plan) = &exec {
+            if let Some(dir) = &plan.dump_on_failure {
+                let result = match std::env::current_exe() {
+                    Ok(binary) => tokio::process::Command::new(binary)
+                        .arg("dump")
+                        .arg("--url")
+                        .arg(format!("http://{}", addrs.control))
+                        .arg("--out")
+                        .arg(dir)
+                        .args(&plan.dump_config_flags)
+                        .env("FIREEMU_CONTROL_TOKEN", &control_token)
+                        .output()
+                        .await
+                        .map_err(|e| e.to_string()),
+                    Err(error) => Err(error.to_string()),
+                };
+                match result {
+                    Ok(output) if output.status.success() => {
+                        print!("{}", String::from_utf8_lossy(&output.stdout));
+                    }
+                    Ok(output) => eprintln!(
+                        "warning: diagnostics dump failed: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                            .split_whitespace()
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    ),
+                    Err(error) => eprintln!(
+                        "warning: diagnostics dump failed: {}",
+                        error.split_whitespace().collect::<Vec<_>>().join(" ")
+                    ),
+                }
+            }
+        }
+    }
     drop(ready_guard);
     // Keep services and the Hub locator alive through child cleanup, export, and Functions
     // shutdown. Every remaining server is then aborted and joined before its listener can leave

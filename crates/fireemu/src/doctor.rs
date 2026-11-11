@@ -365,7 +365,7 @@ fn connect_report(control_url: &str) -> Result<Vec<String>, String> {
 /// One `GET` against the loopback control API over plain HTTP/1.1. Only `http://127.0.0.1`
 /// and `http://localhost` are accepted: the report is privileged, and this command never
 /// forwards it anywhere else.
-fn control_get(control_url: &str, path: &str) -> Result<String, String> {
+pub(crate) fn control_get(control_url: &str, path: &str) -> Result<String, String> {
     use std::io::{Read, Write};
     // The same check the Hub locator reader applies, so a URL this command dials and an origin
     // a locator names are held to one rule.

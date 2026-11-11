@@ -49,6 +49,7 @@ mod control;
 mod daemon;
 mod database_rules;
 mod doctor;
+mod dump;
 mod functions;
 mod help;
 mod hosting;
@@ -81,7 +82,7 @@ use crate::config::{RuntimeConfig, Selection};
 const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--no-config-discovery] [--project <id|alias>] [--only auth,firestore,storage,functions,eventarc,tasks,pubsub,database,hosting,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--hosting-port <n>] [--eventarc-port <n>] [--tasks-port <n>] [--pubsub-port <n>] [--database-port <n>] [--functions <dir>] [--ui-port <n|auto>] [--hub-port <n|auto>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|silent|info|debug] [--import <dir>] [--export-on-exit [dir]] [--ready-file <file>]";
 
 fn usage() -> ExitCode {
-    eprintln!("usage: fireemu init [--profile strict|emulator] [--firebase-json <file>] [--interactive|--yes|--no-interactive] [--force]\n       fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] \"shell script\"\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities\n       fireemu --version\n       fireemu --help | fireemu help <command>\n\nrun `fireemu --help` for the commands, or `fireemu <command> --help` for the options of one");
+    eprintln!("usage: fireemu init [--profile strict|emulator] [--firebase-json <file>] [--interactive|--yes|--no-interactive] [--force]\n       fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] [--dump-on-failure <dir>] \"shell script\"\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] [--dump-on-failure <dir>] -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu dump --url <control-url> --out <dir> [--config <path>] [--firebase-json <path>]\n       fireemu doctor\n       fireemu capabilities\n       fireemu --version\n       fireemu --help | fireemu help <command>\n\nrun `fireemu --help` for the commands, or `fireemu <command> --help` for the options of one");
     ExitCode::from(2)
 }
 
@@ -235,6 +236,8 @@ impl std::fmt::Debug for RedactedRuntimeConfig<'_> {
 struct ExecPlan {
     /// Direct argv or the official CLI's positional shell script.
     command: ExecCommand,
+    dump_on_failure: Option<PathBuf>,
+    dump_config_flags: Vec<String>,
 }
 
 enum ExecCommand {
@@ -318,6 +321,10 @@ fn main() -> ExitCode {
                 );
                 ExitCode::SUCCESS
             }
+            Err(e) => fail_for(command, &e),
+        },
+        Some("dump") => match dump::command(&args[1..]) {
+            Ok(()) => ExitCode::SUCCESS,
             Err(e) => fail_for(command, &e),
         },
         Some("config") => match config_command(&args[1..]) {
@@ -937,6 +944,45 @@ fn post_json(
 
 /// `exec [options] <script>` or `exec [options] -- <command...>`.
 fn parse_exec(args: &[String]) -> Result<(Options, ExecPlan), CliError> {
+    let end = args
+        .iter()
+        .position(|arg| arg == "--")
+        .unwrap_or(args.len());
+    let mut filtered = Vec::new();
+    let mut dump_on_failure = None;
+    let mut dump_config_flags = Vec::new();
+    let mut i = 0;
+    while i < end {
+        if args[i] == "--dump-on-failure" {
+            let value = args
+                .get(i + 1)
+                .filter(|_| i + 1 < end)
+                .ok_or_else(|| CliError::usage("--dump-on-failure needs a value"))?;
+            dump_on_failure = Some(PathBuf::from(value));
+            i += 2;
+        } else if matches!(args[i].as_str(), "--config" | "--firebase-json") {
+            let value = args
+                .get(i + 1)
+                .filter(|_| i + 1 < end)
+                .ok_or_else(|| CliError::usage(format!("{} needs a value", args[i])))?;
+            filtered.extend([args[i].clone(), value.clone()]);
+            dump_config_flags.extend([args[i].clone(), value.clone()]);
+            i += 2;
+        } else {
+            let takes_value = help::DAEMON_OPTIONS.iter().any(|spec| {
+                spec.flags.contains(&args[i].as_str())
+                    && matches!(spec.value, help::Value::Required(_))
+            });
+            filtered.push(args[i].clone());
+            i += 1;
+            if takes_value && i < end {
+                filtered.push(args[i].clone());
+                i += 1;
+            }
+        }
+    }
+    filtered.extend_from_slice(&args[end..]);
+    let args = filtered.as_slice();
     if let Some(split) = args.iter().position(|arg| arg == "--") {
         let command = args[split + 1..].to_vec();
         if command.is_empty() {
@@ -952,6 +998,8 @@ fn parse_exec(args: &[String]) -> Result<(Options, ExecPlan), CliError> {
             options,
             ExecPlan {
                 command: ExecCommand::Argv(command),
+                dump_on_failure,
+                dump_config_flags,
             },
         ));
     }
@@ -964,6 +1012,8 @@ fn parse_exec(args: &[String]) -> Result<(Options, ExecPlan), CliError> {
         options,
         ExecPlan {
             command: ExecCommand::Shell(script),
+            dump_on_failure,
+            dump_config_flags,
         },
     ))
 }

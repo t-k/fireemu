@@ -306,6 +306,11 @@ test("the Firebase CLI is refused unless the command is a harmless child of this
     false,
     "a missing file",
   );
+  assert.equal(
+    isHarmlessCommand([process.execPath, "deploy"]),
+    false,
+    "a CLI verb is not a script",
+  );
   for (const command of [
     undefined,
     [],

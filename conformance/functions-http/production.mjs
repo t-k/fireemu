@@ -1089,7 +1089,7 @@ async function publicInvoker(control, target, enabled, kind, log = logChange) {
   );
 }
 
-export async function createUser(key, budget, runDir, programId) {
+export async function createUser(key, budget, runDir, programId, log = logChange) {
   const email = `fireemu-fh-${randomBytes(8).toString("hex")}@example.com`;
   await appendFile(
     join(runDir, "owned-users.jsonl"),
@@ -1119,11 +1119,11 @@ export async function createUser(key, budget, runDir, programId) {
     throw new Error("Auth signUp did not return an owned user");
   }
   expiredAt(user.idToken);
-  await logChange("auth-user-created", `${programId}; owned user journaled privately`);
+  await log("auth-user-created", `${programId}; owned user journaled privately`);
   return user;
 }
 
-async function deleteUser(control, user, runDir, programId) {
+async function deleteUser(control, user, runDir, programId, log = logChange) {
   if (!user?.localId) return;
   await control(
     "POST",
@@ -1144,10 +1144,10 @@ async function deleteUser(control, user, runDir, programId) {
     `${JSON.stringify({ ts: now(), programId, email: user.email, localId: user.localId, state: "deleted-readback-empty" })}\n`,
     { mode: 0o600 },
   );
-  await logChange("auth-user-deleted", `${programId}; absence read back`);
+  await log("auth-user-deleted", `${programId}; absence read back`);
 }
 
-async function waitForExpiry(token, abort) {
+export async function waitForExpiry(token, abort) {
   const expires = expiredAt(token) * 1000 + 5_000;
   if (expires - Date.now() > 75 * 60 * 1000)
     throw new Error("ID token expiry exceeds the approved wait");
@@ -1440,7 +1440,7 @@ export async function observeProgram(
   recordings,
   abort,
   uploads,
-  { run = cli, log = logChange, fetchImpl } = {},
+  { run = cli, log = logChange, fetchImpl, auth = {} } = {},
 ) {
   const targets = programTargets(program);
   const states = Object.fromEntries(
@@ -1451,12 +1451,15 @@ export async function observeProgram(
   let userAttempted = false;
   try {
     if (program.id.endsWith("auth-context") || program.id.endsWith("auth-refusal")) {
-      const key = JSON.parse(await readFile(KEY_FILE, "utf8")).keyString;
+      const key = JSON.parse(
+        await (auth.readKey ? auth.readKey() : readFile(KEY_FILE, "utf8")),
+      ).keyString;
       if (typeof key !== "string" || key.length < 20)
         throw new Error("restricted Auth key is missing");
       userAttempted = true;
-      user = await createUser(key, budget, runDir, program.id);
-      if (program.id.endsWith("auth-refusal")) await waitForExpiry(user.idToken, abort);
+      user = await (auth.createUser ?? createUser)(key, budget, runDir, program.id, log);
+      if (program.id.endsWith("auth-refusal"))
+        await (auth.waitForExpiry ?? waitForExpiry)(user.idToken, abort);
     }
     for (const target of targets) {
       if (abort.stopped) throw new Error("signal stopped observation before deploy");
@@ -1519,7 +1522,7 @@ export async function observeProgram(
       });
     if (user) {
       try {
-        await deleteUser(control, user, runDir, program.id);
+        await deleteUser(control, user, runDir, program.id, log);
       } catch (caught) {
         states.userCleanupError = caught.message;
       }

@@ -153,8 +153,11 @@ async function readCapped(response) {
  * A fetch for runCases that records each answer as production sent it (status, selected headers, every
  * header name, the byte count and digest of the body, the body text when it is small) and hands the same
  * bytes on. Captures are numbered in send order: pass 1 control, pass 1 malformed, pass 2 control, pass 2
- * malformed (`caseIds` names the cases of one pass for another corpus). Neither the host nor a credential
- * value is recorded; the Authorization values sent are the corpus literals.
+ * malformed (`caseIds` names the cases of one pass for another corpus; `slots` lists `{ pass, program,
+ * caseId }` for every request of a run with several programs). Neither the host nor a credential value is
+ * recorded unless `enrich` adds it: `enrich(record, source)` is called with the response (or, for a failed
+ * request, the error) and may copy what the transport knows into the record; the Authorization values sent
+ * are the corpus literals.
  */
 export function captureFetch({
   fetchImpl = fetch,
@@ -162,16 +165,24 @@ export function captureFetch({
   now = Date.now,
   caseIds = CASE_IDS,
   keptHeaders = KEPT_HEADERS,
+  slots,
+  enrich,
+  maskAuthorization = (value) => value,
 }) {
   let index = 0;
   return async (url, init) => {
     const record = {
       seq: index + 1,
-      pass: Math.floor(index / caseIds.length) + 1,
-      caseId: caseIds[index % caseIds.length],
+      ...(slots
+        ? { pass: slots[index]?.pass ?? null, caseId: slots[index]?.caseId ?? null }
+        : {
+            pass: Math.floor(index / caseIds.length) + 1,
+            caseId: caseIds[index % caseIds.length],
+          }),
+      ...(slots?.[index]?.program ? { program: slots[index].program } : {}),
       method: init.method,
       path: new URL(url).pathname.replace(/^.*\/fireemuHttpProbe(?=\/)/u, ""),
-      authorization: init.headers?.authorization ?? null,
+      authorization: maskAuthorization(init.headers?.authorization ?? null),
       latencyMs: null,
       status: null,
       headers: {},
@@ -196,6 +207,7 @@ export function captureFetch({
       record.bodyBytes = bytes.length;
       record.bodySha256 = sha256(bytes);
       if (bytes.length <= 4096) record.bodyText = bytes.toString("utf8");
+      enrich?.(record, response);
       await onCapture(record);
       const nullBody = [101, 204, 205, 304].includes(response.status);
       return new Response(nullBody ? null : bytes, {
@@ -205,6 +217,7 @@ export function captureFetch({
     } catch (error) {
       if (record.latencyMs === null) record.latencyMs = now() - started;
       if (!record.error) record.error = `${error.name}: ${error.message}`;
+      enrich?.(record, error);
       if (record.bodyBytes === null || record.status === null) await onCapture(record);
       throw error;
     }
@@ -304,7 +317,7 @@ export const recordBearer = (env, deps) => recordObservation(env, deps, BEARER_S
 export async function recordObservation(env, deps, spec) {
   await deps.assertCleanTree();
   const { corpus, baseline, digests } = await deps.readSources();
-  const program = spec.validateCorpus(corpus);
+  const programs = [spec.validateCorpus(corpus)].flat();
   const { attempt } = admit({
     ledgerText: await deps.readLedger(),
     now: deps.now(),
@@ -325,6 +338,7 @@ export async function recordObservation(env, deps, spec) {
       throw new Error(`${name} would retain a private value`);
     await deps.writeRunFile(runDir, name, text);
   };
+  const reservedUsd = spec.reservedUsd ?? RESERVED_USD_PER_ATTEMPT;
   const base = {
     project: PROJECT,
     database: null,
@@ -334,8 +348,8 @@ export async function recordObservation(env, deps, spec) {
     corpusDigest: digests.corpus,
     runDir,
     attempt,
-    reservedUsd: RESERVED_USD_PER_ATTEMPT,
-    cumulativeReservedUsd: attempt * RESERVED_USD_PER_ATTEMPT,
+    reservedUsd,
+    cumulativeReservedUsd: attempt * reservedUsd,
   };
   await deps.appendLedger(
     `${JSON.stringify({ ts: new Date(startedAt).toISOString(), ...base, event: "started" })}\n`,
@@ -361,17 +375,27 @@ export async function recordObservation(env, deps, spec) {
   try {
     await preflightCliSideEffects(control);
     grantsBefore = await readServiceAgentGrants(control, projectNumber);
-    await observeProgram(program, control, adc.path, budget, runDir, recordings, abort, uploads, {
-      ...(deps.run ? { run: deps.run } : {}),
-      log,
-      fetchImpl: captureFetch({
-        fetchImpl: deps.fetchImpl,
-        onCapture: (capture) => captures.push(capture),
-        now: deps.now,
-        caseIds: spec.caseIds,
-        keptHeaders: spec.keptHeaders,
-      }),
+    const fetchImpl = captureFetch({
+      fetchImpl: deps.fetchImpl,
+      onCapture: (capture) => captures.push(capture),
+      now: deps.now,
+      caseIds: spec.caseIds,
+      keptHeaders: spec.keptHeaders,
+      slots: spec.slots,
+      enrich:
+        spec.enrichCapture &&
+        ((record, source) => spec.enrichCapture(record, source, { projectNumber })),
+      maskAuthorization: spec.maskAuthorization,
     });
+    // The programs run one after the other, each with its own deployment; a program that fails stops the run.
+    for (const program of programs) {
+      await observeProgram(program, control, adc.path, budget, runDir, recordings, abort, uploads, {
+        ...(deps.run ? { run: deps.run } : {}),
+        ...(deps.auth ? { auth: deps.auth } : {}),
+        log,
+        fetchImpl,
+      });
+    }
   } catch (error) {
     reasons.push(error.message);
     residual = Boolean(error.residual);
@@ -379,7 +403,10 @@ export async function recordObservation(env, deps, spec) {
   const used = () => budget.snapshot();
   // A create (the deploy) is settled only by the run's own completed delete followed by absence; without
   // that delete, absence in the run settles nothing (checklist section 3) and A2 decides.
-  if (used().cliDeploy > 0 && !changes.some((change) => change.action === "function-deleted")) {
+  if (
+    used().cliDeploy > 0 &&
+    changes.filter((change) => change.action === "function-deleted").length < used().cliDeploy
+  ) {
     residual = true;
     reasons.push(
       "the deploy was not followed by the run's own delete: A2 read-back >= 10 min needed",
@@ -438,6 +465,8 @@ export async function recordObservation(env, deps, spec) {
     await write("judgement.json", judgement);
     await write("builds.json", builds ?? { builds: [], open: [] });
     await write("changes.jsonl", changes.map((change) => `${JSON.stringify(change)}\n`).join(""));
+    for (const [name, value] of Object.entries(spec.extraFiles?.({ projectNumber }) ?? {}))
+      await write(name, value);
   } catch (error) {
     writeError = error.message;
   }

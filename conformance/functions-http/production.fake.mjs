@@ -11,7 +11,7 @@ export const UPLOAD_OBJECT = "9be229fd-1507-4797-ab4b-69f2fda6e54a.zip";
 
 // A deployed Gen2 function record in the recorded shape (FE v4 lists.functions-v2, masked): its
 // source is the copy Cloud Functions made in the sources bucket, not the upload.
-export function recordedGen2Record() {
+export function recordedGen2Record(functionName = "fireemuHttpProbe") {
   const recorded = JSON.parse(
     readFileSync(
       new URL(
@@ -22,11 +22,10 @@ export function recordedGen2Record() {
     ),
   );
   const record = structuredClone(recorded.body.functions.find((f) => f.environment === "GEN_2"));
-  record.name = "projects/fireemu-oracle-query/locations/us-central1/functions/fireemuHttpProbe";
-  record.buildConfig.entryPoint = "fireemuHttpProbe";
-  record.serviceConfig.service =
-    "projects/fireemu-oracle-query/locations/us-central1/services/fireemuhttpprobe";
-  record.serviceConfig.uri = "https://fireemuhttpprobe-abc-uc.a.run.app";
+  record.name = `projects/fireemu-oracle-query/locations/us-central1/functions/${functionName}`;
+  record.buildConfig.entryPoint = functionName;
+  record.serviceConfig.service = `projects/fireemu-oracle-query/locations/us-central1/services/${functionName.toLowerCase()}`;
+  record.serviceConfig.uri = `https://${functionName.toLowerCase()}-abc-uc.a.run.app`;
   return record;
 }
 
@@ -137,8 +136,32 @@ export const FH_PACKAGE =
 export const FH_DIGEST = `sha256:${"ab".repeat(32)}`;
 export const FH_VERSION = `${FH_PACKAGE}/versions/${FH_DIGEST}`;
 
+/** The resource names of one fixture function in the fake world (`fireemuHttpProbe` by default). */
+export function fixtureNames(functionName = "fireemuHttpProbe") {
+  const snake = functionName.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+  const location = "projects/fireemu-oracle-query/locations/us-central1";
+  const FUNCTION = `${location}/functions/${functionName}`;
+  const SERVICE = `${location}/services/${functionName.toLowerCase()}`;
+  const PACKAGE = `${location}/repositories/gcf-artifacts/packages/fireemu--oracle--query__us--central1__${snake}`;
+  return {
+    FUNCTION,
+    SERVICE,
+    PACKAGE,
+    DIGEST: FH_DIGEST,
+    VERSION: `${PACKAGE}/versions/${FH_DIGEST}`,
+    IMAGE: `us-central1-docker.pkg.dev/fireemu-oracle-query/gcf-artifacts/fireemu--oracle--query__us--central1__${snake}@${FH_DIGEST}`,
+  };
+}
+
 /** The fake REST world, the harmless deploy child and the upload helper, without running a program. */
-export async function deployWorld({ deployScript, deleteStatus, caps, buildsImage = true }) {
+export async function deployWorld({
+  deployScript,
+  deleteStatus,
+  caps,
+  buildsImage = true,
+  functionName = "fireemuHttpProbe",
+}) {
+  const names = fixtureNames(functionName);
   const base = await uploadWorld({ caps });
   const deployed = { present: false, versionExists: false, bindings: [], setPolicyCalls: 0 };
   const control = async (method, url, body, kind = "control", allowed = [200]) => {
@@ -189,24 +212,24 @@ export async function deployWorld({ deployScript, deleteStatus, caps, buildsImag
       url === "https://firebase.googleapis.com/v1beta1/projects/fireemu-oracle-query/adminSdkConfig"
     ) {
       result = reply(200, { projectId: "fireemu-oracle-query" });
-    } else if (url === `https://cloudfunctions.googleapis.com/v2/${FH_FUNCTION}`) {
-      result = deployed.present ? reply(200, recordedGen2Record()) : reply(404);
-    } else if (url === `https://run.googleapis.com/v2/${FH_SERVICE}`) {
+    } else if (url === `https://cloudfunctions.googleapis.com/v2/${names.FUNCTION}`) {
+      result = deployed.present ? reply(200, recordedGen2Record(functionName)) : reply(404);
+    } else if (url === `https://run.googleapis.com/v2/${names.SERVICE}`) {
       result = deployed.present
         ? reply(200, {
-            name: FH_SERVICE,
+            name: names.SERVICE,
             template: {
               containers: [
                 {
-                  image: `us-central1-docker.pkg.dev/fireemu-oracle-query/gcf-artifacts/fireemu--oracle--query__us--central1__fireemu_http_probe@${FH_DIGEST}`,
+                  image: `${names.IMAGE}`,
                 },
               ],
             },
           })
         : reply(404);
-    } else if (url === `https://run.googleapis.com/v2/${FH_SERVICE}:getIamPolicy`) {
+    } else if (url === `https://run.googleapis.com/v2/${names.SERVICE}:getIamPolicy`) {
       result = reply(200, { bindings: deployed.bindings });
-    } else if (url === `https://run.googleapis.com/v2/${FH_SERVICE}:setIamPolicy`) {
+    } else if (url === `https://run.googleapis.com/v2/${names.SERVICE}:setIamPolicy`) {
       deployed.setPolicyCalls += 1;
       if (deployed.setPolicyStatus) {
         result = reply(deployed.setPolicyStatus);
@@ -214,41 +237,43 @@ export async function deployWorld({ deployScript, deleteStatus, caps, buildsImag
         deployed.bindings = body.policy.bindings;
         result = reply(200, body.policy);
       }
-    } else if (url === `https://artifactregistry.googleapis.com/v1/${FH_PACKAGE}%2Fcache`) {
+    } else if (url === `https://artifactregistry.googleapis.com/v1/${names.PACKAGE}%2Fcache`) {
       result =
         deployed.cacheVersion || deployed.cacheVersionsNext
-          ? reply(200, { name: `${FH_PACKAGE}%2Fcache` })
+          ? reply(200, { name: `${names.PACKAGE}%2Fcache` })
           : reply(404);
     } else if (
-      url.startsWith(`https://artifactregistry.googleapis.com/v1/${FH_PACKAGE}%2Fcache/versions?`)
+      url.startsWith(
+        `https://artifactregistry.googleapis.com/v1/${names.PACKAGE}%2Fcache/versions?`,
+      )
     ) {
       result = reply(
         200,
         deployed.cacheVersion
-          ? { versions: [{ name: `${FH_PACKAGE}%2Fcache/versions/${FH_DIGEST}` }] }
+          ? { versions: [{ name: `${names.PACKAGE}%2Fcache/versions/${names.DIGEST}` }] }
           : deployed.cacheVersionsNext
             ? { nextPageToken: "t" }
             : {},
       );
-    } else if (url === `https://artifactregistry.googleapis.com/v1/${FH_PACKAGE}`) {
+    } else if (url === `https://artifactregistry.googleapis.com/v1/${names.PACKAGE}`) {
       result =
         deployed.versionExists || deployed.packageRemains
-          ? reply(200, { name: FH_PACKAGE })
+          ? reply(200, { name: names.PACKAGE })
           : reply(404);
     } else if (
       url.startsWith(
-        `https://artifactregistry.googleapis.com/v1/${FH_PACKAGE}/versions?pageSize=1000`,
+        `https://artifactregistry.googleapis.com/v1/${names.PACKAGE}/versions?pageSize=1000`,
       )
     ) {
-      result = reply(200, deployed.versionExists ? { versions: [{ name: FH_VERSION }] } : {});
-    } else if (url === `https://artifactregistry.googleapis.com/v1/${FH_VERSION}?force=true`) {
+      result = reply(200, deployed.versionExists ? { versions: [{ name: names.VERSION }] } : {});
+    } else if (url === `https://artifactregistry.googleapis.com/v1/${names.VERSION}?force=true`) {
       if (deployed.versionDeleteStatus) result = reply(deployed.versionDeleteStatus);
       else {
         deployed.versionExists = false;
         result = reply(200);
       }
-    } else if (url === `https://artifactregistry.googleapis.com/v1/${FH_VERSION}`) {
-      result = deployed.versionExists ? reply(200, { name: FH_VERSION }) : reply(404);
+    } else if (url === `https://artifactregistry.googleapis.com/v1/${names.VERSION}`) {
+      result = deployed.versionExists ? reply(200, { name: names.VERSION }) : reply(404);
     } else {
       throw new Error(`unexpected request ${method} ${url}`);
     }

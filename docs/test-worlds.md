@@ -2,6 +2,36 @@
 
 Test clocks and worlds are explicit local testing extensions. Normal daemon configurations keep native application dates, JavaScript timers and Cloud Tasks time. A session inside one daemon still shares the daemon's clock, Rules and Functions; create separate worlds for parallel tests that change any of them.
 
+## Read this first: clock scope and reset
+
+### What a clock move reaches
+
+`world.clock` moves the daemon's clock. It does not move the clock of your test process or of anything you start.
+
+| Surface | Moved by `world.clock`? |
+| --- | --- |
+| Functions `Date`, `Date.now()`, `new Date()` | Yes, by default in a world (`functions.clock.date` is `virtual`). |
+| Security Rules `request.time`, Auth, Storage and App Check timestamps | Yes. |
+| Cloud Tasks schedule times, retry backoff and rate refill | Yes, by default in a world (`functions.clock.tasks` is `virtual`). |
+| Scheduled Functions and event retry eligibility | Yes. |
+| Functions JavaScript timers (`setTimeout`, `setInterval`) | No by default (`functions.clock.timers` is `real`). With `timers: 'virtual'` a move makes them due and `world.clock.runDue()` runs them. |
+| The test process: `Date.now()`, `performance.now()`, its timers | No. Pass explicit instants to your own helpers. |
+| Commands started with `world.run()`: their `Date.now()` and `performance.now()` | No. They only receive routing to the world. |
+| External services and anything else outside the daemon | No. |
+
+The full list of daemon-side effects is in [What a clock move changes](#what-a-clock-move-changes).
+
+### What `reset()` invalidates
+
+`world.reset()` stops the daemon and starts a new one, a new *generation*, from the snapshot taken when the world was created.
+
+- Everything you read from the old generation is stale: `world.endpoints`, `world.environment`, `world.uiUrl`, SDK instances and clients built from them, and control clients created from the old control URL and token. Read the getters again and reconnect after `reset()` resolves.
+- `world.control()`, `world.clock.*` and `world.run()` always use the current generation, so they need no reconnection. A client made with `createControlClient({ env: world.environment })` or with an explicit origin and token keeps the old generation's endpoint and credential: create it again after `reset()`.
+- Commands started with `world.run()` in the old generation are terminated.
+- `reset()` returns to the *creation snapshot*, not to your current sources. Edits made to Functions code, Rules, indexes or configuration after the world was created, and to an import directory, are not picked up. Create a new world to use them.
+
+For Vitest and Playwright fixtures that apply these rules, see [Fixtures for Vitest and Playwright](#fixtures-for-vitest-and-playwright).
+
 ## TypeScript consumers
 
 The ESM subpaths `fireemu/testing` and `fireemu/control` include declarations for strict NodeNext and bundler resolution. Import the package subpaths directly; no path aliases or separate type package are needed.
@@ -66,6 +96,39 @@ A clock command admits eligible scheduled/task work; it does not establish that 
 
 An entry point that awaits a virtual timer during top-level module initialization cannot finish startup before a clock actor exists. Use native timers during initialization, or move that wait into a handler. Timer virtualization supports the global, CommonJS and ESM `node:timers` callback APIs and `node:timers/promises` timeout/interval APIs, including cancellation, refresh, ref/unref and AbortSignal.
 
+## Advance the clock and wait for work
+
+`awaitIdle` waits for work that may need a clock move. Calls on one world are admitted in call order, but `world.control()` calls for `sessions/default:awaitIdle` do not hold up later clock calls, so the obvious concurrent form works:
+
+```js
+// Does not wait for itself: the advance runs while awaitIdle is pending.
+const [idle] = await Promise.all([
+  world.control('POST', 'sessions/default:awaitIdle', { timeoutSeconds: 20 }),
+  world.clock.advance({ seconds: 60 }),
+]);
+```
+
+`world.clock.advanceAndSettle(duration, options)` does the whole sequence in the right order: it advances the clock, runs due virtual timers (repeating while a runner still reports due callbacks, at most 100 rounds) and waits for the daemon to be idle.
+
+```js
+const { clock, timers, idle } = await world.clock.advanceAndSettle({ seconds: 60 });
+```
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `scope` | `'runnable'` | The `awaitIdle` scope. `'all'` also waits for tasks scheduled beyond the move, which only finish if the clock reaches them. |
+| `timeoutSeconds` | `20` | The daemon-side wait budget, 0 through 600. The request itself is allowed this long plus five seconds. |
+| `runTimers` | `true` when Functions is selected and `functions.clock.timers` is `virtual`, otherwise `false` | Run due virtual timers after the move. The daemon refuses `runDue` when timers are real, so passing `true` there rejects. |
+
+It rejects when the move fails (the wait does not start) or the wait times out (HTTP 504 with the outstanding work in the error). The result holds the new clock state, the last `runDue` report (`undefined` with `runTimers: false`) and the `awaitIdle` response.
+
+Ordering rules for one world:
+
+- Clock helpers and ordinary `world.control()` calls run one at a time, in call order.
+- An `awaitIdle` call starts after the ordered calls issued before it and never delays the ones issued after it. Several `awaitIdle` calls may be pending together.
+- `reset()` and `dispose()` wait for every earlier clock helper and `control()` call and hold back later calls. They cancel pending `awaitIdle` and `advanceAndSettle` waits, which reject with an error saying the world was reset or disposed: the generation being waited on is being retired.
+- An `awaitIdle` request may take its own `timeoutSeconds` (30 s when omitted, at most 600 s) plus five seconds; `requestTimeoutMs` applies to every other control call.
+
 ## Create parallel worlds
 
 ```js
@@ -79,16 +142,24 @@ const settings = {
   clock: { date: 'virtual', timers: 'real', tasks: 'virtual' },
 };
 
-const worlds = await Promise.all([
-  createTestWorld(settings), createTestWorld(settings), createTestWorld(settings),
-]);
+// Independent tests: one world per task. withTestWorld disposes each world, also when a sibling fails.
+await Promise.all(['a', 'b', 'c'].map(name => withTestWorld(settings, async world => {
+  await world.run(process.execPath, ['./integration-test.mjs', name]);
+})));
+
+// Worlds that must coexist inside one test: use allSettled so a failed creation does not leak
+// the worlds that started, and dispose whatever exists in finally.
+const created = await Promise.allSettled([createTestWorld(settings), createTestWorld(settings), createTestWorld(settings)]);
+const worlds = created.flatMap(result => (result.status === 'fulfilled' ? [result.value] : []));
 try {
+  const failed = created.find(result => result.status === 'rejected');
+  if (failed) throw failed.reason;
   const [a, b, c] = worlds;
   await Promise.all([a.clock.advance({ seconds: 86400 }), c.reset()]);
   await b.run(process.execPath, ['./integration-test.mjs']);
   // B retains its original clock, Rules, Functions globals and service state.
 } finally {
-  await Promise.all(worlds.map(world => world.dispose()));
+  await Promise.allSettled(worlds.map(world => world.dispose()));
 }
 
 await withTestWorld(settings, async world => {
@@ -104,6 +175,22 @@ Each world owns one daemon, OS-assigned service ports, a control token, private 
 `config` accepts a configuration object or a path to `fireemu.toml`, `fireemu.json` or `firebase.json`. TOML is parsed by the same native loader as the CLI (including case-insensitive `.toml` extensions); keep the npm helper and native binary at the same version. Canonical resource paths remain relative to `cwd`, while `firebaseJson` is relative to the configuration file and its resource paths are relative to that Firebase file. You can reuse `fireemu init` output directly: `createTestWorld({ cwd: process.cwd(), config: 'fireemu.toml' })`. In v0.23.0 the helper accepts only JSON files or objects; when staying on that release, keep JSON as the single configuration source and pass its path explicitly rather than maintaining a TOML copy.
 
 `firebaseJson`, `functionsSource`, `cwd`, `import`, `projectId`, `clockStart`, `seed`, `services` and `clock` select the initial inputs. `binaryPath` can select a development binary. Input files and linked Functions dependencies are copied before readiness; later caller changes do not affect reset. This has an upfront disk/time cost for large dependency graphs. Do not put a world's temporary directory inside its Functions source.
+
+### What a snapshot copies, and what it costs
+
+Functions sources, dependency links and `NODE_PATH` roots are copied only when the world loads Functions: when `services` is omitted (the default selection includes Functions if the configuration names a source or manifest) or lists `functions` or `functions:<codebase>` (every configured codebase is copied). With any other selection, for example `['auth', 'firestore']`, none of it is copied and the Functions section is removed from the snapshotted configuration, because the daemon does not load Functions that `--only` leaves out. Auth blocking functions and event-triggered functions run in the Functions service, so select `functions` for tests that use them.
+
+`world.snapshotStats` reports what each copy cost, as frozen plain data:
+
+```js
+const { initial, generations } = world.snapshotStats;
+// initial: { files, directories, symlinks, bytes, method, elapsedMs, functions: 'included' | 'skipped' }
+// generations: [{ generation: 1, files, directories, symlinks, bytes, method, elapsedMs }, ...]
+```
+
+`initial` is the one-time copy of your inputs; each entry of `generations` is the copy that starts that generation (the first creation and every `reset()`), without daemon start-up time. Counts include generated configuration files. Set `FIREEMU_TEST_WORLD_STATS=1` to print one line per copy to stderr while diagnosing a slow start.
+
+Each generation copy uses copy-on-write when the platform allows it and a plain copy otherwise: on macOS the creation snapshot is cloned with `cp -c` (APFS); on Linux every file is first requested as a reflink (btrfs, XFS with reflink) and falls back to a byte copy on file systems that refuse. Windows copies. Either way the generation owns its bytes: writes in one generation never reach the snapshot, the caller's files or another generation. `method` is `clone`, `copy` or `mixed`. On macOS the initial copy of your project copies bytes, because it filters and rewrites dependency links file by file.
 
 `snapshotTimeoutMs` accepts an integer from 1 through 2,147,483,647 milliseconds and sets a separate 60-second default budget for copying the initial inputs and preparing the first generation. The same budget applies to each reset generation preparation. `startupTimeoutMs` remains a separate 60-second default budget for daemon readiness after preparation. During initial creation, a snapshot timeout or cancellation rejects before returning a world handle, waits for active file copies to settle, removes the partial world directory, and names the snapshot phase in the error. The helper uses abortable file streams so a large individual file can be cancelled during copying; configuration files must resolve to regular files, while copied trees may contain directories, regular files and supported dependency links. Unsupported filesystem entries are rejected. Cleanup includes read-only copied directories without changing the source directory modes. To resolve a snapshot timeout, narrow unused dependencies or raise `snapshotTimeoutMs`; raising `startupTimeoutMs` does not extend snapshot preparation. A reset retires the old generation before preparing the next one, so a preparation timeout does not leave the old daemon running.
 
@@ -136,6 +223,122 @@ Snapshot failures identify the original `NODE_PATH` entry, resolved copy root, t
 A retirement error still attempts to stop every owned daemon and retains unresolved cleanup handles for another `dispose()` attempt. User-created detached subprocesses that leave an owned Unix process group require caller supervision; the helper reports a held output pipe instead of silently declaring disposal complete.
 
 The authenticated `--ready-file <path>` daemon option publishes endpoint discovery atomically in a private file without overwriting an existing descriptor. It contains a control capability and is withdrawn on graceful shutdown. The helper keeps it inside the private generation directory and removes the directory after forced retirement.
+
+## Fixtures for Vitest and Playwright
+
+Create the world in a fixture, give each test its own named Admin SDK app, and delete that app at teardown. Named apps keep parallel worlds apart in one process; the default app is cached process-wide and cannot be redirected. After `reset()`, the old endpoints are stale (see [What `reset()` invalidates](#what-reset-invalidates)), so delete the app, read `world.endpoints` again and create a new app.
+
+Vitest, one world per test:
+
+```ts
+// test/world.ts
+import { test as base } from 'vitest';
+import { createTestWorld, type TestWorld } from 'fireemu/testing';
+import { initializeApp, deleteApp, type App } from 'firebase-admin/app';
+import { getFirestore, type Firestore } from 'firebase-admin/firestore';
+
+interface Admin {
+  /** The Firestore of the current generation. */
+  readonly db: () => Firestore;
+  /** Reset the world to its creation snapshot and connect a new app to the new generation. */
+  readonly reset: () => Promise<Firestore>;
+}
+
+export const test = base.extend<{ world: TestWorld; admin: Admin }>({
+  world: async ({}, use) => {
+    const world = await createTestWorld({ services: ['auth', 'firestore'] });
+    try {
+      await use(world);
+    } finally {
+      await world.dispose();
+    }
+  },
+  admin: async ({ world }, use) => {
+    let app: App | undefined;
+    let db: Firestore;
+    const connect = () => {
+      const { host, port } = world.endpoints.firestore!;
+      // A name per world and generation: no two apps share a name, even across parallel tests.
+      app = initializeApp({ projectId: world.projectId }, `world-${world.id}-${world.generation}`);
+      db = getFirestore(app);
+      db.settings({ host: `${host}:${port}`, ssl: false });
+      return db;
+    };
+    connect();
+    try {
+      await use({
+        db: () => db,
+        reset: async () => {
+          await deleteApp(app!);
+          app = undefined;
+          await world.reset();
+          return connect();
+        },
+      });
+    } finally {
+      if (app) await deleteApp(app);
+    }
+  },
+});
+
+// test/example.test.ts
+import { expect } from 'vitest';
+import { test } from './world';
+
+test('reset returns to the creation snapshot', async ({ admin }) => {
+  await admin.db().doc('items/a').set({ n: 1 });
+  const db = await admin.reset(); // use the returned Firestore: the old one is stale
+  expect((await db.doc('items/a').get()).exists).toBe(false);
+});
+```
+
+Playwright, one world per worker and a clean generation for each test:
+
+```ts
+// tests/fixtures.ts
+import { test as base } from '@playwright/test';
+import { createTestWorld, type TestWorld } from 'fireemu/testing';
+import { initializeApp, deleteApp } from 'firebase-admin/app';
+import { getFirestore, type Firestore } from 'firebase-admin/firestore';
+
+export const test = base.extend<{ db: Firestore }, { world: TestWorld }>({
+  world: [
+    async ({}, use) => {
+      const world = await createTestWorld({ services: ['auth', 'firestore'] });
+      try {
+        await use(world);
+      } finally {
+        await world.dispose();
+      }
+    },
+    { scope: 'worker' },
+  ],
+  db: async ({ world }, use, testInfo) => {
+    await world.reset(); // a fresh generation per test; endpoints below are read after it
+    const { host, port } = world.endpoints.firestore!;
+    const app = initializeApp({ projectId: world.projectId }, `test-${testInfo.testId}-${world.generation}`);
+    const db = getFirestore(app);
+    db.settings({ host: `${host}:${port}`, ssl: false });
+    try {
+      await use(db);
+    } finally {
+      await deleteApp(app);
+    }
+  },
+});
+
+// tests/example.spec.ts
+import { expect } from '@playwright/test';
+import { test } from './fixtures';
+
+test('the page sees data written through the Admin app', async ({ db, world, page }) => {
+  await db.doc('items/a').set({ title: 'hello' });
+  await page.goto(`http://localhost:3000/?firestore=${encodeURIComponent(world.endpoints.firestore!.url)}`);
+  await expect(page.getByText('hello')).toBeVisible();
+});
+```
+
+Clients that read their emulator host from the environment, such as Admin Auth, cannot be pointed at a world through a named app. Run that code with `world.run()`, which passes `world.environment` to the child process. A page under test needs the world's endpoints from the current generation, so pass them in after `reset()`.
 
 ## Inspect a world in the UI
 

@@ -508,3 +508,17 @@ test("combine: a side without ttl, rearm or calibration does not crash, equal bo
   assert.deepEqual([mixedBounds.lastHitMs, mixedBounds.firstMissMs], [9400, 9900]);
   assert.equal(mixedBounds.verdict, "window");
 });
+
+test("calibration: one missing side of the forwarded-GET comparison is no-data, and an empty window keeps strict nulls", () => {
+  const onlyFresh = judgeRun(base.records.filter((r) => r.id !== "C0d")).answers.calibration;
+  assert.equal(onlyFresh.latencyClassesHold, "no-data");
+  assert.equal(onlyFresh.forwardedGetMs.dedicated, null);
+  const onlyDedicated = judgeRun(base.records.filter((r) => r.id !== "C0f")).answers.calibration;
+  assert.equal(onlyDedicated.latencyClassesHold, "no-data");
+  assert.equal(onlyDedicated.forwardedGetMs.fresh, null);
+  const none = {
+    answers: { ttl: { cells: [], lastHitMs: null, firstMissMs: null, verdict: "no-data" } },
+  };
+  const merged = combineRuns(none, none).ttl;
+  assert.ok(merged.lastHitMs === null && merged.firstMissMs === null);
+});

@@ -11,8 +11,12 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 ### Added
 
 - Pub/Sub: `pubsub.restNegativeCache` (`"off"` by default; `"production"` is an explicit opt-in under the strict profile) repeats a REST `404` for a subscription or snapshot for about 9.6 s after a real `404` on the same resource, as the production frontend does. The rule is provisional and `productionExact` does not turn it on.
-
+- `fireemu config lint` lists the settings a configuration sets that are accepted but have no effect, with the same text as the start-up `note:` lines and from the same list of keys. `--deny-ineffective` makes the command exit 1 when any such setting is present, so a CI job can fail on one; `--allow <key>` (repeatable, `prefix.*` allowed) and `--allow-file <path>` name the ones to keep on purpose, and an entry that names no configuration key is a usage error.
 - Hosting: the strict profile (the default) answers a compressible file with `Content-Encoding: gzip` when the request accepts `gzip`, as production did in both recordings (the file's own `ETag`, `Vary: x-fh-requested-host, accept-encoding`, and the recorded length for the corpus file; an image is left alone). A request that accepts only `br` gets the file as it is: Brotli stays a declared difference (`KD-COMPRESSION` now names the four Brotli rows only, and 18 of the 201 compared rows carry a known difference, down from 21). Files from one byte to 32 MiB are compressed; ranges, `304`s and generated answers are not, and neither is a file whose `headers` rule sets `Content-Encoding` (a precompressed `*.br` file keeps its bytes and the rule's header). This adds the `flate2` crate (pure-Rust `miniz_oxide` backend, owner decision).
+
+### Fixed
+
+- Dependencies: rustix is updated to 1.1.6 for RUSTSEC-2026-0486 (extended-attribute reads with a zero-length buffer).
 
 ## [0.49.0] - 2026-11-11
 

@@ -831,10 +831,12 @@ mod tests {
             if !line.trim_start().starts_with("//") && line.contains("fn ") {
                 function = line.split_once("fn ").unwrap().1.split('(').next().unwrap();
             }
-            // Schema projection/output rows and .firebaserc are not configuration readers.
+            // Schema projection/output rows, the schema leaf check of `config lint --allow` entries and
+            // .firebaserc are not configuration readers.
             if matches!(
                 function,
                 "config_schema"
+                    | "check_allow_entries"
                     | "config_show"
                     | "resolve_project_alias"
                     | "resolve_storage_rules_targets"

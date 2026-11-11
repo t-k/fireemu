@@ -50,7 +50,7 @@
         "registry+https://github.com/rust-lang/crates.io-index#hyper-util@0.1.20",
         "registry+https://github.com/rust-lang/crates.io-index#hyper@1.11.0",
         "registry+https://github.com/rust-lang/crates.io-index#prost@0.13.5",
-        "registry+https://github.com/rust-lang/crates.io-index#rustix@1.1.4",
+        "registry+https://github.com/rust-lang/crates.io-index#rustix@1.1.6",
         "registry+https://github.com/rust-lang/crates.io-index#serde_json@1.0.151",
         "registry+https://github.com/rust-lang/crates.io-index#tokio-stream@0.1.19",
         "registry+https://github.com/rust-lang/crates.io-index#tokio@1.53.3"
@@ -372,7 +372,7 @@
       "manifest": "crates/fireemu-export-publication/Cargo.toml",
       "features": [],
       "dependencies": [
-        "registry+https://github.com/rust-lang/crates.io-index#rustix@1.1.4"
+        "registry+https://github.com/rust-lang/crates.io-index#rustix@1.1.6"
       ]
     },
     {
@@ -440,7 +440,7 @@
         "registry+https://github.com/rust-lang/crates.io-index#libc@0.2.189",
         "registry+https://github.com/rust-lang/crates.io-index#md-5@0.10.6",
         "registry+https://github.com/rust-lang/crates.io-index#regex@1.13.1",
-        "registry+https://github.com/rust-lang/crates.io-index#rustix@1.1.4",
+        "registry+https://github.com/rust-lang/crates.io-index#rustix@1.1.6",
         "registry+https://github.com/rust-lang/crates.io-index#serde_json@1.0.151",
         "registry+https://github.com/rust-lang/crates.io-index#sha2@0.10.9",
         "registry+https://github.com/rust-lang/crates.io-index#tokio@1.53.3",
@@ -470,7 +470,7 @@
         "path+crates/fireemu-proto-firestore/Cargo.toml#fireemu-proto-firestore@0.49.0",
         "registry+https://github.com/rust-lang/crates.io-index#anyhow@1.0.104",
         "registry+https://github.com/rust-lang/crates.io-index#quint-connect@0.1.2",
-        "registry+https://github.com/rust-lang/crates.io-index#rustix@1.1.4",
+        "registry+https://github.com/rust-lang/crates.io-index#rustix@1.1.6",
         "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.229",
         "registry+https://github.com/rust-lang/crates.io-index#serde_json@1.0.151",
         "registry+https://github.com/rust-lang/crates.io-index#sha2@0.10.9",
@@ -805,7 +805,7 @@
         "registry+https://github.com/rust-lang/crates.io-index#ipnet@2.12.2",
         "registry+https://github.com/rust-lang/crates.io-index#maybe-owned@0.3.4",
         "registry+https://github.com/rust-lang/crates.io-index#rustix-linux-procfs@0.1.1",
-        "registry+https://github.com/rust-lang/crates.io-index#rustix@1.1.4"
+        "registry+https://github.com/rust-lang/crates.io-index#rustix@1.1.6"
       ]
     },
     {
@@ -821,7 +821,7 @@
         "registry+https://github.com/rust-lang/crates.io-index#cap-primitives@4.0.3",
         "registry+https://github.com/rust-lang/crates.io-index#io-extras@0.19.0",
         "registry+https://github.com/rust-lang/crates.io-index#io-lifetimes@3.0.1",
-        "registry+https://github.com/rust-lang/crates.io-index#rustix@1.1.4"
+        "registry+https://github.com/rust-lang/crates.io-index#rustix@1.1.6"
       ]
     },
     {
@@ -1234,7 +1234,7 @@
       "features": [],
       "dependencies": [
         "registry+https://github.com/rust-lang/crates.io-index#io-lifetimes@2.0.4",
-        "registry+https://github.com/rust-lang/crates.io-index#rustix@1.1.4"
+        "registry+https://github.com/rust-lang/crates.io-index#rustix@1.1.6"
       ]
     },
     {
@@ -2630,13 +2630,13 @@
       ],
       "dependencies": [
         "registry+https://github.com/rust-lang/crates.io-index#once_cell@1.21.4",
-        "registry+https://github.com/rust-lang/crates.io-index#rustix@1.1.4"
+        "registry+https://github.com/rust-lang/crates.io-index#rustix@1.1.6"
       ]
     },
     {
-      "id": "registry+https://github.com/rust-lang/crates.io-index#rustix@1.1.4",
+      "id": "registry+https://github.com/rust-lang/crates.io-index#rustix@1.1.6",
       "name": "rustix",
-      "version": "1.1.4",
+      "version": "1.1.6",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "manifest": null,
       "features": [
@@ -3152,7 +3152,7 @@
         "registry+https://github.com/rust-lang/crates.io-index#fastrand@2.5.0",
         "registry+https://github.com/rust-lang/crates.io-index#getrandom@0.4.3",
         "registry+https://github.com/rust-lang/crates.io-index#once_cell@1.21.4",
-        "registry+https://github.com/rust-lang/crates.io-index#rustix@1.1.4"
+        "registry+https://github.com/rust-lang/crates.io-index#rustix@1.1.6"
       ]
     },
     {

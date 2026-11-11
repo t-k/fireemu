@@ -84,6 +84,7 @@ Two common setups run into this rule:
 
 - The normal `fireemu.toml` stays minimal. Copying a reference key into it makes that key explicit, which stops `productionExact` from switching it.
 - These keys stay commented out in the reference: keys without defaults, keys whose presence selects behavior, keys governed by `productionExact`, and keys accepted for forward compatibility that currently have no effect (marked as such in their comment).
+- `fireemu config lint --deny-ineffective` fails a CI job when the configuration sets a key that is accepted with no effect; `--allow` and `--allow-file` list the ones you keep on purpose (see [`config lint`](../../reference/cli/#config-lint)).
 - Combine `--reference` with `--profile` or `--firebase-json` when initializing. With an existing `fireemu.toml` or `fireemu.json` and neither of those options, only the reference is written.
 - Existing output files require `--force` to replace.
 

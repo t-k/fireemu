@@ -7,6 +7,7 @@ import {
   maskText,
   projectAnswer,
   projectHeaders,
+  projectRecording,
   refuseUnmaskedNumbers,
   shapeOfValue,
   timingsOf,
@@ -160,4 +161,82 @@ test("timings are the first start from creation, the gaps, and offsets from the 
 test("a digest depends on every byte of the value", () => {
   assert.notEqual(digestOf({ a: 1 }), digestOf({ a: 2 }));
   assert.equal(digestOf({ a: 1 }), digestOf({ a: 1 }));
+});
+
+test("a time in a message keeps its zone kind: Z or an offset", () => {
+  assert.equal(
+    maskText("at 2026-11-11T09:01:37.5-08:00", { messageTimes: true }),
+    "at TIME(offset)",
+  );
+  assert.equal(maskText("at 2026-11-11T09:01:37.5Z", { messageTimes: true }), "at TIME(Z)");
+});
+
+test("a header with no value is not a fixed header, and a missing content-length is null", () => {
+  const projected = projectHeaders(
+    { "content-type": null, "user-agent": "Google-Cloud-Tasks" },
+    {},
+  );
+  assert.deepEqual(projected.fixed, { "user-agent": "Google-Cloud-Tasks" });
+  assert.equal(projected.contentLength, null);
+  assert.equal(projected.queueName, "");
+});
+
+test("a recording's offsets are from its earliest delivery, whichever case it belongs to", () => {
+  const delivery = (startedAt) => ({
+    startedAt,
+    endedAt: startedAt,
+    startMs: 0,
+    endMs: 0,
+    startFromCreateMs: 5,
+    retryCount: 0,
+    request: { method: "POST", path: "/", headers: {}, bodyLength: 0, bodyText: null },
+    context: {
+      retryCount: 0,
+      executionCount: 0,
+      previousResponse: null,
+      retryReason: null,
+      hasAuth: false,
+    },
+  });
+  const result = {
+    judged: {
+      cases: {
+        a: {
+          kind: "create",
+          sent: true,
+          answer: null,
+          deliveries: [delivery("2026-11-11T00:00:12.000Z")],
+        },
+        b: {
+          kind: "create",
+          sent: true,
+          answer: null,
+          deliveries: [delivery("2026-11-11T00:00:10.000Z")],
+        },
+      },
+    },
+  };
+  const projected = projectRecording({
+    result,
+    alias: "x",
+    corpusSha256: "c",
+    projectNumber: null,
+  });
+  assert.deepEqual(projected.cases.a.timing.startsAtMs, [2000]);
+  assert.deepEqual(projected.cases.b.timing.startsAtMs, [0]);
+  assert.equal(projected.cases.a.admission, null);
+});
+
+test("the body of a FULL view task is decoded and masked as text", () => {
+  const body = Buffer.from(
+    '{"run":"tqrun-0123456789abcdef","at":"2026-11-11T00:00:00.25Z"}',
+  ).toString("base64");
+  const answer = projectAnswer(
+    { status: 200, json: { name: "n", httpRequest: { body, url: "u" } } },
+    {},
+  );
+  assert.deepEqual(answer.body.httpRequest.body, {
+    base64Of: '{"run":"tqrun-RUN","at":"TIME(f2,Z)"}',
+  });
+  assert.equal(answer.body.httpRequest.url, "u");
 });

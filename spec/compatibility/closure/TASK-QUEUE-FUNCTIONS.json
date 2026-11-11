@@ -48,13 +48,68 @@
       "recipeIds": [
         "task-queue/create-answer-shape"
       ],
-      "status": "PLANNED",
+      "status": "VERIFIED",
       "corpusSteps": [
         "env-default",
         "env-named",
         "env-view-full"
       ],
-      "productionEvidence": []
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/task-queue-production-pass-1.json",
+          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/task-queue-production-pass-2.json",
+          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+        }
+      ],
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 3,
+          "counts": {
+            "MATCH": 2,
+            "MATCH_LAYOUT": 1,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass1": {
+          "rows": 3,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 3,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass2": {
+          "rows": 3,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 3,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        }
+      },
+      "knownDifferences": [
+        "KD-LOCAL-PATH",
+        "KD-LOCAL-URL",
+        "KD-OIDC-TOKEN",
+        "KD-PLATFORM-HEADERS"
+      ],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      }
     },
     {
       "conditionId": "TASK-QUEUE-FUNCTIONS/create-errors-shape",
@@ -63,7 +118,7 @@
       "recipeIds": [
         "task-queue/create-errors-shape"
       ],
-      "status": "PLANNED",
+      "status": "VERIFIED",
       "corpusSteps": [
         "err-no-task",
         "err-no-http",
@@ -107,7 +162,63 @@
         "pw-36",
         "queue-absent"
       ],
-      "productionEvidence": []
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/task-queue-production-pass-1.json",
+          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/task-queue-production-pass-2.json",
+          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+        }
+      ],
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 41,
+          "counts": {
+            "MATCH": 38,
+            "MATCH_LAYOUT": 3,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass1": {
+          "rows": 41,
+          "counts": {
+            "MATCH": 32,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 9,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass2": {
+          "rows": 41,
+          "counts": {
+            "MATCH": 32,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 9,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        }
+      },
+      "knownDifferences": [
+        "KD-LOCAL-PATH",
+        "KD-LOCAL-URL",
+        "KD-OIDC-TOKEN",
+        "KD-PLATFORM-HEADERS",
+        "KD-QUEUE-READS"
+      ],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      }
     },
     {
       "conditionId": "TASK-QUEUE-FUNCTIONS/task-id-validation",
@@ -116,7 +227,7 @@
       "recipeIds": [
         "task-queue/task-id-validation"
       ],
-      "status": "PLANNED",
+      "status": "VERIFIED",
       "corpusSteps": [
         "id-space",
         "id-slash",
@@ -164,7 +275,62 @@
         "pw-35",
         "pw-36"
       ],
-      "productionEvidence": []
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/task-queue-production-pass-1.json",
+          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/task-queue-production-pass-2.json",
+          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+        }
+      ],
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 45,
+          "counts": {
+            "MATCH": 40,
+            "MATCH_LAYOUT": 5,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass1": {
+          "rows": 45,
+          "counts": {
+            "MATCH": 35,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 10,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass2": {
+          "rows": 45,
+          "counts": {
+            "MATCH": 35,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 10,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        }
+      },
+      "knownDifferences": [
+        "KD-LOCAL-PATH",
+        "KD-LOCAL-URL",
+        "KD-OIDC-TOKEN",
+        "KD-PLATFORM-HEADERS"
+      ],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      }
     },
     {
       "conditionId": "TASK-QUEUE-FUNCTIONS/dedup-live",
@@ -173,7 +339,7 @@
       "recipeIds": [
         "task-queue/dedup-live"
       ],
-      "status": "PLANNED",
+      "status": "VERIFIED",
       "corpusSteps": [
         "dup-first",
         "dup-sched",
@@ -182,7 +348,63 @@
         "del-dup-sched",
         "dup-other-queue"
       ],
-      "productionEvidence": []
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/task-queue-production-pass-1.json",
+          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/task-queue-production-pass-2.json",
+          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+        }
+      ],
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 6,
+          "counts": {
+            "MATCH": 4,
+            "MATCH_LAYOUT": 2,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass1": {
+          "rows": 6,
+          "counts": {
+            "MATCH": 2,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 4,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass2": {
+          "rows": 6,
+          "counts": {
+            "MATCH": 2,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 4,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        }
+      },
+      "knownDifferences": [
+        "KD-LOCAL-PATH",
+        "KD-LOCAL-URL",
+        "KD-OIDC-TOKEN",
+        "KD-PLATFORM-HEADERS",
+        "KD-QUEUE-READS"
+      ],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      }
     },
     {
       "conditionId": "TASK-QUEUE-FUNCTIONS/dedup-after-completion",
@@ -191,14 +413,70 @@
       "recipeIds": [
         "task-queue/dedup-after-completion"
       ],
-      "status": "PLANNED",
+      "status": "VERIFIED",
       "corpusSteps": [
         "dup-first",
         "dup-sched-after-delete",
         "dup-first-after-done",
         "get-dup-first"
       ],
-      "productionEvidence": []
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/task-queue-production-pass-1.json",
+          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/task-queue-production-pass-2.json",
+          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+        }
+      ],
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 4,
+          "counts": {
+            "MATCH": 3,
+            "MATCH_LAYOUT": 1,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass1": {
+          "rows": 4,
+          "counts": {
+            "MATCH": 2,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 2,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass2": {
+          "rows": 4,
+          "counts": {
+            "MATCH": 2,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 2,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        }
+      },
+      "knownDifferences": [
+        "KD-LOCAL-PATH",
+        "KD-LOCAL-URL",
+        "KD-OIDC-TOKEN",
+        "KD-PLATFORM-HEADERS",
+        "KD-QUEUE-READS"
+      ],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      }
     },
     {
       "conditionId": "TASK-QUEUE-FUNCTIONS/dedup-window-expiry",
@@ -207,10 +485,22 @@
       "recipeIds": [
         "task-queue/dedup-window-expiry"
       ],
-      "status": "PLANNED",
+      "status": "NOT_COMPARED",
       "stage": 2,
       "note": "Planned, not built in stage 1.",
-      "productionEvidence": []
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/task-queue-production-pass-1.json",
+          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/task-queue-production-pass-2.json",
+          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+        }
+      ],
+      "reason": "The end of the reuse window was not observed: the window is documented as about one hour and strict under productionExact refuses a name for 3600 seconds after it finished or was deleted. A stage 2 packet of about 70 minutes would record the expiry; stage 1 leaves the refusal inside the window recorded, so the packet is recommended against unless the coordinator wants the length measured (ruling 4)."
     },
     {
       "conditionId": "TASK-QUEUE-FUNCTIONS/schedule-time-boundaries",
@@ -219,7 +509,7 @@
       "recipeIds": [
         "task-queue/schedule-time-boundaries"
       ],
-      "status": "PLANNED",
+      "status": "VERIFIED",
       "corpusSteps": [
         "sch-past",
         "sch-now",
@@ -269,7 +559,62 @@
         "pw-35",
         "pw-36"
       ],
-      "productionEvidence": []
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/task-queue-production-pass-1.json",
+          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/task-queue-production-pass-2.json",
+          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+        }
+      ],
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 47,
+          "counts": {
+            "MATCH": 42,
+            "MATCH_LAYOUT": 5,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass1": {
+          "rows": 47,
+          "counts": {
+            "MATCH": 34,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 13,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass2": {
+          "rows": 47,
+          "counts": {
+            "MATCH": 34,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 13,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        }
+      },
+      "knownDifferences": [
+        "KD-LOCAL-PATH",
+        "KD-LOCAL-URL",
+        "KD-OIDC-TOKEN",
+        "KD-PLATFORM-HEADERS"
+      ],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      }
     },
     {
       "conditionId": "TASK-QUEUE-FUNCTIONS/schedule-delay-and-eta",
@@ -278,12 +623,67 @@
       "recipeIds": [
         "task-queue/schedule-delay-and-eta"
       ],
-      "status": "PLANNED",
+      "status": "VERIFIED",
       "corpusSteps": [
         "sch-past",
         "sch-20s"
       ],
-      "productionEvidence": []
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/task-queue-production-pass-1.json",
+          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/task-queue-production-pass-2.json",
+          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+        }
+      ],
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 2,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 2,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass1": {
+          "rows": 2,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 2,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass2": {
+          "rows": 2,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 2,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        }
+      },
+      "knownDifferences": [
+        "KD-LOCAL-PATH",
+        "KD-LOCAL-URL",
+        "KD-OIDC-TOKEN",
+        "KD-PLATFORM-HEADERS"
+      ],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      }
     },
     {
       "conditionId": "TASK-QUEUE-FUNCTIONS/dispatch-deadline",
@@ -292,7 +692,7 @@
       "recipeIds": [
         "task-queue/dispatch-deadline"
       ],
-      "status": "PLANNED",
+      "status": "VERIFIED",
       "corpusSteps": [
         "dead-15",
         "dl-14s",
@@ -340,7 +740,62 @@
         "pw-35",
         "pw-36"
       ],
-      "productionEvidence": []
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/task-queue-production-pass-1.json",
+          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/task-queue-production-pass-2.json",
+          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+        }
+      ],
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 45,
+          "counts": {
+            "MATCH": 39,
+            "MATCH_LAYOUT": 6,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass1": {
+          "rows": 45,
+          "counts": {
+            "MATCH": 32,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 13,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass2": {
+          "rows": 45,
+          "counts": {
+            "MATCH": 32,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 13,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        }
+      },
+      "knownDifferences": [
+        "KD-LOCAL-PATH",
+        "KD-LOCAL-URL",
+        "KD-OIDC-TOKEN",
+        "KD-PLATFORM-HEADERS"
+      ],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      }
     },
     {
       "conditionId": "TASK-QUEUE-FUNCTIONS/body-and-header-limits",
@@ -349,14 +804,69 @@
       "recipeIds": [
         "task-queue/body-and-header-limits"
       ],
-      "status": "PLANNED",
+      "status": "VERIFIED",
       "corpusSteps": [
         "env-headers",
         "env-large",
         "size-1000k",
         "size-1100k"
       ],
-      "productionEvidence": []
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/task-queue-production-pass-1.json",
+          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/task-queue-production-pass-2.json",
+          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+        }
+      ],
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 4,
+          "counts": {
+            "MATCH": 2,
+            "MATCH_LAYOUT": 2,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass1": {
+          "rows": 4,
+          "counts": {
+            "MATCH": 1,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 3,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass2": {
+          "rows": 4,
+          "counts": {
+            "MATCH": 1,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 3,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        }
+      },
+      "knownDifferences": [
+        "KD-LOCAL-PATH",
+        "KD-LOCAL-URL",
+        "KD-OIDC-TOKEN",
+        "KD-PLATFORM-HEADERS"
+      ],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      }
     },
     {
       "conditionId": "TASK-QUEUE-FUNCTIONS/dispatch-envelope-headers",
@@ -365,14 +875,69 @@
       "recipeIds": [
         "task-queue/dispatch-envelope-headers"
       ],
-      "status": "PLANNED",
+      "status": "VERIFIED",
       "corpusSteps": [
         "retry-ladder",
         "env-default",
         "env-named",
         "env-headers"
       ],
-      "productionEvidence": []
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/task-queue-production-pass-1.json",
+          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/task-queue-production-pass-2.json",
+          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+        }
+      ],
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 4,
+          "counts": {
+            "MATCH": 1,
+            "MATCH_LAYOUT": 3,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass1": {
+          "rows": 4,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 4,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass2": {
+          "rows": 4,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 4,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        }
+      },
+      "knownDifferences": [
+        "KD-LOCAL-PATH",
+        "KD-LOCAL-URL",
+        "KD-OIDC-TOKEN",
+        "KD-PLATFORM-HEADERS"
+      ],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      }
     },
     {
       "conditionId": "TASK-QUEUE-FUNCTIONS/dispatch-envelope-body",
@@ -381,7 +946,7 @@
       "recipeIds": [
         "task-queue/dispatch-envelope-body"
       ],
-      "status": "PLANNED",
+      "status": "VERIFIED",
       "corpusSteps": [
         "env-default",
         "env-utf8",
@@ -389,7 +954,62 @@
         "env-minimal",
         "env-large"
       ],
-      "productionEvidence": []
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/task-queue-production-pass-1.json",
+          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/task-queue-production-pass-2.json",
+          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+        }
+      ],
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 5,
+          "counts": {
+            "MATCH": 1,
+            "MATCH_LAYOUT": 4,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass1": {
+          "rows": 5,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 5,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass2": {
+          "rows": 5,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 5,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        }
+      },
+      "knownDifferences": [
+        "KD-LOCAL-PATH",
+        "KD-LOCAL-URL",
+        "KD-OIDC-TOKEN",
+        "KD-PLATFORM-HEADERS"
+      ],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      }
     },
     {
       "conditionId": "TASK-QUEUE-FUNCTIONS/task-name-generation",
@@ -398,11 +1018,66 @@
       "recipeIds": [
         "task-queue/task-name-generation"
       ],
-      "status": "PLANNED",
+      "status": "VERIFIED",
       "corpusSteps": [
         "env-default"
       ],
-      "productionEvidence": []
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/task-queue-production-pass-1.json",
+          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/task-queue-production-pass-2.json",
+          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+        }
+      ],
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 1,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 1,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass1": {
+          "rows": 1,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 1,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass2": {
+          "rows": 1,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 1,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        }
+      },
+      "knownDifferences": [
+        "KD-LOCAL-PATH",
+        "KD-LOCAL-URL",
+        "KD-OIDC-TOKEN",
+        "KD-PLATFORM-HEADERS"
+      ],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      }
     },
     {
       "conditionId": "TASK-QUEUE-FUNCTIONS/queue-config-mapping",
@@ -411,7 +1086,7 @@
       "recipeIds": [
         "task-queue/queue-config-mapping"
       ],
-      "status": "PLANNED",
+      "status": "NOT_COMPARED",
       "corpusSteps": [
         "queue-tqdef",
         "queue-tqretry",
@@ -422,7 +1097,19 @@
         "queue-tqrate",
         "queue-tqdead"
       ],
-      "productionEvidence": []
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/task-queue-production-pass-1.json",
+          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/task-queue-production-pass-2.json",
+          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+        }
+      ],
+      "reason": "The queue settings are read back with getQueue, which is the Cloud Tasks queue management API: neither fireemu nor the official emulator serves it (coordinator ruling 3). The settings read from production are recorded in both recordings (the queue-* cases) and their effects are compared by retry-backoff-schedule, retry-limits and max-concurrent-dispatches."
     },
     {
       "conditionId": "TASK-QUEUE-FUNCTIONS/retry-on-status",
@@ -431,12 +1118,67 @@
       "recipeIds": [
         "task-queue/retry-on-status"
       ],
-      "status": "PLANNED",
+      "status": "VERIFIED",
       "corpusSteps": [
         "retry-ladder",
         "dead-15"
       ],
-      "productionEvidence": []
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/task-queue-production-pass-1.json",
+          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/task-queue-production-pass-2.json",
+          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+        }
+      ],
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 2,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 2,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass1": {
+          "rows": 2,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 2,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass2": {
+          "rows": 2,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 2,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        }
+      },
+      "knownDifferences": [
+        "KD-LOCAL-PATH",
+        "KD-LOCAL-URL",
+        "KD-OIDC-TOKEN",
+        "KD-PLATFORM-HEADERS"
+      ],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      }
     },
     {
       "conditionId": "TASK-QUEUE-FUNCTIONS/retry-backoff-schedule",
@@ -445,12 +1187,67 @@
       "recipeIds": [
         "task-queue/retry-backoff-schedule"
       ],
-      "status": "PLANNED",
+      "status": "VERIFIED",
       "corpusSteps": [
         "retry-ladder",
         "retry-exhaust"
       ],
-      "productionEvidence": []
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/task-queue-production-pass-1.json",
+          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/task-queue-production-pass-2.json",
+          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+        }
+      ],
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 2,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 2,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass1": {
+          "rows": 2,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 2,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass2": {
+          "rows": 2,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 2,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        }
+      },
+      "knownDifferences": [
+        "KD-LOCAL-PATH",
+        "KD-LOCAL-URL",
+        "KD-OIDC-TOKEN",
+        "KD-PLATFORM-HEADERS"
+      ],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      }
     },
     {
       "conditionId": "TASK-QUEUE-FUNCTIONS/retry-limits",
@@ -459,13 +1256,68 @@
       "recipeIds": [
         "task-queue/retry-limits"
       ],
-      "status": "PLANNED",
+      "status": "VERIFIED",
       "corpusSteps": [
         "retry-exhaust",
         "limit-two",
         "window-six"
       ],
-      "productionEvidence": []
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/task-queue-production-pass-1.json",
+          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/task-queue-production-pass-2.json",
+          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+        }
+      ],
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 3,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 3,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass1": {
+          "rows": 3,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 3,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass2": {
+          "rows": 3,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 3,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        }
+      },
+      "knownDifferences": [
+        "KD-LOCAL-PATH",
+        "KD-LOCAL-URL",
+        "KD-OIDC-TOKEN",
+        "KD-PLATFORM-HEADERS"
+      ],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      }
     },
     {
       "conditionId": "TASK-QUEUE-FUNCTIONS/max-concurrent-dispatches",
@@ -474,7 +1326,7 @@
       "recipeIds": [
         "task-queue/max-concurrent-dispatches"
       ],
-      "status": "PLANNED",
+      "status": "VERIFIED",
       "corpusSteps": [
         "conc1-a",
         "conc1-b",
@@ -486,7 +1338,62 @@
         "conc2-d",
         "conc2-e"
       ],
-      "productionEvidence": []
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/task-queue-production-pass-1.json",
+          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/task-queue-production-pass-2.json",
+          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+        }
+      ],
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 9,
+          "counts": {
+            "MATCH": 6,
+            "MATCH_LAYOUT": 3,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass1": {
+          "rows": 9,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 9,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass2": {
+          "rows": 9,
+          "counts": {
+            "MATCH": 0,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 9,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        }
+      },
+      "knownDifferences": [
+        "KD-LOCAL-PATH",
+        "KD-LOCAL-URL",
+        "KD-OIDC-TOKEN",
+        "KD-PLATFORM-HEADERS"
+      ],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      }
     },
     {
       "conditionId": "TASK-QUEUE-FUNCTIONS/max-dispatches-per-second",
@@ -495,7 +1402,7 @@
       "recipeIds": [
         "task-queue/max-dispatches-per-second"
       ],
-      "status": "PLANNED",
+      "status": "NOT_COMPARED",
       "corpusSteps": [
         "rate-a",
         "rate-b",
@@ -506,7 +1413,19 @@
         "rate-g",
         "rate-h"
       ],
-      "productionEvidence": []
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/task-queue-production-pass-1.json",
+          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/task-queue-production-pass-2.json",
+          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+        }
+      ],
+      "reason": "The program sent the eight tasks of the rate queue about 1.4 seconds apart in both production runs, so the limit never held a task back and no spacing or burst was observed; the local limiter spaces them one second apart. Rate and burst are not claimed (the rate cases carry no timing claim)."
     },
     {
       "conditionId": "TASK-QUEUE-FUNCTIONS/delete-task",
@@ -515,7 +1434,7 @@
       "recipeIds": [
         "task-queue/delete-task"
       ],
-      "status": "PLANNED",
+      "status": "VERIFIED",
       "corpusSteps": [
         "get-dup-sched",
         "del-dup-sched",
@@ -524,7 +1443,59 @@
         "get-dup-first",
         "del-dup-first"
       ],
-      "productionEvidence": []
+      "productionEvidence": [
+        {
+          "alias": "pass-1",
+          "fixturePath": "conformance/task-queue-production-pass-1.json",
+          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+        },
+        {
+          "alias": "pass-2",
+          "fixturePath": "conformance/task-queue-production-pass-2.json",
+          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+        }
+      ],
+      "observedPasses": 2,
+      "passComparison": "MATCH",
+      "comparisons": {
+        "runVsRun": {
+          "rows": 6,
+          "counts": {
+            "MATCH": 6,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 0,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass1": {
+          "rows": 6,
+          "counts": {
+            "MATCH": 4,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 2,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        },
+        "strictVsPass2": {
+          "rows": 6,
+          "counts": {
+            "MATCH": 4,
+            "MATCH_LAYOUT": 0,
+            "KNOWN_DIFFERENCE": 2,
+            "MISMATCH": 0,
+            "UNKNOWN": 0
+          }
+        }
+      },
+      "knownDifferences": [
+        "KD-QUEUE-READS"
+      ],
+      "profiles": {
+        "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+        "emulator": "NO_PRODUCTION_CLAIM"
+      }
     },
     {
       "conditionId": "TASK-QUEUE-FUNCTIONS/local-controls",
@@ -606,20 +1577,97 @@
   "judge": "conformance/src/task-queue-production/record/judge.mjs",
   "fixture": "conformance/task-queue-functions/functions/index.js",
   "recordingPolicy": {
-    "observedPasses": 0,
+    "observedPasses": 2,
     "requiredPasses": 2,
     "waiver": null
   },
-  "recordings": [],
+  "recordings": [
+    {
+      "alias": "pass-1",
+      "run": "47574c",
+      "envelope": "TASK-QUEUE-20261111-01",
+      "fixturePath": "conformance/task-queue-production-pass-1.json",
+      "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9",
+      "corpusSha256": "899fd699884992c7f96f8437d749237f16bbeafcc75ee5d41683373a741579e9",
+      "recorderRequests": 230,
+      "observationComplete": true,
+      "findings": 0
+    },
+    {
+      "alias": "pass-2",
+      "run": "b01fa6",
+      "envelope": "TASK-QUEUE-20261111-02",
+      "fixturePath": "conformance/task-queue-production-pass-2.json",
+      "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb",
+      "corpusSha256": "899fd699884992c7f96f8437d749237f16bbeafcc75ee5d41683373a741579e9",
+      "recorderRequests": 230,
+      "observationComplete": true,
+      "findings": 0
+    }
+  ],
   "limitations": [
-    "No production observation exists yet: every production-parity condition is PLANNED, not VERIFIED.",
+    "Two production recordings (stage 1) back the verified conditions; the parent stays IMPLEMENTING until an independent review approves the record.",
     "The in-memory Cloud Tasks of the recorder's tests is a model of documented rules, not an observation; no judge accepts a shape from it.",
     "A queue id cannot be created again for days after a delete (400 'existed too recently', measured 2026-11-07), so each attempt of a recording needs new function ids and a failed attempt costs a deploy.",
-    "The task reuse window is documented as about one hour and is UNRECORDED; its expiry is a stage 2 packet."
+    "The reuse window of a task id is refused for 3600 seconds under strict productionExact (documented as about one hour); its expiry was not observed.",
+    "The production default queue retries 100 times; fireemu's strict profile keeps the retry configuration the function declares and the official emulator's default for one that declares none (a known difference, not a claim)."
   ],
   "outOfScope": [
     "Production deployment parity of task queue functions beyond the queue settings.",
     "No condition is promoted from official-emulator behaviour or documentation alone."
   ],
-  "followUps": []
+  "followUps": [],
+  "comparisons": {
+    "runVsRun": {
+      "path": "conformance/task-queue-production-run-comparison.json",
+      "sha256": "f9983431af553685626105c983e0861ccb58c2b1d1ae623a32d504483d5566af",
+      "rows": 122,
+      "summary": {
+        "MATCH": 90,
+        "MATCH_LAYOUT": 32,
+        "KNOWN_DIFFERENCE": 0,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      }
+    },
+    "strictVsPass1": {
+      "path": "conformance/task-queue-production-strict-vs-pass-1.json",
+      "sha256": "32422527f3af1610a4df5a17a5779632bf29b4c7a045ef1b34bbde084666dfa2",
+      "rows": 122,
+      "summary": {
+        "MATCH": 57,
+        "MATCH_LAYOUT": 0,
+        "KNOWN_DIFFERENCE": 65,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      }
+    },
+    "strictVsPass2": {
+      "path": "conformance/task-queue-production-strict-vs-pass-2.json",
+      "sha256": "cc697e8462aff29f13a89565eba7fb2bc788387ae27f7b9ae42b7ee860d12da4",
+      "rows": 122,
+      "summary": {
+        "MATCH": 57,
+        "MATCH_LAYOUT": 0,
+        "KNOWN_DIFFERENCE": 65,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      }
+    },
+    "localStrictReplay": {
+      "path": "conformance/task-queue-production-local-strict.json",
+      "sha256": "c987e80b0c1e58fc2cb9ca4dea1543582bb44a149f64c9499d23490d329c2919"
+    }
+  },
+  "knownDifferences": {
+    "path": "conformance/src/task-queue-production/known-differences.mjs",
+    "sha256": "773e245e11f824650691b2a4e6cb94519d4c7938e685cec3183e405bb8b9d1f7",
+    "entries": [
+      "KD-LOCAL-URL",
+      "KD-QUEUE-READS",
+      "KD-OIDC-TOKEN",
+      "KD-PLATFORM-HEADERS",
+      "KD-LOCAL-PATH"
+    ]
+  }
 }

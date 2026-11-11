@@ -368,3 +368,96 @@ test("every known difference cites a ruling and a text, and the no-claim set hol
   for (const key of NO_TIMING_CLAIM)
     assert.match(key, /^(conc1-[a-d]|conc2-[a-e]|rate-[a-h]|window-six)$/);
 });
+
+test("the attempt-count jitter bound is inclusive", () => {
+  const many = (n) =>
+    record({
+      deliveries: Array.from({ length: n }, () => delivery()),
+      timing: timing(100, Array(n - 1).fill(1000)),
+    });
+  const result = compareProjections(projection({ w: many(4) }), projection({ w: many(7) }), {
+    attemptJitter: { w: 3 },
+  });
+  assert.equal(result.rows[0].structure, "MATCH_LAYOUT");
+});
+
+test("a hide hook of other cases does not cover a case it does not name", () => {
+  const kd = {
+    id: "KD-H",
+    part: "deliveries",
+    cases: ["b"],
+    paths: [],
+    ruling: 3,
+    what: "w",
+    hide(d) {
+      d.request.headers.names = [];
+      return true;
+    },
+  };
+  const right = record({
+    deliveries: [
+      delivery({
+        request: {
+          ...delivery().request,
+          headers: { ...delivery().request.headers, names: ["x"] },
+        },
+      }),
+    ],
+  });
+  assert.equal(
+    verdictOf({ a: record() }, { a: right }, { knownDifferences: [kd] }).structure,
+    "MISMATCH",
+  );
+  assert.equal(
+    verdictOf({ b: record() }, { b: right }, { knownDifferences: [kd] }).structure,
+    "KNOWN_DIFFERENCE",
+  );
+});
+
+test("the layout rules take exactly the recorded forms: ETA digits 3 to 7 and ids of 19 or 20 digits", () => {
+  const withForms = (eta, id, bodyName) =>
+    record({
+      admission: { status: 200, body: { name: bodyName }, shape: { name: "string" } },
+      deliveries: [
+        delivery({
+          request: {
+            ...delivery().request,
+            headers: { ...delivery().request.headers, eta, taskName: id },
+          },
+        }),
+      ],
+    });
+  const base = (eta, id, name) => withForms(eta, id, name);
+  const one = "projects/p/tasks/ID(19)";
+  for (const eta of ["UNIX(f3)", "UNIX(f7)"])
+    assert.equal(
+      verdictOf({ a: base("UNIX(f5)", "ID(19)", one) }, { a: base(eta, "ID(19)", one) }).structure,
+      "MATCH_LAYOUT",
+      eta,
+    );
+  for (const eta of ["UNIX(f2)", "UNIX(f8)"])
+    assert.equal(
+      verdictOf({ a: base("UNIX(f5)", "ID(19)", one) }, { a: base(eta, "ID(19)", one) }).structure,
+      "MISMATCH",
+      eta,
+    );
+  assert.equal(
+    verdictOf(
+      { a: base("UNIX(f5)", "ID(19)", one) },
+      { a: base("UNIX(f5)", "ID(20)", "projects/p/tasks/ID(20)") },
+    ).structure,
+    "MATCH_LAYOUT",
+  );
+  assert.equal(
+    verdictOf({ a: base("UNIX(f5)", "ID(19)", one) }, { a: base("UNIX(f5)", "ID(21)", one) })
+      .structure,
+    "MISMATCH",
+  );
+  assert.equal(
+    verdictOf(
+      { a: base("UNIX(f5)", "ID(19)", one) },
+      { a: base("UNIX(f5)", "ID(19)", "projects/p/tasks/ID(21)") },
+    ).structure,
+    "MISMATCH",
+  );
+});

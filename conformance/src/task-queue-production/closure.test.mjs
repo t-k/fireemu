@@ -1,10 +1,10 @@
 // The TASK-QUEUE-FUNCTIONS closure record at the IMPLEMENTING stage: its structure, its scope, the pin of the program, and
-// that it claims nothing that has not been observed. When a recording is made, the checks that name `PLANNED` and an empty
-// `recordings` change with it.
+// that it claims only what the two recordings and the committed comparisons show.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { applyEvidence } from "./closure-evidence.mjs";
 import { CONDITION_IDS, PROGRAM, corpusManifest } from "./corpus.mjs";
 import { PROJECT, REGION } from "./plan.mjs";
 
@@ -14,7 +14,7 @@ const record = JSON.parse(await readFile(new URL(path, root), "utf8"));
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const isText = (value) => typeof value === "string" && value.trim().length > 0;
 
-test("the record is the implementing parent on the events sandbox and nothing is verified", () => {
+test("the record is the implementing parent on the events sandbox, verified only where two recordings back it", () => {
   assert.equal(record.parent, "TASK-QUEUE-FUNCTIONS");
   assert.equal(record.parentStatus, "IMPLEMENTING");
   assert.equal(record.inventoryStatus, "PROPOSED");
@@ -27,13 +27,50 @@ test("the record is the implementing parent on the events sandbox and nothing is
   });
   assert.equal(record.closureReview, undefined, "no review has approved it");
   assert.equal(record.integratedRegression, undefined);
-  assert.deepEqual(record.recordings, []);
-  assert.deepEqual(record.recordingPolicy, { observedPasses: 0, requiredPasses: 2, waiver: null });
+  assert.deepEqual(record.recordingPolicy, { observedPasses: 2, requiredPasses: 2, waiver: null });
+  assert.deepEqual(
+    record.recordings.map((r) => [
+      r.alias,
+      r.envelope,
+      r.recorderRequests,
+      r.observationComplete,
+      r.findings,
+    ]),
+    [
+      ["pass-1", "TASK-QUEUE-20261111-01", 230, true, 0],
+      ["pass-2", "TASK-QUEUE-20261111-02", 230, true, 0],
+    ],
+  );
+  for (const r of record.recordings) assert.equal(r.corpusSha256, record.corpusContentSha256);
+  const notVerified = ["dedup-window-expiry", "queue-config-mapping", "max-dispatches-per-second"];
   for (const condition of record.conditions) {
-    assert.equal(condition.status, "PLANNED", condition.conditionId);
-    assert.deepEqual(condition.productionEvidence, [], condition.conditionId);
+    const name = condition.conditionId.split("/")[1];
+    const expected = notVerified.includes(name)
+      ? "NOT_COMPARED"
+      : condition.evidenceType === "production-parity"
+        ? "VERIFIED"
+        : "PLANNED";
+    assert.equal(condition.status, expected, condition.conditionId);
+    if (expected === "VERIFIED") {
+      assert.equal(condition.productionEvidence.length, 2, condition.conditionId);
+      assert.equal(condition.observedPasses, 2, condition.conditionId);
+      assert.ok(condition.knownDifferences.length > 0, condition.conditionId);
+    }
+    if (expected === "NOT_COMPARED") assert.ok(isText(condition.reason), condition.conditionId);
+    if (expected === "PLANNED")
+      assert.deepEqual(condition.productionEvidence, [], condition.conditionId);
   }
-  assert.ok(record.limitations.some((text) => /No production observation exists yet/.test(text)));
+});
+
+test("the record's evidence is what the committed recordings and comparisons derive", () => {
+  assert.deepEqual(applyEvidence(record), record);
+});
+
+test("a condition with a mismatch in its cases would not be verified", () => {
+  const broken = structuredClone(record);
+  broken.conditions[0].corpusSteps = [...broken.conditions[0].corpusSteps, "no-such-case"];
+  const derived = applyEvidence(broken);
+  assert.equal(derived.conditions[0].status, "PLANNED");
 });
 
 test("the conditions are the conditions of the program, each with a reason and the steps that serve it", () => {

@@ -36,7 +36,7 @@ const read = (path) => readFileSync(root + path);
 const json = (path) => JSON.parse(read(path));
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
-const countsOf = (rows) => {
+export const countsOf = (rows) => {
   const counts = { MATCH: 0, MATCH_LAYOUT: 0, KNOWN_DIFFERENCE: 0, MISMATCH: 0, UNKNOWN: 0 };
   for (const row of rows) counts[row.structure] += 1;
   return counts;
@@ -53,6 +53,59 @@ const comparison = (path) => {
     document,
   };
 };
+
+/**
+ * One condition's evidence from the three comparison documents (`{ document: { rows } }` each): VERIFIED when every case of the
+ * condition is found in the strict comparison and none of its rows, in any of the three, is a mismatch, an unknown or outside
+ * its timing. A condition named in NOT_COMPARED is never verified.
+ */
+export function conditionEvidence(condition, { runs, strict1, strict2 }, productionEvidence) {
+  const id = condition.conditionId;
+  const base = { ...condition };
+  for (const key of [
+    "observedPasses",
+    "passComparison",
+    "comparisons",
+    "knownDifferences",
+    "profiles",
+    "reason",
+  ])
+    delete base[key];
+  if (condition.evidenceType !== "production-parity")
+    return { ...base, status: "PLANNED", productionEvidence: [] };
+  if (NOT_COMPARED[id])
+    return { ...base, status: "NOT_COMPARED", productionEvidence, reason: NOT_COMPARED[id] };
+  const keys = new Set(condition.corpusSteps ?? []);
+  const rowsOf = (c) => c.document.rows.filter((row) => keys.has(row.case));
+  const bad = [runs, strict1, strict2]
+    .flatMap(rowsOf)
+    .filter(
+      (row) => ["MISMATCH", "UNKNOWN"].includes(row.structure) || row.timing.verdict === "OUTSIDE",
+    );
+  if (bad.length > 0 || rowsOf(strict1).length !== keys.size)
+    return { ...base, status: "PLANNED", productionEvidence };
+  const used = new Set();
+  for (const row of [...rowsOf(strict1), ...rowsOf(strict2)])
+    for (const part of Object.values(row.parts))
+      for (const kd of part.knownDifferences ?? []) used.add(kd);
+  return {
+    ...base,
+    status: "VERIFIED",
+    productionEvidence,
+    observedPasses: 2,
+    passComparison: "MATCH",
+    comparisons: {
+      runVsRun: { rows: rowsOf(runs).length, counts: countsOf(rowsOf(runs)) },
+      strictVsPass1: { rows: rowsOf(strict1).length, counts: countsOf(rowsOf(strict1)) },
+      strictVsPass2: { rows: rowsOf(strict2).length, counts: countsOf(rowsOf(strict2)) },
+    },
+    knownDifferences: [...used].toSorted(),
+    profiles: {
+      strict: "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
+      emulator: "NO_PRODUCTION_CLAIM",
+    },
+  };
+}
 
 /** The evidence derived from the committed files. */
 export function derive(record) {
@@ -104,52 +157,9 @@ export function derive(record) {
     fixturePath,
     fixtureSha256,
   }));
-  const conditions = record.conditions.map((condition) => {
-    const id = condition.conditionId;
-    const base = { ...condition };
-    for (const key of [
-      "observedPasses",
-      "passComparison",
-      "comparisons",
-      "knownDifferences",
-      "profiles",
-      "reason",
-    ])
-      delete base[key];
-    if (condition.evidenceType !== "production-parity")
-      return { ...base, status: "PLANNED", productionEvidence: [] };
-    if (NOT_COMPARED[id])
-      return { ...base, status: "NOT_COMPARED", productionEvidence, reason: NOT_COMPARED[id] };
-    const keys = new Set(condition.corpusSteps ?? []);
-    const rowsOf = (c) => c.document.rows.filter((row) => keys.has(row.case));
-    const all = [runs, strict1, strict2].flatMap(rowsOf);
-    const bad = all.filter(
-      (row) => ["MISMATCH", "UNKNOWN"].includes(row.structure) || row.timing.verdict === "OUTSIDE",
-    );
-    if (bad.length > 0 || rowsOf(strict1).length !== keys.size)
-      return { ...base, status: "PLANNED", productionEvidence };
-    const used = new Set();
-    for (const row of [...rowsOf(strict1), ...rowsOf(strict2)])
-      for (const part of Object.values(row.parts))
-        for (const kd of part.knownDifferences ?? []) used.add(kd);
-    return {
-      ...base,
-      status: "VERIFIED",
-      productionEvidence,
-      observedPasses: 2,
-      passComparison: "MATCH",
-      comparisons: {
-        runVsRun: { rows: rowsOf(runs).length, counts: countsOf(rowsOf(runs)) },
-        strictVsPass1: { rows: rowsOf(strict1).length, counts: countsOf(rowsOf(strict1)) },
-        strictVsPass2: { rows: rowsOf(strict2).length, counts: countsOf(rowsOf(strict2)) },
-      },
-      knownDifferences: [...used].toSorted(),
-      profiles: {
-        strict: "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
-        emulator: "NO_PRODUCTION_CLAIM",
-      },
-    };
-  });
+  const conditions = record.conditions.map((condition) =>
+    conditionEvidence(condition, { runs, strict1, strict2 }, productionEvidence),
+  );
   return {
     recordings,
     comparisons,

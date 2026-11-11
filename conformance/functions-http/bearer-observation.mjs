@@ -37,6 +37,7 @@ import {
   storageSend,
   withUploadClosure,
 } from "./production.mjs";
+import { guardedFetch } from "./send-guard.mjs";
 import { runCases } from "./session.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -160,7 +161,7 @@ async function readCapped(response) {
  * are the corpus literals.
  */
 export function captureFetch({
-  fetchImpl = fetch,
+  fetchImpl = guardedFetch,
   onCapture,
   now = Date.now,
   caseIds = CASE_IDS,

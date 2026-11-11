@@ -50,6 +50,7 @@ import {
   expectedFunctionName,
 } from "../harness.mjs";
 import { invalidSignatureToken, localExpiredToken } from "../harness.mjs";
+import { assertProductionSend, isLoopbackUrl } from "../send-guard.mjs";
 import { runCases } from "../session.mjs";
 import { MASKED_TOKEN, PROGRAMS, SLOTS, judgeRerecord } from "./rerecord-judge.mjs";
 
@@ -224,12 +225,14 @@ function headText(method, path, ordered) {
  * @param {readonly object[]} options.slots the frozen order of the requests
  * @param {object} options.modules the `http` and `https` modules (a test replaces them)
  */
+const defaultModules = Object.freeze({ "https:": https, "http:": http });
+
 export function createTransport({
   sleep = (ms) => new Promise((done) => setTimeout(done, ms)),
   now = Date.now,
   delayMs = PASS_DELAY_MS,
   slots = SLOTS,
-  modules = { "https:": https, "http:": http },
+  modules = defaultModules,
 } = {}) {
   const agents = {
     "https:": new modules["https:"].Agent({ keepAlive: true, maxSockets: 1 }),
@@ -244,6 +247,9 @@ export function createTransport({
       await sleep(delayMs);
     }
     const target = new URL(url);
+    // The real http(s) modules reach the network: only for a launch script's send, or this machine.
+    if (modules === defaultModules && !isLoopbackUrl(url))
+      assertProductionSend(`request ${target.host}`);
     const body = Buffer.from(init.body ?? "");
     const ordered = requestHeaders({
       host: target.host,

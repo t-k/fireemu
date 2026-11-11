@@ -24,6 +24,7 @@ import {
   withPublicInvoker,
   withoutPublicInvoker,
 } from "./harness.mjs";
+import { assertProductionSend, guardedFetch } from "./send-guard.mjs";
 import { runCases } from "./session.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -592,7 +593,7 @@ export async function readThirdRecoveryReadbacks(
 
 export async function acquireToken(adc, budget, kind) {
   budget.take(kind);
-  const response = await fetch("https://oauth2.googleapis.com/token", {
+  const response = await guardedFetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -664,7 +665,7 @@ export function createControl(adc, budget, { extraHosts = [] } = {}) {
     if (!token || Date.now() >= token.expiresAt) token = await acquireToken(adc, budget, "token");
     if (method === "GET" && body !== undefined) throw new Error("GET request cannot have a body");
     budget.take(kind);
-    const response = await fetch(url, {
+    const response = await guardedFetch(url, {
       method,
       headers: {
         authorization: `Bearer ${token.value}`,
@@ -743,6 +744,9 @@ export async function cli(
   command = [process.execPath, CLI],
   { cwd = HERE } = {},
 ) {
+  // The real CLI reaches production on its own; a test passes a harmless command instead.
+  if (command[0] === process.execPath && command[1] === CLI)
+    assertProductionSend("the Firebase CLI");
   // The directory holds the firebase.json of the codebase the CLI deploys; a second recorder has its own.
   if (
     typeof cwd !== "string" ||
@@ -1097,17 +1101,20 @@ export async function createUser(key, budget, runDir, programId, log = logChange
     { mode: 0o600 },
   );
   budget.take("auth");
-  const response = await fetch(`${AUTH_HOST}/v1/accounts:signUp?key=${encodeURIComponent(key)}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      email,
-      password: randomBytes(20).toString("base64url"),
-      returnSecureToken: true,
-    }),
-    redirect: "manual",
-    signal: AbortSignal.timeout(30_000),
-  });
+  const response = await guardedFetch(
+    `${AUTH_HOST}/v1/accounts:signUp?key=${encodeURIComponent(key)}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        email,
+        password: randomBytes(20).toString("base64url"),
+        returnSecureToken: true,
+      }),
+      redirect: "manual",
+      signal: AbortSignal.timeout(30_000),
+    },
+  );
   if (response.status !== 200) throw new Error(`Auth signUp returned ${response.status}`);
   const user = safeJsonResponse(await readBoundedText(response));
   await appendFile(

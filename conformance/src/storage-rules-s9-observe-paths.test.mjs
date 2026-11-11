@@ -1306,7 +1306,9 @@ describe("storage rules s9 restore reads", () => {
     const { report, world } = await go({ recordings: 1, intercept: atRequest(n, reply(503, {})) });
     assert.deepEqual(report.problems, [
       "rec1/restore: the release did not read back as the baseline",
+      "rec1/restore: the release is not back at the baseline",
     ]);
+    assert.equal(report.stopped, "rec1/restore: the release is not back at the baseline");
     assert.deepEqual(world.release, { rulesetName: baselineName });
     assert.equal(report.unknownReads, 1);
     assert.equal(
@@ -1383,6 +1385,7 @@ describe("storage rules s9 restore reads", () => {
         "rec1/restore: the baseline release was refused",
         "rec1/restore: the release did not read back as the baseline",
         "rec1/restore: the last marker still answers 200 or unknown",
+        "rec1/restore: the release is not back at the baseline",
       ],
       "no ruleset delete was refused as in use: the rulesets are deleted after the restore",
     );

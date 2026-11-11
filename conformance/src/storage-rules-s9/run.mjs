@@ -1,11 +1,14 @@
-// Storage Rules observation for the 2026-11-08 sibling audit (S1-S4, S7-S10).
+// Storage Rules observation: the 2026-11-08 sibling audit (family s9: S1-S4, S7-S10) and the
+// non-ASCII `lower()`/`upper()` observation (family case). Every command that sends names its family.
 //
-//   node run.mjs record-production --baseline <absent|projects/.../rulesets/ID> --out <new dir>
+//   node run.mjs record-production --plan <s9|case> --baseline <absent|projects/.../rulesets/ID> --out <new dir>
 //                                                   coordinator only: ADC, project lock, sends
-//   node run.mjs record-local [--origin http://127.0.0.1:PORT] --out <new dir> [--rows a,b] [--recordings N]
+//   node run.mjs record-local --plan <s9|case> [--origin http://127.0.0.1:PORT] --out <new dir> [--rows a,b] [--recordings N]
 //                                                   against fireemu or the official Storage emulator
-//   node run.mjs readback --run-dir <dir>           the A2 read-back (reads only)
-//   node run.mjs table --run label=dir [--run label=dir ...]
+//   node run.mjs readback --run-dir <dir>           the A2 read-back (reads only; the family is the run's own)
+//   node run.mjs recover --run-dir <dir>            coordinator only: finish a run that stopped (release back
+//                                                   to the baseline, own rulesets and objects deleted)
+//   node run.mjs table --plan <s9|case> --run label=dir [--run label=dir ...]
 //
 // The recorder never writes a ledger row; it prints the run report for the coordinator.
 
@@ -20,20 +23,16 @@ import { createLocalDeps, createProductionDeps, fetchNet } from "./deps.mjs";
 import { installEgressGuard } from "../storage-signed-put/egress.mjs";
 import { renderLoads, renderTable } from "./judge.mjs";
 import { observe, readback } from "./observe.mjs";
-import {
-  BUCKET,
-  ESTIMATED_USD,
-  LOCAL_BUCKET,
-  PROJECT,
-  RECORDINGS,
-  ROWS,
-  newRunId,
-} from "./plan.mjs";
+import { CASE_PLAN } from "./plan-case.mjs";
+import { BUCKET, PROJECT, RECORDINGS, S9_PLAN, newRunId } from "./plan.mjs";
+import { readCase, renderReading } from "./reading.mjs";
 import { validateBaseline } from "./guard.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MODULES = [
   "plan.mjs",
+  "plan-case.mjs",
+  "reading.mjs",
   "guard.mjs",
   "judge.mjs",
   "wire.mjs",
@@ -47,6 +46,14 @@ const PRODUCTION_HOSTS = [
   "firebasestorage.googleapis.com",
   "firebaserules.googleapis.com",
 ];
+
+/** The families of the observation; a command names one with `--plan`. */
+export const PLANS = Object.freeze({ s9: S9_PLAN, case: CASE_PLAN });
+
+export function planFor(id) {
+  if (typeof id !== "string" || !Object.hasOwn(PLANS, id)) throw new Error(`unknown plan ${id}`);
+  return PLANS[id];
+}
 
 export function argValue(name, argv = process.argv) {
   const index = argv.indexOf(`--${name}`);
@@ -62,6 +69,7 @@ function required(name, argv = process.argv) {
 /** The options of a production run from the command line; the lock paths only when they are named. */
 export function productionOptions(argv) {
   return {
+    plan: planFor(required("plan", argv)),
     baseline: required("baseline", argv),
     outPath: required("out", argv),
     ...(argValue("lock-dir", argv) ? { lockDir: argValue("lock-dir", argv) } : {}),
@@ -117,11 +125,11 @@ export function pins(exec = execFileSync) {
   };
 }
 
-export function finish(out, report, extra, log = console) {
+export function finish(out, report, extra, log = console, plan = S9_PLAN) {
   const full = {
     ...report,
     ...extra,
-    estimatedUsd: ESTIMATED_USD,
+    estimatedUsd: plan.estimatedUsd,
     finishedAt: new Date().toISOString(),
   };
   // The receipt goes to stdout first: a full disk must not lose it.
@@ -146,8 +154,35 @@ export function adcToken(exec = execFileSync) {
   }
 }
 
+/**
+ * The owner's access token, minted when first asked for and again when it is older than forty
+ * minutes (a token lives an hour, and a run with slow settles plus its cleanup can outlast one). A
+ * failed re-mint keeps the old token, which may still be valid, and is tried again at the next use.
+ */
+export function tokenSource({ mint, now = Date.now, maxAgeMs = 40 * 60_000 }) {
+  let current = null;
+  let mintedAt = 0;
+  return {
+    get() {
+      if (current === null) {
+        current = mint();
+        mintedAt = now();
+      } else if (now() - mintedAt > maxAgeMs) {
+        try {
+          current = mint();
+          mintedAt = now();
+        } catch {
+          // Keep the token we have; the next use tries again.
+        }
+      }
+      return current;
+    },
+  };
+}
+
 /** The production run, with its collaborators passed in so a test can stand in for each. */
 export async function recordProductionRun({
+  plan = S9_PLAN,
   baseline: requested,
   outPath,
   lockDir = "docs.local/runs/sandbox-locks",
@@ -160,6 +195,7 @@ export async function recordProductionRun({
   guardEgress = installEgressGuard,
   newId = newRunId,
   pid = process.pid,
+  clock = Date.now,
   log = console,
 }) {
   for (const name of Object.keys(env)) {
@@ -173,14 +209,15 @@ export async function recordProductionRun({
   const out = newOutDir(outPath);
   const startedAt = new Date().toISOString();
   guardEgress(PRODUCTION_HOSTS);
-  const accessToken = adcToken(exec);
+  const tokens = tokenSource({ mint: () => adcToken(exec), now: clock });
+  const accessToken = tokens.get();
   const target = { name: "production", bucket: BUCKET, project: PROJECT };
-  out.save("run-header.json", { runId, startedAt, baseline, ...pin, target });
+  out.save("run-header.json", { runId, plan: plan.id, startedAt, baseline, ...pin, target });
   let final;
   await locks(
     {
       projects: [PROJECT],
-      taskId: "STORAGE-RULES-S9",
+      taskId: plan.taskId,
       packetId: runId,
       sourceCommit: pin.gitSha,
       pid,
@@ -189,9 +226,130 @@ export async function recordProductionRun({
       legacyLockPath: legacyLock,
     },
     async (lease) => {
-      const deps = makeDeps({ accessToken, lease });
-      const { report } = await observer({ target, runId, baseline, deps, out });
-      final = finish(out, report, { startedAt, ...pin }, log);
+      const deps = makeDeps({ accessToken, token: tokens.get, lease });
+      const { report } = await observer({ plan, target, runId, baseline, deps, out });
+      final = finish(out, report, { startedAt, ...pin }, log, plan);
+      if (report.closureReady) lease.confirmClosed();
+    },
+  );
+  return final;
+}
+
+/**
+ * The names of the rulesets a run created, from its journal: the requests classified as a ruleset
+ * create whose answer was a 200 with a name inside the project. A create whose answer is unknown
+ * names nothing; the final ruleset list shows it.
+ */
+export function ownRulesetsOf(journalText, project) {
+  const pattern = new RegExp(`^projects/${project}/rulesets/[A-Za-z0-9_-]{1,128}$`);
+  const creates = new Set();
+  const names = [];
+  for (const line of journalText.split("\n")) {
+    if (line.trim() === "") continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (entry.phase === "before" && entry.kind === "ruleset-create") creates.add(entry.n);
+    if (entry.phase !== "after" || !creates.has(entry.n) || entry.status !== 200) continue;
+    try {
+      const name = JSON.parse(Buffer.from(entry.bodyBase64, "base64").toString("utf8"))?.name;
+      if (typeof name === "string" && pattern.test(name) && !names.includes(name)) names.push(name);
+    } catch {
+      // An unreadable answer names nothing.
+    }
+  }
+  return names;
+}
+
+/**
+ * Finishes a run that stopped: puts the release back to the run's baseline (it reads first and
+ * writes only toward the baseline), deletes the rulesets and objects the run made, and compares the
+ * ruleset list with the one at entry. Coordinator only; it takes the project lock of the original
+ * run's family, so a lock the stopped run kept must be released first.
+ */
+export async function recoverRun({
+  dir,
+  lockDir = "docs.local/runs/sandbox-locks",
+  legacyLock = "docs.local/runs/sandbox-ledger.jsonl.lock",
+  env = process.env,
+  exec = execFileSync,
+  locks = withProjectLocks,
+  makeDeps = createProductionDeps,
+  observer = observe,
+  guardEgress = installEgressGuard,
+  pid = process.pid,
+  now = () => new Date(),
+  clock = Date.now,
+  log = console,
+}) {
+  for (const name of Object.keys(env)) {
+    if (FORBIDDEN_ENV.some((pattern) => pattern.test(name)))
+      throw new Error(`refusing to start with ${name} set`);
+  }
+  const header = JSON.parse(readFileSync(join(dir, "run-header.json"), "utf8"));
+  const plan = planFor(header.plan ?? "s9");
+  const baseline = validateBaseline(header.baseline, PROJECT);
+  let entryRulesets;
+  try {
+    entryRulesets = JSON.parse(readFileSync(join(dir, "entry.json"), "utf8")).entryRulesets;
+  } catch {
+    entryRulesets = null;
+  }
+  if (!Array.isArray(entryRulesets))
+    throw new Error("the run has no readable entry.json; its ruleset list at entry is unknown");
+  let journal = "";
+  try {
+    journal = readFileSync(join(dir, "journal.jsonl"), "utf8");
+  } catch {
+    // A run with no journal made no ruleset we can name.
+  }
+  const ownRulesets = ownRulesetsOf(journal, PROJECT);
+  const pin = pins(exec);
+  requireCleanCheckout(pin);
+  const started = now();
+  const out = newOutDir(join(dir, `recover-${started.toISOString().replace(/[:.]/g, "")}`));
+  const startedAt = started.toISOString();
+  guardEgress(PRODUCTION_HOSTS);
+  const tokens = tokenSource({ mint: () => adcToken(exec), now: clock });
+  const accessToken = tokens.get();
+  const target = { name: "production", bucket: BUCKET, project: PROJECT };
+  out.save("run-header.json", {
+    runId: header.runId,
+    recoverOf: header.runId,
+    plan: plan.id,
+    startedAt,
+    baseline,
+    ownRulesets,
+    ...pin,
+    target,
+  });
+  let final;
+  await locks(
+    {
+      projects: [PROJECT],
+      taskId: plan.taskId,
+      packetId: `${header.runId}-recover`,
+      sourceCommit: pin.gitSha,
+      pid,
+      acquiredAt: startedAt.replace(/\.\d{3}Z$/, "Z"),
+      lockDir,
+      legacyLockPath: legacyLock,
+    },
+    async (lease) => {
+      const deps = makeDeps({ accessToken, token: tokens.get, lease });
+      const { report } = await observer({
+        plan,
+        target,
+        runId: header.runId,
+        baseline,
+        deps,
+        out,
+        recover: { entryRulesets, ownRulesets },
+      });
+      final = finish(out, report, { startedAt, ...pin }, log, plan);
       if (report.closureReady) lease.confirmClosed();
     },
   );
@@ -203,6 +361,7 @@ async function recordProduction() {
 }
 
 async function recordLocal() {
+  const plan = planFor(required("plan"));
   const host = process.env.FIREBASE_STORAGE_EMULATOR_HOST;
   const origin = argValue("origin") ?? (host ? `http://${host}` : undefined);
   if (!origin)
@@ -215,10 +374,11 @@ async function recordLocal() {
   const rowFilter = rowIds ? new Set(rowIds.split(",")) : null;
   if (rowFilter)
     for (const id of rowFilter)
-      if (!ROWS.some((row) => row.id === id)) throw new Error(`unknown row ${id}`);
+      if (!plan.rows.some((row) => row.id === id)) throw new Error(`unknown row ${id}`);
   const recordings = Number(argValue("recordings") ?? RECORDINGS);
-  const target = { name: "local", bucket: LOCAL_BUCKET, origin };
+  const target = { name: "local", bucket: plan.localBucket, origin };
   const { report } = await observe({
+    plan,
     target,
     runId,
     baseline: "local",
@@ -227,10 +387,14 @@ async function recordLocal() {
     recordings,
     rowFilter,
   });
-  return finish(out, report, { startedAt, ...pin });
+  return finish(out, report, { startedAt, ...pin }, console, plan);
 }
 
-/** The A2 read-back of a finished run: the run's own header and entry list, fresh time-stamped files. */
+/**
+ * The A2 read-back of a finished run: the run's own header (its family: a header without one is the
+ * first run's, family s9), entry list and report, fresh time-stamped files. A report that cannot be
+ * read, or that has no list of unknown labels, is passed on as `null`: the read-back then stays open.
+ */
 export async function readbackRun({
   dir,
   exec = execFileSync,
@@ -242,6 +406,14 @@ export async function readbackRun({
 }) {
   const header = JSON.parse(readFileSync(join(dir, "run-header.json"), "utf8"));
   const entry = JSON.parse(readFileSync(join(dir, "entry.json"), "utf8")).entryRulesets;
+  const plan = planFor(header.plan ?? "s9");
+  let unknowns = null;
+  try {
+    const list = JSON.parse(readFileSync(join(dir, "run-report.json"), "utf8")).unknowns;
+    if (Array.isArray(list)) unknowns = list;
+  } catch {
+    // Missing or broken: the read-back cannot know what the run left open.
+  }
   guardEgress(PRODUCTION_HOSTS);
   const accessToken = adcToken(exec);
   const stamp = now().toISOString().replace(/[:.]/g, "");
@@ -267,6 +439,8 @@ export async function readbackRun({
     net,
   };
   const report = await reader({
+    plan,
+    unknowns,
     target: { name: "production", bucket: BUCKET, project: PROJECT },
     runId: header.runId,
     baseline: header.baseline,
@@ -282,7 +456,16 @@ async function readbackCommand() {
   return readbackRun({ dir: required("run-dir") });
 }
 
+async function recoverCommand() {
+  return recoverRun({
+    dir: required("run-dir"),
+    ...(argValue("lock-dir") ? { lockDir: argValue("lock-dir") } : {}),
+    ...(argValue("legacy-lock") ? { legacyLock: argValue("legacy-lock") } : {}),
+  });
+}
+
 function tableCommand() {
+  const plan = planFor(required("plan"));
   const runs = [];
   process.argv.forEach((arg, index) => {
     if (arg !== "--run") return;
@@ -291,6 +474,16 @@ function tableCommand() {
     runs.push({ label, rows: results.rows, loads: results.loads });
   });
   if (runs.length === 0) throw new Error("--run label=dir is required");
+  if (plan.id === "case") {
+    const text = runs
+      .map((run) => {
+        const recordings = Math.max(1, ...run.rows.map((row) => row.recording));
+        return `== ${run.label}\n${renderReading(readCase(run.rows, plan, { recordings }))}`;
+      })
+      .join("\n\n");
+    console.log(text);
+    return text;
+  }
   const text = `${renderTable(runs)}\n\n${renderLoads(runs)}`;
   console.log(text);
   return text;
@@ -300,6 +493,7 @@ const commands = {
   "record-production": recordProduction,
   "record-local": recordLocal,
   readback: readbackCommand,
+  recover: recoverCommand,
   table: tableCommand,
 };
 const command = process.argv[2];

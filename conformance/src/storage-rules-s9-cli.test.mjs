@@ -49,36 +49,38 @@ describe("storage rules s9 command line", () => {
     assert.notEqual(result.status, 0);
     assert.match(
       result.stderr,
-      /usage: run.mjs record-production \| record-local \| readback \| table/,
+      /usage: run.mjs record-production \| record-local \| readback \| recover \| table/,
     );
   });
 
   it("refuses to record in production under ambient credentials, without a baseline, or with a bad one", () => {
     const withEnv = cli(
-      ["record-production", "--baseline", "absent", "--out", join(scratch, "a")],
+      ["record-production", "--plan", "s9", "--baseline", "absent", "--out", join(scratch, "a")],
       { GOOGLE_APPLICATION_CREDENTIALS: "/x" },
     );
     assert.notEqual(withEnv.status, 0);
     assert.match(withEnv.stderr, /refusing to start with GOOGLE_APPLICATION_CREDENTIALS set/);
     for (const name of ["FIREBASE_TOKEN", "CLOUDSDK_AUTH_ACCESS_TOKEN"]) {
       assert.match(
-        cli(["record-production", "--baseline", "absent", "--out", join(scratch, "b")], {
+        cli(["record-production", "--plan", "s9", "--baseline", "absent", "--out", join(scratch, "b")], {
           [name]: "x",
         }).stderr,
         /refusing to start/,
       );
     }
     assert.match(
-      cli(["record-production", "--out", join(scratch, "c")]).stderr,
+      cli(["record-production", "--plan", "s9", "--out", join(scratch, "c")]).stderr,
       /--baseline is required/,
     );
     assert.match(
-      cli(["record-production", "--baseline", "present", "--out", join(scratch, "d")]).stderr,
+      cli(["record-production", "--plan", "s9", "--baseline", "present", "--out", join(scratch, "d")]).stderr,
       /baseline is neither/,
     );
     assert.match(
       cli([
         "record-production",
+        "--plan",
+        "s9",
         "--baseline",
         "projects/other/rulesets/x",
         "--out",
@@ -101,10 +103,12 @@ describe("storage rules s9 command line", () => {
   });
 
   it("needs an origin or an emulator host for a local record, and knows its rows", () => {
-    assert.match(cli(["record-local", "--out", join(scratch, "f")]).stderr, /--origin is required/);
+    assert.match(cli(["record-local", "--plan", "s9", "--out", join(scratch, "f")]).stderr, /--origin is required/);
     assert.match(
       cli([
         "record-local",
+        "--plan",
+        "s9",
         "--origin",
         "http://127.0.0.1:1",
         "--out",
@@ -128,7 +132,7 @@ describe("storage rules s9 command line", () => {
     try {
       const child = spawn(
         process.execPath,
-        [run, "record-local", "--origin", origin, "--out", out],
+        [run, "record-local", "--plan", "s9", "--origin", origin, "--out", out],
         { env: { PATH: process.env.PATH } },
       );
       let stdout = "";
@@ -142,7 +146,7 @@ describe("storage rules s9 command line", () => {
       assert.match(report.startedAt, /^\d{4}-\d\d-\d\dT/);
       assert.equal(
         Object.keys(report.modules).length,
-        7,
+        9,
         "the local report carries the module pins",
       );
       assert.deepEqual(readdirSync(out).sort(), [
@@ -156,13 +160,13 @@ describe("storage rules s9 command line", () => {
       // The journal never holds a credential: the local owner token is the literal `owner`, and v0 reads carry none.
       const journal = readFileSync(join(out, "journal.jsonl"), "utf8");
       assert.ok(!/Bearer/.test(journal));
-      const table = cli(["table", "--run", `local=${out}`]);
+      const table = cli(["table", "--plan", "s9", "--run", `local=${out}`]);
       assert.equal(table.status, 0, table.stderr);
       const lines = table.stdout.split("\n");
       assert.equal(lines[0], "row\tplan\tlocal");
       assert.equal(lines[1], "pub-plain-meta\tallow\tallow/200");
       assert.ok(table.stdout.includes("\nload\tlocal\ns7-lone-surrogate\tloads/200"));
-      assert.match(cli(["table"]).stderr, /--run label=dir is required/);
+      assert.match(cli(["table", "--plan", "s9"]).stderr, /--run label=dir is required/);
     } finally {
       server.close();
     }
@@ -181,7 +185,7 @@ describe("storage rules s9 command line", () => {
       const viaEnv = join(scratch, "via-env");
       const child = spawn(
         process.execPath,
-        [run, "record-local", "--out", viaEnv, "--rows", "c1-true", "--recordings", "1"],
+        [run, "record-local", "--plan", "s9", "--out", viaEnv, "--rows", "c1-true", "--recordings", "1"],
         { env: { PATH: process.env.PATH, FIREBASE_STORAGE_EMULATOR_HOST: host } },
       );
       let stdout = "";
@@ -197,6 +201,8 @@ describe("storage rules s9 command line", () => {
         [
           run,
           "record-local",
+          "--plan",
+          "s9",
           "--origin",
           origin,
           "--out",
@@ -233,6 +239,8 @@ describe("storage rules s9 command line", () => {
         [
           run,
           "record-local",
+          "--plan",
+          "s9",
           "--origin",
           origin,
           "--out",

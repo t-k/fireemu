@@ -9,7 +9,7 @@ import { after, describe, it } from "node:test";
 
 import { createProductionDeps, fetchNet } from "./storage-rules-s9/deps.mjs";
 import { observe, readback } from "./storage-rules-s9/observe.mjs";
-import { BUCKET, ESTIMATED_USD, PROJECT } from "./storage-rules-s9/plan.mjs";
+import { BUCKET, ESTIMATED_USD, PROJECT, S9_PLAN } from "./storage-rules-s9/plan.mjs";
 import {
   adcToken,
   argValue,
@@ -132,6 +132,8 @@ describe("storage rules s9 pins and credentials", () => {
     assert.equal(pin.dirty, false);
     assert.deepEqual(Object.keys(pin.modules), [
       "plan.mjs",
+      "plan-case.mjs",
+      "reading.mjs",
       "guard.mjs",
       "judge.mjs",
       "wire.mjs",
@@ -239,7 +241,7 @@ describe("storage rules s9 production run glue", () => {
     assert.equal(calls.closed, 1);
     assert.equal(final.closureReady, true);
     assert.equal(final.gitSha, "a".repeat(40), "the final report carries the pins");
-    assert.deepEqual(Object.keys(final.modules).length, 7);
+    assert.deepEqual(Object.keys(final.modules).length, 9);
     assert.match(final.startedAt, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
     assert.equal(final.estimatedUsd, ESTIMATED_USD);
     assert.equal(JSON.parse(logger.lines[0]).runId, "sr-0123abcd");
@@ -483,7 +485,14 @@ describe("storage rules s9 read-back of a finished run", () => {
   it("closes after a clean run with 58 reads, and saves the report", async () => {
     const { fake, entry } = await finished();
     const { report, saved, journal } = await read(fake, entry);
-    assert.deepEqual(report, { runId, requests: 58, unknownReads: 0, problems: [], closed: true });
+    assert.deepEqual(report, {
+      runId,
+      requests: 58,
+      unknownReads: 0,
+      openCreates: [],
+      problems: [],
+      closed: true,
+    });
     assert.deepEqual(saved["readback.json"], report);
     const labels = [
       ...new Set(journal.filter((e) => e.phase === "before").map((e) => e.label)),
@@ -638,12 +647,15 @@ describe("storage rules s9 command line options", () => {
   });
 
   it("builds the production options, naming the lock paths only when they are given", () => {
-    assert.deepEqual(productionOptions(["--baseline", "absent", "--out", "d"]), {
+    assert.deepEqual(productionOptions(["--plan", "s9", "--baseline", "absent", "--out", "d"]), {
+      plan: S9_PLAN,
       baseline: "absent",
       outPath: "d",
     });
     assert.deepEqual(
       productionOptions([
+        "--plan",
+        "s9",
         "--out",
         "d",
         "--baseline",
@@ -653,18 +665,18 @@ describe("storage rules s9 command line options", () => {
         "--legacy-lock",
         "/g",
       ]),
-      { baseline: "absent", outPath: "d", lockDir: "/l", legacyLock: "/g" },
+      { plan: S9_PLAN, baseline: "absent", outPath: "d", lockDir: "/l", legacyLock: "/g" },
     );
     assert.deepEqual(
-      productionOptions(["--out", "d", "--baseline", "absent", "--lock-dir", "/l"]),
-      { baseline: "absent", outPath: "d", lockDir: "/l" },
+      productionOptions(["--plan", "s9", "--out", "d", "--baseline", "absent", "--lock-dir", "/l"]),
+      { plan: S9_PLAN, baseline: "absent", outPath: "d", lockDir: "/l" },
     );
     assert.deepEqual(
-      productionOptions(["--out", "d", "--baseline", "absent", "--legacy-lock", "/g"]),
-      { baseline: "absent", outPath: "d", legacyLock: "/g" },
+      productionOptions(["--plan", "s9", "--out", "d", "--baseline", "absent", "--legacy-lock", "/g"]),
+      { plan: S9_PLAN, baseline: "absent", outPath: "d", legacyLock: "/g" },
     );
-    assert.throws(() => productionOptions(["--out", "d"]), /--baseline is required/);
-    assert.throws(() => productionOptions(["--baseline", "absent"]), /--out is required/);
+    assert.throws(() => productionOptions(["--plan", "s9", "--out", "d"]), /--baseline is required/);
+    assert.throws(() => productionOptions(["--plan", "s9", "--baseline", "absent"]), /--out is required/);
   });
 
   it("runs git on this checkout with -C", () => {

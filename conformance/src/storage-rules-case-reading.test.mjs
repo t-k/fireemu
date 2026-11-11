@@ -17,7 +17,11 @@ const rowsFor = (candidate, recordings = [1, 2]) =>
     })),
   );
 const set = (rows, id, cls, recording) =>
-  rows.map((r) => (r.id === id && (recording === undefined || r.recording === recording) ? { ...r, class: cls } : r));
+  rows.map((r) =>
+    r.id === id && (recording === undefined || r.recording === recording)
+      ? { ...r, class: cls }
+      : r,
+  );
 const flip = (rows, id, recording) =>
   rows.map((r) =>
     r.id === id && (recording === undefined || r.recording === recording)
@@ -58,7 +62,7 @@ describe("reading a case run against the candidates", () => {
   it("says none when a probe row answers what no candidate predicts", () => {
     const reading = readCase(flip(rowsFor("ascii"), "sigma-final"), CASE_PLAN);
     assert.equal(reading.verdict, "none");
-    assert.deepEqual(reading.perCandidate.ascii.mismatches.sort(), ["sigma-final"]);
+    assert.deepEqual(reading.perCandidate.ascii.mismatches.toSorted(), ["sigma-final"]);
     assert.equal(reading.perCandidate.full.consistent, false);
   });
 
@@ -71,11 +75,24 @@ describe("reading a case run against the candidates", () => {
 
   it("says none for a runtime that maps Latin-1 and nothing else", () => {
     const latin1 = (row) => {
-      const ids = new Set(["acute-lower-mapped", "acute-upper-mapped", "rt-lower-mapped", "rt-res-lower-differs"]);
-      return ids.has(row.id) ? true : row.candidates.ascii && !/^acute-(lower|upper)-same$|^rt-lower-same$|^rt-res-lower-same$/.test(row.id);
+      const ids = new Set([
+        "acute-lower-mapped",
+        "acute-upper-mapped",
+        "rt-lower-mapped",
+        "rt-res-lower-differs",
+      ]);
+      return ids.has(row.id)
+        ? true
+        : row.candidates.ascii &&
+            !/^acute-(lower|upper)-same$|^rt-lower-same$|^rt-res-lower-same$/.test(row.id);
     };
     const rows = [1, 2].flatMap((recording) =>
-      CASE_ROWS.map((row) => ({ recording, program: "case", id: row.id, class: classOf(latin1(row)) })),
+      CASE_ROWS.map((row) => ({
+        recording,
+        program: "case",
+        id: row.id,
+        class: classOf(latin1(row)),
+      })),
     );
     assert.equal(readCase(rows, CASE_PLAN).verdict, "none");
   });
@@ -90,9 +107,14 @@ describe("reading a case run against the candidates", () => {
   });
 
   it("is incomplete when a row is missing from a recording or a recording is missing", () => {
-    const missing = rowsFor("ascii").filter((r) => !(r.recording === 2 && r.id === "ctl-upper-true"));
+    const missing = rowsFor("ascii").filter(
+      (r) => !(r.recording === 2 && r.id === "ctl-upper-true"),
+    );
     assert.equal(readCase(missing, CASE_PLAN).verdict, "incomplete");
-    assert.equal(readCase(rowsFor("ascii", [1]), CASE_PLAN, { recordings: 2 }).verdict, "incomplete");
+    assert.equal(
+      readCase(rowsFor("ascii", [1]), CASE_PLAN, { recordings: 2 }).verdict,
+      "incomplete",
+    );
     assert.equal(readCase([], CASE_PLAN).verdict, "incomplete");
   });
 
@@ -109,12 +131,20 @@ describe("reading a case run against the candidates", () => {
   it("checks the controls before the disagreement and the disagreement before the candidates", () => {
     const both = flip(flip(rowsFor("ascii"), "ctl-upper-true", 2), "acute-lower-same", 2);
     assert.equal(readCase(both, CASE_PLAN).verdict, "controls-failed");
-    const incompleteAndDisagree = set(flip(rowsFor("ascii"), "acute-lower-same", 2), "sharp-upper-full", "other", 1);
+    const incompleteAndDisagree = set(
+      flip(rowsFor("ascii"), "acute-lower-same", 2),
+      "sharp-upper-full",
+      "other",
+      1,
+    );
     assert.equal(readCase(incompleteAndDisagree, CASE_PLAN).verdict, "incomplete");
   });
 
   it("ignores rows that are not in the plan", () => {
-    const extra = [...rowsFor("ascii"), { recording: 1, program: "s9", id: "pub-plain-meta", class: "deny" }];
+    const extra = [
+      ...rowsFor("ascii"),
+      { recording: 1, program: "s9", id: "pub-plain-meta", class: "deny" },
+    ];
     assert.equal(readCase(extra, CASE_PLAN).verdict, "ascii");
   });
 
@@ -124,12 +154,15 @@ describe("reading a case run against the candidates", () => {
       const candidate = CANDIDATES[Math.floor(next() * 3)];
       let rows = rowsFor(candidate);
       const flips = Math.floor(next() * 3);
-      for (let i = 0; i < flips; i += 1) rows = flip(rows, CASE_ROWS[Math.floor(next() * CASE_ROWS.length)].id);
+      for (let i = 0; i < flips; i += 1)
+        rows = flip(rows, CASE_ROWS[Math.floor(next() * CASE_ROWS.length)].id);
       const reading = readCase(rows, CASE_PLAN);
       const first = new Map(rows.filter((r) => r.recording === 1).map((r) => [r.id, r.class]));
       const second = new Map(rows.filter((r) => r.recording === 2).map((r) => [r.id, r.class]));
       const disagree = CASE_ROWS.filter((r) => first.get(r.id) !== second.get(r.id));
-      const controlWrong = CASE_ROWS.filter((r) => r.control && first.get(r.id) !== classOf(r.candidates.ascii));
+      const controlWrong = CASE_ROWS.filter(
+        (r) => r.control && first.get(r.id) !== classOf(r.candidates.ascii),
+      );
       const fits = CANDIDATES.filter((c) =>
         CASE_ROWS.every((r) => first.get(r.id) === classOf(r.candidates[c])),
       );

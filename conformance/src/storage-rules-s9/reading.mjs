@@ -19,7 +19,8 @@ export function readCase(rows, plan, { recordings = 2 } = {}) {
   const planRows = plan.rows;
   const known = new Set(planRows.map((row) => row.id));
   const answers = new Map();
-  for (const row of rows) if (known.has(row.id)) answers.set(`${row.recording}/${row.id}`, row.class);
+  for (const row of rows)
+    if (known.has(row.id)) answers.set(`${row.recording}/${row.id}`, row.class);
   const recordingNumbers = Array.from({ length: recordings }, (_, i) => i + 1);
 
   const unread = [];
@@ -31,7 +32,11 @@ export function readCase(rows, plan, { recordings = 2 } = {}) {
   for (const row of planRows.filter((r) => r.control))
     for (const recording of recordingNumbers) {
       const got = answers.get(`${recording}/${row.id}`);
-      if (READ.has(got) && got !== classOf(row.candidates.ascii) && !failedControls.includes(row.id))
+      if (
+        READ.has(got) &&
+        got !== classOf(row.candidates.ascii) &&
+        !failedControls.includes(row.id)
+      )
         failedControls.push(row.id);
     }
 
@@ -47,10 +52,17 @@ export function readCase(rows, plan, { recordings = 2 } = {}) {
     for (const row of planRows)
       for (const recording of recordingNumbers) {
         const got = answers.get(`${recording}/${row.id}`);
-        if (READ.has(got) && got !== classOf(row.candidates[candidate]) && !mismatches.includes(row.id))
+        if (
+          READ.has(got) &&
+          got !== classOf(row.candidates[candidate]) &&
+          !mismatches.includes(row.id)
+        )
           mismatches.push(row.id);
       }
-    perCandidate[candidate] = { mismatches, consistent: unread.length === 0 && mismatches.length === 0 };
+    perCandidate[candidate] = {
+      mismatches,
+      consistent: unread.length === 0 && mismatches.length === 0,
+    };
   }
 
   const complete = unread.length === 0;

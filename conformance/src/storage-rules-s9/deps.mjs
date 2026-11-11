@@ -23,16 +23,33 @@ const realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /**
  * Production: the owner's user ADC access token (read by the launch script, never by this
  * module's callers) with the quota project header, and the project lock lease around every request.
+ * `token` is a function that returns the current token (it may mint a fresh one when the first is
+ * old); `accessToken` is the fixed token it replaces. `net` is the transport (tests replace it).
+ *
+ * A GET whose transport fails does not mark the lease failed: a read leaves nothing behind that a
+ * retained lock would protect, and the wire already records it as an unknown read. A failed write
+ * still does.
  */
-export function createProductionDeps({ accessToken, lease }) {
+export function createProductionDeps({ accessToken, token = null, lease, net = fetchNet }) {
   return {
     adminHeaders: () => ({
-      authorization: `Bearer ${accessToken}`,
+      authorization: `Bearer ${token ? token() : accessToken}`,
       "x-goog-user-project": PROJECT,
     }),
     net: async (request) => {
       await lease.verifyHeld();
-      return lease.dispatch(() => fetchNet(request));
+      if (request.method !== "GET") return lease.dispatch(() => net(request));
+      let failure = null;
+      const answer = await lease.dispatch(async () => {
+        try {
+          return await net(request);
+        } catch (error) {
+          failure = error;
+          return null;
+        }
+      });
+      if (failure !== null) throw failure;
+      return answer;
     },
     now: () => Date.now(),
     sleep: realSleep,

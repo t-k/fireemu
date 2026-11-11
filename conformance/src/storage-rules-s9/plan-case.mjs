@@ -56,7 +56,9 @@ const q = (text) => `'${text}'`;
 function condition(row) {
   if (row.kind === "literal") {
     const receiver = row.fn ? `${q(row.input)}.${row.fn}()` : q(row.input);
-    return row.rel === "size" ? `${receiver}.size() == ${row.operand}` : `${receiver} == ${q(row.operand)}`;
+    return row.rel === "size"
+      ? `${receiver}.size() == ${row.operand}`
+      : `${receiver} == ${q(row.operand)}`;
   }
   if (row.kind === "capture") return `n.${row.fn}() == ${q(row.operand)}`;
   return row.rel === "same"

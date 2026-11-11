@@ -250,8 +250,8 @@ export function buildPlan({
     if (row.object !== undefined && !(row.object in objects))
       throw new Error(`row ${row.id}: unknown object ${row.object}`);
   }
-  const runRoot = (runId) => `${prefixRoot}/${runId}/`;
-  const recordingPrefix = (runId, recording) => `${prefixRoot}/${runId}/rec${recording}`;
+  const rootOf = (runId) => `${prefixRoot}/${runId}/`;
+  const prefixOf = (runId, recording) => `${prefixRoot}/${runId}/rec${recording}`;
   const objectNameOf = (objectId, P) => objects[objectId].name(P);
   const rowsOf = (program) => rows.filter((row) => row.program === program);
   const objectCount = Object.keys(objects).length;
@@ -260,7 +260,7 @@ export function buildPlan({
   function plannedNames(runId, recordings = RECORDINGS) {
     const names = [];
     for (let recording = 1; recording <= recordings; recording += 1) {
-      const P = recordingPrefix(runId, recording);
+      const P = prefixOf(runId, recording);
       for (const objectId of Object.keys(objects)) names.push(objectNameOf(objectId, P));
     }
     return names;
@@ -333,8 +333,8 @@ export function buildPlan({
     programs,
     loadOnly,
     rows,
-    runRoot,
-    recordingPrefix,
+    runRoot: rootOf,
+    recordingPrefix: prefixOf,
     objectName: objectNameOf,
     rowsOf,
     objectsOf: (program) => programs.find((p) => p.id === program).objects,

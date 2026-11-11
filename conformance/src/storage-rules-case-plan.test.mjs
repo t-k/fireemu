@@ -67,8 +67,8 @@ describe("the case family plan", () => {
     const program = CASE_PLAN.programs[0];
     assert.equal(program.marker, "mkA");
     assert.deepEqual(
-      Object.keys(CASE_PLAN.objects).sort(),
-      [...CASE_ROWS.map((r) => r.object), "mkA"].sort(),
+      Object.keys(CASE_PLAN.objects).toSorted(),
+      [...CASE_ROWS.map((r) => r.object), "mkA"].toSorted(),
     );
     assert.equal(new Set(CASE_ROWS.map((r) => r.id)).size, CASE_ROWS.length);
     assert.equal(new Set(CASE_ROWS.map((r) => r.object)).size, CASE_ROWS.length);
@@ -94,7 +94,11 @@ describe("the case family plan", () => {
   it("predicts every row for every candidate as the reference mapping does", () => {
     for (const row of CASE_ROWS)
       for (const candidate of CANDIDATES)
-        assert.equal(predictRow(row, candidate, P), reference(row, candidate), `${row.id}/${candidate}`);
+        assert.equal(
+          predictRow(row, candidate, P),
+          reference(row, candidate),
+          `${row.id}/${candidate}`,
+        );
   });
 
   it("states the known answers by hand for the rows that tell the candidates apart", () => {
@@ -157,11 +161,15 @@ describe("the case family plan", () => {
     assert.ok(source.includes(`match /${P}/mk/a {\n      allow read: if true;\n    }`));
     assert.ok(source.includes(`match /${P}/acute-lower-mapped/x {`));
     assert.ok(source.includes("'" + cp(0xc9) + "'.lower() == '" + cp(0xe9) + "'"));
-    assert.ok(source.includes("'" + cp(0x391,0x3a3) + "'.lower() == '" + cp(0x3b1,0x3c2) + "'"));
+    assert.ok(source.includes("'" + cp(0x391, 0x3a3) + "'.lower() == '" + cp(0x3b1, 0x3c2) + "'"));
     assert.ok(source.includes("'e" + cp(0x301) + "'.upper() == 'E" + cp(0x301) + "'"));
     assert.ok(source.includes("'\u{1f525}a'.upper() == '\u{1f525}A'"));
     assert.ok(source.includes("'" + cp(0xff41) + "'.upper() == '" + cp(0xff21) + "'"));
-    assert.ok(source.includes(`match /${P}/rt-lower-same/{n} {\n      allow read: if n.lower() == '${cp(0xc9)}';`));
+    assert.ok(
+      source.includes(
+        `match /${P}/rt-lower-same/{n} {\n      allow read: if n.lower() == '${cp(0xc9)}';`,
+      ),
+    );
     assert.ok(
       source.includes(
         `match /${P}/rt-res-lower-same/{n} {\n      allow read: if resource.name.lower() == resource.name;`,
@@ -173,7 +181,10 @@ describe("the case family plan", () => {
   });
 
   it("keeps its own source file ASCII, so no editor or tool can normalize a probe", () => {
-    const text = readFileSync(fileURLToPath(new URL("./storage-rules-s9/plan-case.mjs", import.meta.url)), "utf8");
+    const text = readFileSync(
+      fileURLToPath(new URL("./storage-rules-s9/plan-case.mjs", import.meta.url)),
+      "utf8",
+    );
     assert.ok([...text].every((c) => c.charCodeAt(0) < 0x80));
   });
 
@@ -183,7 +194,10 @@ describe("the case family plan", () => {
     assert.ok(expected > 2 * 2 * CASE_ROWS.length);
     assert.ok(bounds.main > expected);
     assert.ok(bounds.total > bounds.main);
-    assert.equal(CASE_PLAN.plannedNames(runId, 2).length, 2 * Object.keys(CASE_PLAN.objects).length);
+    assert.equal(
+      CASE_PLAN.plannedNames(runId, 2).length,
+      2 * Object.keys(CASE_PLAN.objects).length,
+    );
     assert.ok(CASE_PLAN.readbackCap(2) >= 2 * Object.keys(CASE_PLAN.objects).length + 6);
     assert.ok(CASE_PLAN.estimatedUsd <= 0.1);
   });
@@ -214,8 +228,21 @@ describe("buildPlan keeps the s9 family exactly as it was", () => {
       rows: [],
     };
     assert.doesNotThrow(() => buildPlan(base));
-    assert.throws(() => buildPlan({ ...base, rows: [{ program: "p", id: "r", op: "meta", object: "nope" }] }), /object/);
-    assert.throws(() => buildPlan({ ...base, rows: [{ program: "q", id: "r", op: "meta", object: "mk" }] }), /program/);
-    assert.throws(() => buildPlan({ ...base, programs: [{ id: "p", marker: "zz", objects: ["mk"], source: () => "x" }] }), /marker/);
+    assert.throws(
+      () => buildPlan({ ...base, rows: [{ program: "p", id: "r", op: "meta", object: "nope" }] }),
+      /object/,
+    );
+    assert.throws(
+      () => buildPlan({ ...base, rows: [{ program: "q", id: "r", op: "meta", object: "mk" }] }),
+      /program/,
+    );
+    assert.throws(
+      () =>
+        buildPlan({
+          ...base,
+          programs: [{ id: "p", marker: "zz", objects: ["mk"], source: () => "x" }],
+        }),
+      /marker/,
+    );
   });
 });

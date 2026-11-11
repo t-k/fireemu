@@ -56,7 +56,7 @@ describe("the case family in the fake world", () => {
     assert.equal(report.publications.filter((p) => p.program).length, 2);
     assert.equal(world.objects.size, 0);
     assert.deepEqual(world.release, { rulesetName: baselineName });
-    assert.deepEqual([...world.rulesets.keys()].sort(), [
+    assert.deepEqual([...world.rulesets.keys()].toSorted(), [
       `projects/${project}/rulesets/22b746af-0000-4000-8000-000000000001`,
       `projects/${project}/rulesets/d0abf7c6-0000-4000-8000-000000000002`,
     ]);
@@ -87,7 +87,10 @@ describe("the case family in the fake world", () => {
     const bytes = Buffer.from(source, "utf8");
     assert.ok(source.includes("'É'.lower()"));
     // E + combining acute stays two characters; the composed letter is a different probe.
-    assert.ok(bytes.includes(Buffer.from([0x27, 0x65, 0xcc, 0x81, 0x27, 0x2e, 0x75])), "decomposed e");
+    assert.ok(
+      bytes.includes(Buffer.from([0x27, 0x65, 0xcc, 0x81, 0x27, 0x2e, 0x75])),
+      "decomposed e",
+    );
     assert.ok(bytes.includes(Buffer.from([0xf0, 0x9f, 0x94, 0xa5])), "fire");
     const sent = world.calls.filter((c) => c.method === "POST" && c.url.includes("/rulesets"));
     assert.equal(sent.length, 1);
@@ -98,7 +101,10 @@ describe("the case family in the fake world", () => {
     assert.equal(creates.length, Object.keys(CASE_PLAN.objects).length);
     const names = creates.map((c) => new URL(c.url).searchParams.get("name"));
     assert.ok(names.some((n) => n.endsWith("/rt-lower-same/É")));
-    assert.ok(creates.every((c) => !/[^\x20-\x7e]/.test(c.url)), "every URL is ASCII (percent-encoded)");
+    assert.ok(
+      creates.every((c) => !/[^\x20-\x7e]/.test(c.url)),
+      "every URL is ASCII (percent-encoded)",
+    );
     assert.ok(creates.some((c) => c.url.includes("%C3%89")));
   });
 
@@ -135,8 +141,14 @@ describe("the case family in the fake world", () => {
       method: "GET",
       url: `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucket)}/o/${encodeURIComponent(name)}`,
     });
-    assert.equal(classifyRequest(target, get(`${CASE_PLAN.runRoot(runId)}rec1/mk/a`), state), "v0-meta");
-    assert.throws(() => classifyRequest(target, get(`storage-rules-s9/${runId}/rec1/mk/a`), state), /outside the run root/);
+    assert.equal(
+      classifyRequest(target, get(`${CASE_PLAN.runRoot(runId)}rec1/mk/a`), state),
+      "v0-meta",
+    );
+    assert.throws(
+      () => classifyRequest(target, get(`storage-rules-s9/${runId}/rec1/mk/a`), state),
+      /outside the run root/,
+    );
     assert.throws(
       () => classifyRequest(target, get("other/x"), { ...state, root: "other/" }),
       /bad run root/,
@@ -146,8 +158,14 @@ describe("the case family in the fake world", () => {
   it("reads back with a cap that covers every planned name, and closes only when everything is absent", async () => {
     const fake = createWorld({ plan: CASE_PLAN, project, bucket, baseline: baselineName, lag: 0 });
     const entry = [
-      { name: `projects/${project}/rulesets/22b746af-0000-4000-8000-000000000001`, services: ["firebase.storage"] },
-      { name: `projects/${project}/rulesets/d0abf7c6-0000-4000-8000-000000000002`, services: ["cloud.firestore"] },
+      {
+        name: `projects/${project}/rulesets/22b746af-0000-4000-8000-000000000001`,
+        services: ["firebase.storage"],
+      },
+      {
+        name: `projects/${project}/rulesets/d0abf7c6-0000-4000-8000-000000000002`,
+        services: ["cloud.firestore"],
+      },
     ];
     const out = memoryOut();
     const report = await readback({
@@ -162,5 +180,50 @@ describe("the case family in the fake world", () => {
     assert.equal(report.closed, true, JSON.stringify(report.problems));
     assert.equal(report.requests, 2 + 2 + 2 * Object.keys(CASE_PLAN.objects).length);
     assert.ok(report.requests <= CASE_PLAN.readbackCap(2));
+  });
+});
+
+describe("a recording that cannot put the release back (S9 review SF2)", () => {
+  const refuseFirstBaselinePatch = () => {
+    let refused = false;
+    return {
+      match: (r) =>
+        !refused &&
+        r.method === "PATCH" &&
+        r.path.includes("/releases/") &&
+        Buffer.from(r.body ?? [])
+          .toString("utf8")
+          .includes(baselineName) &&
+        (refused = true),
+      answer: {
+        status: 400,
+        headers: { "content-type": "application/json" },
+        body: Buffer.from('{"error":{"code":400,"message":"refused","status":"INVALID_ARGUMENT"}}'),
+      },
+    };
+  };
+
+  it("does not start the second recording, restores in the cleanup, and does not close", async () => {
+    const { report, world } = await run({ faults: [refuseFirstBaselinePatch()] });
+    assert.match(report.stopped, /rec1\/restore/);
+    assert.equal(report.closureReady, false);
+    assert.equal(report.complete, false);
+    assert.equal(world.sources.length, 1, "only the first recording's ruleset was created");
+    assert.deepEqual(world.release, { rulesetName: baselineName }, "the cleanup put it back");
+    assert.equal(world.objects.size, 0);
+    assert.equal(report.rows.filter((r) => r.recording === 2).length, 0);
+    const toBaseline = world.calls.filter(
+      (c) =>
+        c.method === "PATCH" &&
+        Buffer.from(c.body ?? [])
+          .toString("utf8")
+          .includes(baselineName),
+    );
+    assert.equal(toBaseline.length, 2, "refused once in the recording, once more in the cleanup");
+  });
+
+  it("goes on to the second recording when the restore reads back as the baseline", async () => {
+    const { report } = await run();
+    assert.equal(report.rows.filter((r) => r.recording === 2).length, CASE_ROWS.length);
   });
 });

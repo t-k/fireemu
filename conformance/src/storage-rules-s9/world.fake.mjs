@@ -100,7 +100,8 @@ export function createWorld({
   // A source belongs to the program whose marker object it opens a rule for.
   const programOf = (source) =>
     plan.programs.find(
-      (program) => source !== undefined && source.includes(`${plan.objects[program.marker].name("")} {`),
+      (program) =>
+        source !== undefined && source.includes(`${plan.objects[program.marker].name("")} {`),
     )?.id ?? null;
   function allowed(op, subject, P) {
     const serving = world.serving;

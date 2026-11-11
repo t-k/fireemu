@@ -50,6 +50,10 @@ const enc = encodeURIComponent;
  * @param {object} options.deps `{net, adminHeaders, now, sleep}`
  * @param {object} options.out `{journal(entry), save(name, data)}`
  * @param {Set<string>|null} [options.rowFilter] row ids to read (dry runs only; null: all)
+ * @param {{entryRulesets: Array, ownRulesets: string[]}|null} [options.recover] finish a run that
+ *   stopped: no preflight and no recording, only the cleanup (the release is read, and written only
+ *   toward the baseline; the named rulesets and the run's planned objects are deleted; the ruleset
+ *   list is compared with `entryRulesets`)
  */
 export async function observe({
   plan = S9_PLAN,
@@ -61,11 +65,17 @@ export async function observe({
   recordings = RECORDINGS,
   caps = null,
   rowFilter = null,
+  recover = null,
 }) {
   const production = target.name === "production";
   if (production) validateBaseline(baseline, target.project);
+  if (recover !== null && !production) throw new Error("a recovery runs against production only");
   const bounds = plan.staticBounds(recordings);
-  const budget = new RequestBudget(caps?.main ?? bounds.main, caps?.total ?? bounds.total);
+  const recoveryCap = bounds.cleanup + 20;
+  const budget = new RequestBudget(
+    caps?.main ?? (recover ? recoveryCap : bounds.main),
+    caps?.total ?? (recover ? recoveryCap : bounds.total),
+  );
   const reportingErrors = [];
   const noteReportingError = (text) => {
     if (reportingErrors.length < 20 && !reportingErrors.includes(text)) reportingErrors.push(text);
@@ -87,7 +97,7 @@ export async function observe({
     },
   };
   const root = plan.runRoot(runId);
-  const ownRulesets = new Set();
+  const ownRulesets = new Set(recover?.ownRulesets ?? []);
   const state = { runId, root, prefixRoot: plan.prefixRoot, ownRulesets, baseline };
   const { wire, unknownLabels, unknownReads } = createWire({ target, state, budget, deps, out });
   const bucket = target.bucket;
@@ -104,9 +114,10 @@ export async function observe({
   const loads = [];
   const publications = [];
   const problems = [];
-  let entryRulesets = null;
+  let entryRulesets = recover?.entryRulesets ?? null;
   let releaseExists = baseline !== "absent";
-  let released = false; // this run changed the bucket release
+  // This run changed the bucket release (a recovery assumes so: it reads the release and finds out).
+  let released = recover !== null;
   let lastMarker = null;
   let stopped = null;
 
@@ -427,7 +438,9 @@ export async function observe({
 
   async function runProgram(recording, P, program, previous, masks) {
     const label = `rec${recording}/${program.id}`;
-    const rows = plan.rowsOf(program.id).filter((row) => rowFilter === null || rowFilter.has(row.id));
+    const rows = plan
+      .rowsOf(program.id)
+      .filter((row) => rowFilter === null || rowFilter.has(row.id));
     if (rows.length === 0) return null;
     const source = program.source(P);
     let rulesetName = null;
@@ -531,9 +544,9 @@ export async function observe({
   async function restore(label, P) {
     if (!production) {
       await setLocalRules(`${label}/local-baseline`, LOCAL_BASELINE_RULES);
-      return;
+      return true;
     }
-    if (!released) return;
+    if (!released) return true;
     const isBaseline = (release) =>
       baseline === "absent"
         ? release?.state === "absent"
@@ -562,7 +575,8 @@ export async function observe({
       }
       current = await readRelease(`${label}/readback`, true);
     }
-    if (!isBaseline(current)) problem(`${label}: the release did not read back as the baseline`);
+    const restored = isBaseline(current);
+    if (!restored) problem(`${label}: the release did not read back as the baseline`);
     else {
       released = false;
       releaseExists = baseline !== "absent";
@@ -579,6 +593,7 @@ export async function observe({
       if (settledAt === null) problem(`${label}: the last marker still answers 200 or unknown`);
       else publications.push({ label, restoreSettlePolls: settledAt });
     }
+    return restored;
   }
 
   async function deleteOwnRulesets() {
@@ -699,7 +714,7 @@ export async function observe({
   };
 
   let currentP = null;
-  try {
+  async function recordAll() {
     await guardedStep("preflight", preflight);
     if (entryRulesets !== null) out.save("entry.json", { baseline, entryRulesets });
     for (let recording = 1; recording <= recordings && stopped === null; recording += 1) {
@@ -723,8 +738,16 @@ export async function observe({
       }
       if (stopped === null)
         await guardedStep(`rec${recording}/load-only`, () => loadOnly(recording, P, masks));
-      await guardedStep(`rec${recording}/restore`, () => restore(`rec${recording}/restore`, P));
+      // The next recording starts only from a release that reads back as the baseline.
+      await guardedStep(`rec${recording}/restore`, async () => {
+        if (!(await restore(`rec${recording}/restore`, P)))
+          throw new StopRun("the release is not back at the baseline");
+      });
     }
+  }
+
+  try {
+    if (recover === null) await recordAll();
   } finally {
     budget.cleanup = true;
     // Whatever stopped the run, the release goes back, own rulesets and objects go, and the rest is read.
@@ -740,10 +763,11 @@ export async function observe({
   const unknowns = [...new Set(unknownLabels)];
   const expectedRows =
     plan.rows.filter((row) => rowFilter === null || rowFilter.has(row.id)).length * recordings;
-  const complete = stopped === null && rowsAll.length === expectedRows;
+  const complete = stopped === null && (recover !== null || rowsAll.length === expectedRows);
   const report = {
     runId,
     plan: plan.id,
+    mode: recover === null ? "record" : "recover",
     target: target.name,
     baseline,
     requests: budget.count,
@@ -769,7 +793,9 @@ export async function observe({
 /**
  * The A2 read-back (a separate command, at least 10 minutes after the last request): the bucket
  * release is the baseline, the ruleset list is the list at entry, the run root lists empty and every
- * planned object name reads 404. Reads only.
+ * planned object name reads 404. Reads only. `unknowns` are the run's own unknown labels (its report);
+ * an unknown create is never settled by an absence, so it keeps the read-back open, and so does a
+ * report that could not be read (`null`).
  */
 export async function readback({
   plan = S9_PLAN,
@@ -781,6 +807,7 @@ export async function readback({
   out,
   recordings = RECORDINGS,
   cap = plan.readbackCap(RECORDINGS),
+  unknowns = [],
 }) {
   const root = plan.runRoot(runId);
   const state = { runId, root, prefixRoot: plan.prefixRoot, ownRulesets: new Set(), baseline };
@@ -843,10 +870,18 @@ export async function readback({
     );
     if (res.status !== 404) problems.push("an object still reads");
   }
+  // A create whose answer was unknown is not settled by finding nothing: a late write can still land.
+  const openCreates = (unknowns ?? []).filter(
+    (label) =>
+      label.startsWith("create/") || label.endsWith("/ruleset") || /^rec\d+\/load\//.test(label),
+  );
+  if (unknowns === null) problems.push("the run report is missing or unreadable");
+  if (openCreates.length > 0) problems.push("an unknown create is not settled by an absence");
   const report = {
     runId,
     requests: budget.count,
     unknownReads: unknownReads.length,
+    openCreates,
     problems: [...new Set(problems)],
     closed: problems.length === 0 && unknownReads.length === 0,
   };

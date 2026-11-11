@@ -59,7 +59,7 @@ import {
   uploadBucket,
 } from "../plan.mjs";
 
-export const NORMAL_CEILING = 300;
+export const NORMAL_CEILING = 340;
 export const CLEANUP_CEILING = 200;
 export const MAX_REQUESTS = NORMAL_CEILING + CLEANUP_CEILING;
 export const LOG_POLL_SECONDS = 60;

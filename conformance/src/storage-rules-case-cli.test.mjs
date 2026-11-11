@@ -2,7 +2,7 @@ import "./storage-signed-put/test-preload.mjs";
 
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -131,6 +131,15 @@ describe("storage rules case command line", () => {
     } finally {
       server.close();
     }
+  });
+
+  it("reads a run with no rows as incomplete, never as a candidate", () => {
+    const dir = join(scratch, "empty");
+    mkdirSync(dir);
+    writeFileSync(join(dir, "results.json"), JSON.stringify({ rows: [], loads: [] }));
+    const table = cli(["table", "--plan", "case", "--run", `e=${dir}`]);
+    assert.equal(table.status, 0, table.stderr);
+    assert.match(table.stdout, /^== e\nverdict: incomplete\n/);
   });
 
   it("refuses a row the plan does not have, and knows the case rows", () => {

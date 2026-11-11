@@ -259,6 +259,16 @@ describe("reading details", () => {
     assert.equal(lines.length, 9 + CASE_ROWS.length);
   });
 
+  it("joins several failed controls, unread rows and disagreeing rows with a comma and a space", () => {
+    let rows = flip(flip(rowsFor("ascii"), "ctl-lower-true"), "ctl-upper-true");
+    rows = set(set(rows, "sharp-upper-full", "other", 1), "sigma-final", "unknown", 2);
+    rows = flip(flip(rows, "acute-lower-same", 2), "acute-upper-same", 2);
+    const lines = renderReading(readCase(rows, CASE_PLAN)).split("\n");
+    assert.equal(lines[1], "complete: false; controls: failed (ctl-upper-true, ctl-lower-true)");
+    assert.equal(lines[2], "unread: 1/sharp-upper-full, 2/sigma-final");
+    assert.equal(lines[3], "disagreeing: acute-lower-same, acute-upper-same");
+  });
+
   it("prints no unread, disagreeing or failed-control line for a clean reading, and `none` for no mismatch", () => {
     const text = renderReading(readCase(rowsFor("full"), CASE_PLAN));
     assert.ok(text.startsWith("verdict: full\ncomplete: true; controls: ok\nascii: "));

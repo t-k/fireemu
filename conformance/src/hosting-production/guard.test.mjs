@@ -3,7 +3,7 @@
 // run directories, nor reach a host other than loopback; and no test runs armed.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import http from "node:http";
 import https from "node:https";
 import { homedir, tmpdir } from "node:os";
@@ -146,6 +146,7 @@ test("every effect of the production deps that reaches a credential, the private
   } finally {
     if (savedAdc === undefined) delete process.env.FIREEMU_OWNER_ADC;
     else process.env.FIREEMU_OWNER_ADC = savedAdc;
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

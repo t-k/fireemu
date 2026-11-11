@@ -529,12 +529,13 @@ test("the follow-up comparisons are those of the recordings, with no mismatch an
   }
 });
 
-test("the follow-up comparisons are built from the right recordings: each strict document names its own run, and the known differences apply", async () => {
+test("the follow-up comparisons are built from the right recordings: each strict document names its own run, and the known differences apply", async (t) => {
   // run 1's rows stand in for a local answer: the host of a Location differs from run 2's, a known difference
-  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
   const directory = mkdtempSync(join(tmpdir(), "followup-evidence-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
   const local = join(directory, "local.json");
   writeFileSync(local, await bytesOf(record.followUpRecordings[0].fixturePath));
   const documents = await followupComparisons(local);

@@ -8,7 +8,7 @@ import { corpusManifest } from "./corpus.mjs";
 import { buildFollowupCorpus, FOLLOWUP_PROFILE } from "./followup.mjs";
 import { FOLLOWUP_CORPUS_SHA256 } from "./pins.mjs";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -541,9 +541,10 @@ test("two follow-up runs compare row by row under the follow-up corpus, with no 
   );
 });
 
-test("the compare command line reads follow-up rows only when it is told to", async () => {
+test("the compare command line reads follow-up rows only when it is told to", async (t) => {
   const r = await run();
   const dir = mkdtempSync(join(tmpdir(), "followup-compare-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
   const rows = join(dir, "rows.json");
   writeFileSync(rows, r.files["rows.json"]);
   const compare = new URL("./compare.mjs", import.meta.url).pathname;

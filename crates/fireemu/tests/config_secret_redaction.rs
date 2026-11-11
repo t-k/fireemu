@@ -4,6 +4,7 @@
 
 mod scratch;
 
+use serde_json::Value;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
@@ -56,7 +57,7 @@ fn planted_config() -> String {
 }
 
 #[test]
-fn config_show_and_lint_json_never_print_planted_secrets() {
+fn config_show_and_lint_json_succeed_with_the_expected_shape_and_never_print_planted_secrets() {
     let dir = Scratch::new("config-secret", "planted");
     std::fs::write(dir.join("fireemu.json"), planted_config()).unwrap();
     let show = fireemu(
@@ -73,6 +74,56 @@ fn config_show_and_lint_json_never_print_planted_secrets() {
         sentinel("oidc-secret-0003"),
         "cd".repeat(32),
     ];
+    // Both commands must succeed and print the documented JSON, so an early failure cannot
+    // pass the absence checks below.
+    assert!(
+        show.status.success(),
+        "show failed: {}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+    assert!(
+        lint.status.success(),
+        "lint failed: {}",
+        String::from_utf8_lossy(&lint.stderr)
+    );
+    let rows: Value = serde_json::from_slice(&show.stdout).expect("config show --json is JSON");
+    let rows = rows
+        .as_array()
+        .expect("config show --json is an array of rows");
+    let row = |key: &str| {
+        rows.iter()
+            .find(|row| row["key"] == key)
+            .unwrap_or_else(|| panic!("config show has no {key} row"))
+    };
+    assert_eq!(
+        row("pubsub.authentication.localBearerToken")["value"],
+        "[redacted]"
+    );
+    assert_eq!(
+        row("auth.apiKeys")["value"],
+        serde_json::json!(["[redacted]"])
+    );
+    assert_eq!(
+        row("auth.providers.oidc")["value"][0]["clientSecret"],
+        "[redacted]"
+    );
+    assert_eq!(
+        row("auth.providers.oidc")["value"][0]["clientId"],
+        "visible-client-id"
+    );
+    let report: Value = serde_json::from_slice(&lint.stdout).expect("config lint --json is JSON");
+    assert!(
+        report["config"].is_string(),
+        "lint report names the config: {report}"
+    );
+    assert!(
+        report["ineffective"].is_array(),
+        "lint report lists ineffective settings: {report}"
+    );
+    assert!(
+        report["denied"].is_array(),
+        "lint report lists denied settings: {report}"
+    );
     for output in [&show, &lint] {
         let text = format!(
             "{}{}",
@@ -83,7 +134,4 @@ fn config_show_and_lint_json_never_print_planted_secrets() {
             assert!(!text.contains(secret.as_str()), "{secret} printed:\n{text}");
         }
     }
-    let shown = String::from_utf8_lossy(&show.stdout);
-    assert!(shown.contains("[redacted]"), "{shown}");
-    assert!(shown.contains("visible-client-id"), "{shown}");
 }

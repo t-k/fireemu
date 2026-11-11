@@ -1,0 +1,481 @@
+{
+  "schemaVersion": 1,
+  "parent": "TASK-QUEUE-FUNCTIONS",
+  "parentStatus": "IMPLEMENTING",
+  "inventoryStatus": "PROPOSED",
+  "oracleTrack": "disposable-sandbox",
+  "oracle": {
+    "project": "fireemu-oracle-events",
+    "region": "us-central1",
+    "generations": [
+      2
+    ],
+    "runtime": "nodejs22"
+  },
+  "authority": "owner ledger 2417 (closure parent approved), 2459 (start); coordinator rulings of 2026-11-11 (docs.local/runs/task-queue-parent/coordinator-rulings.md)",
+  "scopeDecisions": [
+    {
+      "id": "TQ-SCOPE",
+      "decision": "Node.js v2 onTaskDispatched in us-central1, one pinned SDK (firebase-functions 7.3.2, firebase-admin 14.3.0 request shape). Gen1, Python (FUNCTIONS-PYTHON owns its Tasks row), other regions, extension queues, App Engine and pull queues are excluded.",
+      "status": "ANSWERED"
+    },
+    {
+      "id": "TQ-ORACLE",
+      "decision": "Production is observed through eight functions deployed with the pinned firebase-tools (so the queue settings are the CLI's mapping) and the Cloud Tasks REST API against the queues the deploy made. A queue id cannot be created again for days after a delete, so every run suffixes the function ids with six hexadecimal digits of its run id and deletes its queues and functions at cleanup.",
+      "status": "ANSWERED"
+    },
+    {
+      "id": "TQ-BUDGET",
+      "decision": "At most US$4 for the parent including recovery: two recordings and at most three attempts, inside the US$10 per observation task (coordinator ruling 5).",
+      "status": "ANSWERED"
+    },
+    {
+      "id": "TQ-PROFILES",
+      "decision": "The strict profile follows the recordings. A production behaviour that makes local tests worse (long default dispatch deadline waits, names kept forever, backoff delays) becomes a per-key development default that productionExact restores (coordinator ruling 6, HOSTING ruling 23). The emulator profile never refuses more than firebase-tools 15.28.2 and makes no production claim.",
+      "status": "ANSWERED"
+    },
+    {
+      "id": "TQ-TIMING",
+      "decision": "A time-dependent condition is compared by bounds that two recordings support (a lower bound, an upper bound, an order, a count), never by exact milliseconds, and the judge states the tolerance it used.",
+      "status": "PROPOSED"
+    }
+  ],
+  "conditions": [
+    {
+      "conditionId": "TASK-QUEUE-FUNCTIONS/create-answer-shape",
+      "description": "The status and shape of a successful createTask answer: the task name form, the defaults of scheduleTime, dispatchDeadline and httpMethod, what the BASIC and FULL views return, and what the Admin SDK ignores.",
+      "evidenceType": "production-parity",
+      "recipeIds": [
+        "task-queue/create-answer-shape"
+      ],
+      "status": "PLANNED",
+      "corpusSteps": [
+        "env-default",
+        "env-named",
+        "env-view-full"
+      ],
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "TASK-QUEUE-FUNCTIONS/create-errors-shape",
+      "description": "The status and the google.rpc.Status of a refused createTask: a missing task or httpRequest, an unknown field, a queue that does not exist, and the code the Admin SDK maps each to.",
+      "evidenceType": "production-parity",
+      "recipeIds": [
+        "task-queue/create-errors-shape"
+      ],
+      "status": "PLANNED",
+      "corpusSteps": [
+        "err-no-task",
+        "err-no-http",
+        "err-unknown-field",
+        "err-queue-missing",
+        "queue-absent"
+      ],
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "TASK-QUEUE-FUNCTIONS/task-id-validation",
+      "description": "Which task ids and names are accepted: characters, the 500 and 501 character boundary, an empty id, a name that points at another queue or project, and a punctuation-only id.",
+      "evidenceType": "production-parity",
+      "recipeIds": [
+        "task-queue/task-id-validation"
+      ],
+      "status": "PLANNED",
+      "corpusSteps": [
+        "id-space",
+        "id-slash",
+        "id-empty",
+        "id-dot",
+        "id-punct-ok",
+        "id-500",
+        "id-501",
+        "id-other-queue",
+        "id-other-project"
+      ],
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "TASK-QUEUE-FUNCTIONS/dedup-live",
+      "description": "A task id that is still in a queue: the answer to a second createTask (409 ALREADY_EXISTS), the same id on another queue, and the answer of getTask.",
+      "evidenceType": "production-parity",
+      "recipeIds": [
+        "task-queue/dedup-live"
+      ],
+      "status": "PLANNED",
+      "corpusSteps": [
+        "dup-first",
+        "dup-sched",
+        "dup-sched-again",
+        "get-dup-sched",
+        "del-dup-sched",
+        "dup-other-queue"
+      ],
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "TASK-QUEUE-FUNCTIONS/dedup-after-completion",
+      "description": "A task id that has finished or been deleted, inside the reuse window: the answer to a createTask with the same id. The expiry of the window is a separate condition.",
+      "evidenceType": "production-parity",
+      "recipeIds": [
+        "task-queue/dedup-after-completion"
+      ],
+      "status": "PLANNED",
+      "corpusSteps": [
+        "dup-first",
+        "dup-sched-after-delete",
+        "dup-first-after-done",
+        "get-dup-first"
+      ],
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "TASK-QUEUE-FUNCTIONS/dedup-window-expiry",
+      "description": "The end of the reuse window of a task id (documented as about one hour). Not part of stage 1: a stage 2 packet of about 70 minutes, only if stage 1 leaves it unsettled (coordinator ruling 4 of 2026-11-11).",
+      "evidenceType": "production-parity",
+      "recipeIds": [
+        "task-queue/dedup-window-expiry"
+      ],
+      "status": "PLANNED",
+      "stage": 2,
+      "note": "Planned, not built in stage 1.",
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "TASK-QUEUE-FUNCTIONS/schedule-time-boundaries",
+      "description": "scheduleTime in the past, now, close, in the nanosecond and numeric-offset forms, on both sides of the 30 day limit, far away, and malformed (text, no zone, a leap second).",
+      "evidenceType": "production-parity",
+      "recipeIds": [
+        "task-queue/schedule-time-boundaries"
+      ],
+      "status": "PLANNED",
+      "corpusSteps": [
+        "sch-past",
+        "sch-now",
+        "sch-nanos",
+        "sch-offset",
+        "sch-30d-less",
+        "sch-30d-more",
+        "sch-31d",
+        "sch-year-9999",
+        "sch-text",
+        "sch-no-zone",
+        "sch-leap-second"
+      ],
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "TASK-QUEUE-FUNCTIONS/schedule-delay-and-eta",
+      "description": "A delivery is not earlier than its scheduleTime, and the X-CloudTasks-TaskETA header of a scheduled and an unscheduled task.",
+      "evidenceType": "production-parity",
+      "recipeIds": [
+        "task-queue/schedule-delay-and-eta"
+      ],
+      "status": "PLANNED",
+      "corpusSteps": [
+        "sch-past",
+        "sch-20s"
+      ],
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "TASK-QUEUE-FUNCTIONS/dispatch-deadline",
+      "description": "The range of dispatchDeadline (14s, 15s, 1800s, 1801s, a fraction, no unit, negative, zero), its default in the createTask answer, and a delivery that outlasts it.",
+      "evidenceType": "production-parity",
+      "recipeIds": [
+        "task-queue/dispatch-deadline"
+      ],
+      "status": "PLANNED",
+      "corpusSteps": [
+        "dead-15",
+        "dl-14s",
+        "dl-15s",
+        "dl-1800s",
+        "dl-1801s",
+        "dl-fraction",
+        "dl-bare",
+        "dl-negative",
+        "dl-zero"
+      ],
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "TASK-QUEUE-FUNCTIONS/body-and-header-limits",
+      "description": "The largest task body accepted (1,000,000 and 1,100,000 byte bodies) and how task headers that the service owns are treated.",
+      "evidenceType": "production-parity",
+      "recipeIds": [
+        "task-queue/body-and-header-limits"
+      ],
+      "status": "PLANNED",
+      "corpusSteps": [
+        "env-headers",
+        "env-large",
+        "size-1000k",
+        "size-1100k"
+      ],
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "TASK-QUEUE-FUNCTIONS/dispatch-envelope-headers",
+      "description": "The delivered request: method, path, the set of header names, the fixed header values, the X-CloudTasks-* values of a first delivery and of retries, the user agent, the authorization scheme, and which task headers win.",
+      "evidenceType": "production-parity",
+      "recipeIds": [
+        "task-queue/dispatch-envelope-headers"
+      ],
+      "status": "PLANNED",
+      "corpusSteps": [
+        "retry-ladder",
+        "env-default",
+        "env-named",
+        "env-headers"
+      ],
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "TASK-QUEUE-FUNCTIONS/dispatch-envelope-body",
+      "description": "The delivered body: byte for byte what the task carried (non-ASCII, member order, white space, an empty data object, 100,000 bytes), and the data the SDK hands the handler.",
+      "evidenceType": "production-parity",
+      "recipeIds": [
+        "task-queue/dispatch-envelope-body"
+      ],
+      "status": "PLANNED",
+      "corpusSteps": [
+        "env-default",
+        "env-utf8",
+        "env-unordered",
+        "env-minimal",
+        "env-large"
+      ],
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "TASK-QUEUE-FUNCTIONS/task-name-generation",
+      "description": "The name and X-CloudTasks-TaskName of a task created without an id.",
+      "evidenceType": "production-parity",
+      "recipeIds": [
+        "task-queue/task-name-generation"
+      ],
+      "status": "PLANNED",
+      "corpusSteps": [
+        "env-default"
+      ],
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "TASK-QUEUE-FUNCTIONS/queue-config-mapping",
+      "description": "The queue settings a deployed task queue function ends up with (rateLimits and retryConfig), read back from Cloud Tasks for the default and for every declared option.",
+      "evidenceType": "production-parity",
+      "recipeIds": [
+        "task-queue/queue-config-mapping"
+      ],
+      "status": "PLANNED",
+      "corpusSteps": [
+        "queue-tqdef",
+        "queue-tqretry",
+        "queue-tqlimit",
+        "queue-tqwindow",
+        "queue-tqconc1",
+        "queue-tqconc2",
+        "queue-tqrate",
+        "queue-tqdead"
+      ],
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "TASK-QUEUE-FUNCTIONS/retry-on-status",
+      "description": "Which handler answers are retried (500, 429, 503, 400, 404, a timeout), and the retry headers: retryCount, executionCount, previousResponse, retryReason.",
+      "evidenceType": "production-parity",
+      "recipeIds": [
+        "task-queue/retry-on-status"
+      ],
+      "status": "PLANNED",
+      "corpusSteps": [
+        "retry-ladder",
+        "dead-15"
+      ],
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "TASK-QUEUE-FUNCTIONS/retry-backoff-schedule",
+      "description": "The delay before each retry for a minBackoff, a maxBackoff and a maxDoublings (bounds, not exact times).",
+      "evidenceType": "production-parity",
+      "recipeIds": [
+        "task-queue/retry-backoff-schedule"
+      ],
+      "status": "PLANNED",
+      "corpusSteps": [
+        "retry-ladder",
+        "retry-exhaust"
+      ],
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "TASK-QUEUE-FUNCTIONS/retry-limits",
+      "description": "A task is dropped after maxAttempts attempts, or when maxRetrySeconds has passed, and nothing is delivered afterwards.",
+      "evidenceType": "production-parity",
+      "recipeIds": [
+        "task-queue/retry-limits"
+      ],
+      "status": "PLANNED",
+      "corpusSteps": [
+        "retry-exhaust",
+        "limit-two",
+        "window-six"
+      ],
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "TASK-QUEUE-FUNCTIONS/max-concurrent-dispatches",
+      "description": "At most maxConcurrentDispatches deliveries of a queue at the same time (1 and 2).",
+      "evidenceType": "production-parity",
+      "recipeIds": [
+        "task-queue/max-concurrent-dispatches"
+      ],
+      "status": "PLANNED",
+      "corpusSteps": [
+        "conc1-a",
+        "conc1-b",
+        "conc1-c",
+        "conc1-d",
+        "conc2-a",
+        "conc2-b",
+        "conc2-c",
+        "conc2-d",
+        "conc2-e"
+      ],
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "TASK-QUEUE-FUNCTIONS/max-dispatches-per-second",
+      "description": "The dispatch rate of a queue with maxDispatchesPerSecond 1: the first deliveries, the spacing, and any burst.",
+      "evidenceType": "production-parity",
+      "recipeIds": [
+        "task-queue/max-dispatches-per-second"
+      ],
+      "status": "PLANNED",
+      "corpusSteps": [
+        "rate-a",
+        "rate-b",
+        "rate-c",
+        "rate-d",
+        "rate-e",
+        "rate-f",
+        "rate-g",
+        "rate-h"
+      ],
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "TASK-QUEUE-FUNCTIONS/delete-task",
+      "description": "The answers of deleteTask: a task in the queue, a task that never existed, and a task that has finished.",
+      "evidenceType": "production-parity",
+      "recipeIds": [
+        "task-queue/delete-task"
+      ],
+      "status": "PLANNED",
+      "corpusSteps": [
+        "get-dup-sched",
+        "del-dup-sched",
+        "del-dup-sched-again",
+        "del-missing",
+        "get-dup-first",
+        "del-dup-first"
+      ],
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "TASK-QUEUE-FUNCTIONS/local-controls",
+      "description": "The virtual clock, the Run now control, queue statistics, the await-idle scope, the memory limits and the Host guard: local properties with local evidence, no production recording (as the SCHEDULED-FUNCTIONS fireemu-only rows).",
+      "evidenceType": "fireemu-only",
+      "recipeIds": [
+        "task-queue/local-controls"
+      ],
+      "status": "PLANNED",
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "TASK-QUEUE-FUNCTIONS/final-artifact-regression",
+      "description": "Every comparison of this record reproduced on the final binary (integratedRegression).",
+      "evidenceType": "closure-gate",
+      "recipeIds": [
+        "task-queue/final-artifact-regression"
+      ],
+      "status": "PLANNED",
+      "productionEvidence": []
+    },
+    {
+      "conditionId": "TASK-QUEUE-FUNCTIONS/closure-review",
+      "description": "An independent review approves the record.",
+      "evidenceType": "closure-gate",
+      "recipeIds": [
+        "task-queue/closure-review"
+      ],
+      "status": "PLANNED",
+      "productionEvidence": []
+    }
+  ],
+  "excludedFromParent": [
+    {
+      "id": "deployment",
+      "reason": "CLI deploy behaviour, IAM enqueuer bindings and Cloud Run settings: only the queue settings are read back.",
+      "status": "NOT_COMPARED"
+    },
+    {
+      "id": "queue-management-api",
+      "reason": "createQueue, updateQueue, pause, purge, getTask and listTasks as an API: used for setup and read-back, no claim that fireemu implements them.",
+      "status": "NOT_COMPARED"
+    },
+    {
+      "id": "gen1-tasks",
+      "reason": "functions.tasks.taskQueue (Gen1).",
+      "status": "NOT_COMPARED"
+    },
+    {
+      "id": "python",
+      "reason": "Python task queue functions: FUNCTIONS-PYTHON owns the tasks-events row.",
+      "status": "NOT_COMPARED"
+    },
+    {
+      "id": "task-uri",
+      "reason": "TaskOptions.uri: the local daemon refuses an arbitrary outbound request on purpose.",
+      "status": "NOT_COMPARED"
+    },
+    {
+      "id": "oidc-values",
+      "reason": "The value and verification of the OIDC token: only its scheme and segment count are compared.",
+      "status": "NOT_COMPARED"
+    },
+    {
+      "id": "ordering-and-exact-timing",
+      "reason": "Delivery order across tasks (Cloud Tasks is best effort) and exact times.",
+      "status": "NOT_COMPARED"
+    },
+    {
+      "id": "scaling-and-quota",
+      "reason": "Cold start, scaling, billing and quota.",
+      "status": "NOT_COMPARED"
+    }
+  ],
+  "corpusPath": "conformance/src/task-queue-production/corpus.manifest.json",
+  "corpusSha256": "94ea38635670d6e317a8bc57a7602e6fc69babad139de1470d3e0e9dce0f3bcf",
+  "corpusContentSha256": "d9fb891867a1d9f13f151f0b0a43bf8d7f66c74c1a7c2d25ee6deb3b98781e8c",
+  "recorder": "conformance/src/task-queue-production/record/run.mjs",
+  "judge": "conformance/src/task-queue-production/record/judge.mjs",
+  "fixture": "conformance/task-queue-functions/functions/index.js",
+  "recordingPolicy": {
+    "observedPasses": 0,
+    "requiredPasses": 2,
+    "waiver": null
+  },
+  "recordings": [],
+  "limitations": [
+    "No production observation exists yet: every production-parity condition is PLANNED, not VERIFIED.",
+    "The in-memory Cloud Tasks of the recorder's tests is a model of documented rules, not an observation; no judge accepts a shape from it.",
+    "A queue id cannot be created again for days after a delete (400 'existed too recently', measured 2026-11-07), so each attempt of a recording needs new function ids and a failed attempt costs a deploy.",
+    "The task reuse window is documented as about one hour and is UNRECORDED; its expiry is a stage 2 packet."
+  ],
+  "outOfScope": [
+    "Production deployment parity of task queue functions beyond the queue settings.",
+    "No condition is promoted from official-emulator behaviour or documentation alone."
+  ],
+  "followUps": []
+}

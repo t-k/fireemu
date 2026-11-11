@@ -84,14 +84,20 @@ export function declarationProblems(endpoints, runId) {
       // firebase-tools grants a task queue service an invoker only when the manifest names one, so none may be declared.
       if (trigger.invoker !== undefined && trigger.invoker !== null)
         problems.push(`${name}: task queue invoker ${JSON.stringify(trigger.invoker)}`);
-      for (const group of ["retryConfig", "rateLimits"]) {
-        const wantedGroup = options[group] ?? {};
-        const got = trigger[group] ?? {};
-        if (JSON.stringify(got) !== JSON.stringify(wantedGroup))
+      // The SDK writes an option that was not given as null: null is "unset", and key order does not matter.
+      const settled = (group) =>
+        JSON.stringify(
+          Object.fromEntries(
+            Object.entries(group ?? {})
+              .filter(([, value]) => value !== null && value !== undefined)
+              .toSorted(([x], [y]) => x.localeCompare(y)),
+          ),
+        );
+      for (const group of ["retryConfig", "rateLimits"])
+        if (settled(trigger[group]) !== settled(options[group]))
           problems.push(
-            `${name}: ${group} ${JSON.stringify(got)}, not ${JSON.stringify(wantedGroup)}`,
+            `${name}: ${group} ${settled(trigger[group])}, not ${settled(options[group])}`,
           );
-      }
     }
   }
   return problems;

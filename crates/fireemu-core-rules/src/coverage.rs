@@ -628,8 +628,10 @@ impl RulesDiagnostics {
     }
 
     /// Enables request traces with the configured retention across ruleset replacements.
+    /// The capacity is clamped to 1..=10000 here as well as at config load, so a caller that
+    /// skips the configuration check cannot disable the ring or grow it without bound.
     pub fn enable_request_traces_with_capacity(&mut self, capacity: usize) {
-        assert!((1..=10_000).contains(&capacity));
+        let capacity = capacity.clamp(1, 10_000);
         self.request_traces_enabled = true;
         self.request_trace_capacity = capacity;
         self.configured_trace_capacity = Some(capacity);
@@ -699,6 +701,18 @@ impl RulesDiagnostics {
 #[cfg(test)]
 mod index_tests {
     use super::*;
+
+    #[test]
+    fn configured_capacity_is_clamped_to_the_documented_range() {
+        let mut low = RulesDiagnostics::default();
+        low.enable_request_traces_with_capacity(0);
+        assert_eq!(low.request_trace_capacity(), 1);
+        assert_eq!(low.configured_trace_capacity(), Some(1));
+        let mut high = RulesDiagnostics::default();
+        high.enable_request_traces_with_capacity(50_000);
+        assert_eq!(high.request_trace_capacity(), 10_000);
+        assert_eq!(high.configured_trace_capacity(), Some(10_000));
+    }
 
     proptest::proptest! {
         #[test]

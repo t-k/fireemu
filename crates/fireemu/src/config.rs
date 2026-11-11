@@ -8817,6 +8817,9 @@ mod tests {
             )
             .unwrap_err();
             assert!(error.to_string().contains("rules.denialHistory"), "{error}");
+            if value.get("retention").is_some() {
+                assert!(error.to_string().contains("1 to 10000"), "{error}");
+            }
         }
         assert!(RuntimeConfig::from_json(
             &json!({"schemaVersion": 1, "rules": {"denialHistory": {}}})

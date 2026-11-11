@@ -13,6 +13,7 @@ use crate::store::ObjectDigests;
 static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
 
 /// Directory in which temporary body files are created.
+#[derive(Clone)]
 pub struct SpillDir {
     dir: PathBuf,
 }

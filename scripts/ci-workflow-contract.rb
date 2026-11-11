@@ -121,6 +121,8 @@ assert(latest_trigger.keys.sort == %w[pull_request push schedule workflow_dispat
 assert(latest_trigger.fetch("schedule").map { |entry| entry.fetch("cron") } == ["0 4 * * *", "0 3 * * 2"], "sdk-latest must run daily and weekly")
 assert(latest_trigger.dig("workflow_dispatch", "inputs", "suite", "options") == %w[light broad], "sdk-latest dispatch must offer light and broad")
 assert(latest["permissions"] == { "contents" => "read" }, "sdk-latest must only read contents")
+assert(latest.dig("concurrency", "group") == "${{ github.workflow }}-${{ github.event.schedule || github.ref }}", "sdk-latest must separate scheduled runs by cron")
+assert(latest.dig("concurrency", "cancel-in-progress") == true, "sdk-latest must enable stale-run cancellation")
 latest_jobs = latest.fetch("jobs")
 assert(latest_jobs.keys.sort == %w[latest-sdk-under-exec published-broad published-light], "sdk-latest must have exactly three jobs")
 latest_steps = latest_jobs.values.flat_map do |job|
@@ -147,6 +149,7 @@ end
 assert(latest_jobs.dig("published-light", "if") == "(github.event_name == 'schedule' && github.event.schedule == '0 4 * * *') || (github.event_name == 'workflow_dispatch' && inputs.suite == 'light')", "light must run only on daily schedule or light dispatch")
 assert(latest_jobs.dig("published-broad", "if") == "(github.event_name == 'schedule' && github.event.schedule == '0 3 * * 2') || (github.event_name == 'workflow_dispatch' && inputs.suite == 'broad')", "broad must run only on weekly schedule or broad dispatch")
 assert(latest_jobs.dig("latest-sdk-under-exec", "if") == "github.event_name != 'schedule' || github.event.schedule == '0 3 * * 2'", "source build must skip the daily schedule")
+assert(latest_jobs.dig("published-broad", "steps").find { |step| step["name"] == "run published package smokes" }.fetch("run").lines.map(&:strip).include?("./node_modules/.bin/fireemu exec --firebase-json listener-replacement.firebase.json --only firestore --project demo-app --hub-port 0 -- node listener-replacement.mjs"), "broad must run the Firestore listener smoke with its Firebase configuration")
 
 sdk = load_workflow("functions-sdk-discovery.yml")
 sdk_trigger = sdk["on"] || sdk[true]
@@ -470,7 +473,7 @@ assert(measure_runs.include?("tools/bench/report.py"), "benchmark measure must r
 benchmark_report = benchmark.dig("jobs", "measure", "steps").find { |step| step["run"]&.include?("tools/bench/report.py") }
 assert(benchmark_report["if"] == "always()", "benchmark report must run on failed trials too")
 
-%w[ci.yml compatibility-inventory.yml conformance.yml functions-sdk-discovery.yml quint.yml sdk-latest.yml].each do |name|
+%w[ci.yml compatibility-inventory.yml conformance.yml functions-sdk-discovery.yml quint.yml].each do |name|
   bounded = load_workflow(name)
   assert(bounded.dig("concurrency", "group") == "${{ github.workflow }}-${{ github.ref }}", "#{name} must cancel stale runs for the same ref")
   assert(bounded.dig("concurrency", "cancel-in-progress") == true, "#{name} must enable stale-run cancellation")

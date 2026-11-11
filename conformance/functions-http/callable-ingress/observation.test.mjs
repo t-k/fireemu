@@ -459,6 +459,56 @@ test("property: passes that agree give the same answers as one pass, and needsRe
   );
 });
 
+// ---- every combination of the four judge axes (the PICT table is a subset of these rows) -------------------
+
+test("every combination of the four judge axes gets the verdict and classes of the stated rule", () => {
+  const controls = {
+    Recorded: control,
+    Status201: { ...control, status: 201 },
+    WrongBytes: { ...control, bodyText: '{"result":{"auth":0}}' },
+    Transport: { error: "TypeError: fetch failed" },
+  };
+  const mixes = {
+    AllControl: [control, control, control, control, control],
+    AllPage: [page, page, page, page, page],
+    AllWrapper: [wrapper, wrapper, wrapper, wrapper, wrapper],
+    Mixed: [wrapper, page, control, wrapper, page],
+  };
+  const classOf = (answer) =>
+    answer === control ? "served-by-function" : answer === page ? "front-end-page" : "other";
+  let rows = 0;
+  for (const [controlName, controlAnswer] of Object.entries(controls)) {
+    for (const [mixName, mix] of Object.entries(mixes)) {
+      for (const passes2 of ["Agree", "DisagreeLastCase"]) {
+        for (const shape of ["Complete12", "Eleven", "Misordered"]) {
+          const answers = [controlAnswer, ...mix];
+          let list = [0, 1].flatMap((pass) =>
+            answers.map((answer, i) => capture(pass * 6 + i, answer)),
+          );
+          if (passes2 === "DisagreeLastCase") list[11] = capture(11, { ...wrapper, status: 403 });
+          if (shape === "Eleven") list = list.slice(0, 11);
+          if (shape === "Misordered") [list[1], list[2]] = [list[2], list[1]];
+          const result = judgeObservation(list, BASELINE);
+          const label = `${controlName}/${mixName}/${passes2}/${shape}`;
+          const recorded =
+            controlName === "Recorded" && passes2 === "Agree" && shape === "Complete12";
+          assert.equal(result.verdict, recorded ? "recorded" : "unknown", label);
+          assert.equal(result.lockKept, !recorded, label);
+          if (recorded) {
+            assert.deepEqual(
+              result.answers.map((a) => a.class),
+              ["served-by-function", ...mix.map(classOf)],
+              label,
+            );
+          } else assert.deepEqual(result.answers, [], label);
+          rows += 1;
+        }
+      }
+    }
+  }
+  assert.equal(rows, 96);
+});
+
 // ---- capture (generalised) -----------------------------------------------------------------------
 
 test("the capture numbers six cases per pass and keeps the headers it is told to", async () => {
@@ -736,6 +786,16 @@ test("fake world: the wrapper run records twelve answers, cleans up and writes t
     assert.equal(terminal.requests.invocation, 12);
     assert.equal(terminal.requests.cliDeploy, 1);
     assert.equal(terminal.requests.cliDelete, 1);
+    assert.deepEqual(terminal.requests, {
+      invocation: 12,
+      control: 13,
+      cleanup: 14,
+      auth: 0,
+      cliDeploy: 1,
+      cliDelete: 1,
+      token: 0,
+      upload: 5,
+    });
     assert.equal(terminal.estimatedUsd, 0.58);
     assert.deepEqual(terminal.newShapes, CASE_IDS.slice(1));
     assert.deepEqual(terminal.answers[0], ["no-authorization", "served-by-function", 200, 24]);

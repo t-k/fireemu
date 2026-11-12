@@ -1,6 +1,7 @@
 """Tests of tools/ci/mutants-summary.py, on shard directories built the way the workflow lays them out."""
 
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -44,6 +45,15 @@ def write_shard(root, number, outcomes, baseline="Success", listed=None, end_tim
             and "name" in o["scenario"]["Mutant"]
         ]
     (directory / "mutants.json").write_text(json.dumps(listed))
+
+
+def write_diff(root, number, file, line, column, description, removed, suffix=""):
+    directory = root / f"mutants-shard-{number}" / "diff"
+    directory.mkdir(parents=True, exist_ok=True)
+    filename = f"{file.replace('/', '__')}_line_{line}_col_{column}{suffix}.diff"
+    (directory / filename).write_text(
+        f"--- {file}\n+++ {description}\n@@ -{line},1 +{line},1 @@\n-{removed}\n+replacement\n"
+    )
 
 
 def write_empty_shard(root, number):
@@ -532,6 +542,76 @@ class SurvivorsTest(unittest.TestCase):
             line, column = rng.randrange(1, 100000), rng.randrange(1, 100000)
             self.assertEqual(summary.survivor_key(f"dir/f.rs:{line}:{column}: replace foo"), "dir/f.rs: replace foo")
 
+    def test_fingerprint_tracks_removed_text_not_location(self):
+        shard = self.root / "mutants-shard-0"
+        write_diff(self.root, 0, "dir/f.rs", 12, 3, "replace foo", "    a | b")
+        write_diff(self.root, 0, "dir/f.rs", 99, 3, "replace foo", "    a | b")
+        write_diff(self.root, 0, "dir/f.rs", 100, 3, "replace foo", "    c | d")
+        fingerprints = [summary.mutant_fingerprint(shard, f"dir/f.rs:{line}:3: replace foo")
+                        for line in (12, 99, 100)]
+        self.assertIsNotNone(fingerprints[0])
+        self.assertEqual(fingerprints[0], fingerprints[1])
+        self.assertNotEqual(fingerprints[0], fingerprints[2])
+        self.assertEqual(fingerprints[0], hashlib.sha256(b"    a | b").hexdigest()[:16])
+
+    def test_changed_expression_with_same_description_is_new_critical(self):
+        old = "critical/a.rs:1:2: replace foo with ^"
+        new = "critical/a.rs:2:2: replace foo with ^"
+        write_shard(self.root, 0, [mutant(new, "MissedMutant")])
+        write_diff(self.root, 0, "critical/a.rs", 1, 2, "replace foo with ^", "a | b")
+        write_diff(self.root, 0, "critical/a.rs", 2, 2, "replace foo with ^", "c | d")
+        shard = self.root / "mutants-shard-0"
+        self.survivors.write_text(summary.fingerprinted_key(old, shard) + "\n")
+        self.assertEqual(self.run_summary("--fail-on-new-critical")[0], 2)
+        self.assertEqual(self.written()["new_critical_survivors"], [summary.fingerprinted_key(new, shard)])
+
+    def test_missing_or_mismatched_diff_is_never_accepted(self):
+        name = "critical/a.rs:1:2: replace foo"
+        write_shard(self.root, 0, [mutant(name, "MissedMutant")])
+        self.survivors.write_text("critical/a.rs: replace foo [fp:none]\n")
+        for with_diff in (False, True):
+            if with_diff:
+                write_diff(self.root, 0, "critical/a.rs", 1, 2, "different", "original")
+            self.assertEqual(self.run_summary("--fail-on-new-critical")[0], 2)
+            self.assertEqual(self.written()["new_survivors"], ["critical/a.rs: replace foo [fp:none]"])
+            self.assertEqual(self.written()["accepted_survivors"], 0)
+
+    def test_ambiguous_diffs_fail_closed(self):
+        name = "critical/a.rs:1:2: replace foo"
+        shard = self.root / "mutants-shard-0"
+        write_diff(self.root, 0, "critical/a.rs", 1, 2, "replace foo", "a | b")
+        write_diff(self.root, 0, "critical/a.rs", 1, 2, "replace foo", "c | d", "_001")
+        self.assertIsNone(summary.mutant_fingerprint(shard, name))
+        write_diff(self.root, 0, "critical/a.rs", 1, 2, "replace foo", "a | b", "_001")
+        self.assertIsNotNone(summary.mutant_fingerprint(shard, name))
+
+    def test_legacy_key_is_new_but_noncritical_succeeds(self):
+        name = "other/a.rs:1:2: replace foo"
+        write_shard(self.root, 0, [mutant(name, "MissedMutant")])
+        write_diff(self.root, 0, "other/a.rs", 1, 2, "replace foo", "original")
+        self.survivors.write_text(summary.survivor_key(name) + "\n")
+        self.assertEqual(self.run_summary("--fail-on-new-critical")[0], 0)
+        key = summary.fingerprinted_key(name, self.root / "mutants-shard-0")
+        self.assertEqual(self.written()["new_survivors"], [key])
+        self.assertIn(key, (self.out / "summary.md").read_text())
+
+    def test_random_fingerprints_depend_on_removed_text(self):
+        rng = random.Random(44191)
+        for i in range(200):
+            root = self.root / str(i)
+            line, other_line = rng.sample(range(1, 100000), 2)
+            text = f"  expression_{rng.getrandbits(64)}"
+            changed = text + "x"
+            write_diff(root, 0, "dir/f.rs", line, 3, "replace foo", text)
+            write_diff(root, 1, "dir/f.rs", other_line, 3, "replace foo", text)
+            write_diff(root, 2, "dir/f.rs", line, 3, "replace foo", changed)
+            a = summary.mutant_fingerprint(root / "mutants-shard-0", f"dir/f.rs:{line}:3: replace foo")
+            b = summary.mutant_fingerprint(root / "mutants-shard-1", f"dir/f.rs:{other_line}:3: replace foo")
+            c = summary.mutant_fingerprint(root / "mutants-shard-2", f"dir/f.rs:{line}:3: replace foo")
+            self.assertIsNotNone(a)
+            self.assertEqual(a, b)
+            self.assertNotEqual(a, c)
+
     def test_scoped_critical_lines_give_their_file_pattern(self):
         self.assertEqual(summary.critical_pattern("crates/a/src/eval.rs @ request_path  # 11, auth"), "crates/a/src/eval.rs")
         self.assertEqual(summary.critical_pattern("crates/a/src/jwt.rs  # 273"), "crates/a/src/jwt.rs")
@@ -549,8 +629,9 @@ class SurvivorsTest(unittest.TestCase):
 
     def test_accepted_survivor_does_not_fail(self):
         name = "critical/a.rs:12:9: replace foo"
-        self.survivors.write_text("# Reason\ncritical/a.rs: replace foo   \n")
         write_shard(self.root, 0, [mutant(name, "MissedMutant")])
+        write_diff(self.root, 0, "critical/a.rs", 12, 9, "replace foo", "original")
+        self.survivors.write_text("# Reason\n" + summary.fingerprinted_key(name, self.root / "mutants-shard-0") + "   \n")
         self.assertEqual(self.run_summary("--fail-on-new-critical")[0], 0)
         self.assertEqual(self.written()["accepted_survivors"], 1)
         self.assertEqual(self.written()["new_survivors"], [])
@@ -562,8 +643,8 @@ class SurvivorsTest(unittest.TestCase):
         code, stderr = self.run_summary("--fail-on-new-critical")
         self.assertEqual(code, 2)
         self.assertIn("critical/sub/a.rs: replace foo", stderr)
-        self.assertEqual(self.written()["new_survivors"], ["critical/sub/a.rs: replace foo", "other/a.rs: replace bar"])
-        self.assertEqual(self.written()["new_critical_survivors"], ["critical/sub/a.rs: replace foo"])
+        self.assertEqual(self.written()["new_survivors"], ["critical/sub/a.rs: replace foo [fp:none]", "other/a.rs: replace bar [fp:none]"])
+        self.assertEqual(self.written()["new_critical_survivors"], ["critical/sub/a.rs: replace foo [fp:none]"])
         self.assertIn("critical", (self.out / "summary.md").read_text())
         self.critical.write_text("other/no-match.rs\n")
         self.assertEqual(self.run_summary("--fail-on-new-critical")[0], 0)
@@ -575,8 +656,10 @@ class SurvivorsTest(unittest.TestCase):
         self.assertEqual(self.run_summary("--fail-on-missed", "--fail-on-new-critical")[0], 2)
 
     def test_missing_shard_takes_precedence_even_when_accepted(self):
-        self.survivors.write_text("critical/a.rs: replace foo\n")
-        write_shard(self.root, 0, [mutant("critical/a.rs:1:2: replace foo", "MissedMutant")])
+        name = "critical/a.rs:1:2: replace foo"
+        write_shard(self.root, 0, [mutant(name, "MissedMutant")])
+        write_diff(self.root, 0, "critical/a.rs", 1, 2, "replace foo", "original")
+        self.survivors.write_text(summary.fingerprinted_key(name, self.root / "mutants-shard-0") + "\n")
         args = ["--expected-shards", "2", "--survivors", str(self.survivors),
                 "--critical", str(self.critical), "--fail-on-new-critical", str(self.root), str(self.out)]
         with contextlib.redirect_stderr(io.StringIO()):
@@ -595,22 +678,39 @@ class SurvivorsTest(unittest.TestCase):
             with mock.patch.object(Path, "read_text", side_effect=PermissionError("denied")):
                 self.assertEqual(self.run_summary()[0], 1)
         self.assertEqual(self.run_summary()[0], 0)
-        self.assertEqual(self.written()["new_survivors"], ["a.rs: replace foo"])
+        self.assertEqual(self.written()["new_survivors"], ["a.rs: replace foo [fp:none]"])
 
     def test_hostile_new_survivor_cannot_forge_markdown(self):
         name = "critical/a.rs:1:2: replace\n### forged `heading`"
         write_shard(self.root, 0, [mutant(name, "MissedMutant")])
         self.assertEqual(self.run_summary()[0], 0)
-        self.assertEqual(self.written()["new_survivors"], ["critical/a.rs: replace\n### forged `heading`"])
+        self.assertEqual(self.written()["new_survivors"], ["critical/a.rs: replace\n### forged `heading` [fp:none]"])
         md = (self.out / "summary.md").read_text()
         self.assertFalse(any(line.startswith("### forged") for line in md.splitlines()))
         self.assertNotIn("`heading`", md)
         self.assertIn("\\u000a### forged", md)
 
+    def test_hostile_fingerprinted_key_is_cleaned_in_markdown(self):
+        file = "other/evil\n### forged.rs"
+        name = f"{file}:1:2: replace `foo`"
+        write_shard(self.root, 0, [mutant(name, "MissedMutant")])
+        write_diff(self.root, 0, file, 1, 2, "replace `foo`", "original")
+        # Keep the diff headers valid even though the source path contains a newline.
+        diff = next((self.root / "mutants-shard-0" / "diff").iterdir())
+        diff.write_text("--- source\n+++ replace `foo`\n@@ -1 +1 @@\n-original\n+replacement\n")
+        self.assertEqual(self.run_summary()[0], 0)
+        key = self.written()["new_survivors"][0]
+        self.assertNotIn("[fp:none]", key)
+        md = (self.out / "summary.md").read_text()
+        self.assertIn("\\u000a### forged.rs: replace 'foo' [fp:", md)
+        self.assertFalse(any(line.startswith("### forged") for line in md.splitlines()))
+
     def test_keys_use_raw_names_and_preserve_leading_spaces(self):
         key = " critical/a.rs: " + "x" * 350
-        self.survivors.write_text(key + "\n")
-        write_shard(self.root, 0, [mutant(" critical/a.rs:12:3: " + "x" * 350, "MissedMutant")])
+        name = " critical/a.rs:12:3: " + "x" * 350
+        write_shard(self.root, 0, [mutant(name, "MissedMutant")])
+        write_diff(self.root, 0, " critical/a.rs", 12, 3, "x" * 350, "original")
+        self.survivors.write_text(key + " [fp:" + summary.mutant_fingerprint(self.root / "mutants-shard-0", name) + "]\n")
         self.assertEqual(self.run_summary()[0], 0)
         self.assertEqual(self.written()["accepted_survivors"], 1)
 

@@ -11,8 +11,10 @@ missing, a shard has no readable outcomes, or a baseline did not succeed (a base
 makes every mutant look caught, so no result of that run is a result). Every reason is also printed
 on stderr, naming the shard.
 
-Survivor keys remove line and column numbers from raw mutant names. Accepted keys and critical
-file patterns can be supplied with --survivors and --critical. With --fail-on-new-critical, new
+Survivor keys remove line and column numbers from raw mutant names and include a fingerprint of
+the removed source lines from the mutant diff. A missing or ambiguous diff produces `fp:none`,
+which is never accepted. Accepted keys and critical file patterns can be supplied with --survivors
+and --critical. With --fail-on-new-critical, new
 critical survivors exit 2; --fail-on-missed also exits 2 for any missed mutant. Untrusted runs and
 unreadable lists exit 1.
 
@@ -33,9 +35,11 @@ the shard job: anything but success is a problem.
 
 import argparse
 import fnmatch
+import hashlib
 import json
 import re
 import sys
+from typing import Optional
 import unicodedata
 from collections import Counter
 from pathlib import Path
@@ -71,6 +75,35 @@ def clean(value, limit=MAX_NAME):
 def survivor_key(raw_name: str) -> str:
     """Remove the first line and column location from a raw mutant name."""
     return re.sub(r"^(.*?):[0-9]+:[0-9]+: ", r"\1: ", raw_name, count=1, flags=re.DOTALL)
+
+
+def mutant_fingerprint(shard_dir: Path, raw_name: str) -> Optional[str]:
+    """Hash removed source lines from the matching cargo-mutants diff, without location metadata."""
+    match = re.match(r"^(.*?):([0-9]+):([0-9]+): (.*)$", raw_name, flags=re.DOTALL)
+    if match is None:
+        return None
+    file, line, column, description = match.groups()
+    filename = re.compile(rf"^{re.escape(file.replace('/', '__'))}_line_{line}_col_{column}(?:_[0-9]+)?\.diff$")
+    removed = []
+    try:
+        for path in sorted((shard_dir / "diff").iterdir()):
+            if not filename.fullmatch(path.name):
+                continue
+            lines = path.read_text().split("\n")
+            if len(lines) < 2 or lines[1] != f"+++ {description}":
+                continue
+            removed.append([line[1:] for line in lines if line.startswith("-") and not line.startswith("--- ")])
+    except (OSError, UnicodeError):
+        return None
+    if not removed or any(lines != removed[0] for lines in removed[1:]):
+        return None
+    return hashlib.sha256("\n".join(removed[0]).encode("utf-8")).hexdigest()[:16]
+
+
+def fingerprinted_key(raw_name: str, shard_dir: Path) -> str:
+    """Return a location-independent survivor key with its source fingerprint."""
+    fingerprint = mutant_fingerprint(shard_dir, raw_name)
+    return f"{survivor_key(raw_name)} [fp:{fingerprint or 'none'}]"
 
 
 def critical_pattern(line: str) -> str:
@@ -194,7 +227,7 @@ def names_text(names, shown=5):
     return text + (f", … ({len(names)} in all)" if len(names) > shown else "") if names else "none"
 
 
-def merge(shards_dir: Path, expected, mutants_result=None, raw_missed=None):
+def merge(shards_dir: Path, expected, mutants_result=None, raw_missed=None, missed_shards=None):
     found = {}
     for entry in sorted(shards_dir.iterdir()) if shards_dir.is_dir() else []:
         match = SHARD_DIRECTORY.match(entry.name)
@@ -273,6 +306,8 @@ def merge(shards_dir: Path, expected, mutants_result=None, raw_missed=None):
         missed.extend(shard_missed)
         if raw_missed is not None:
             raw_missed.extend(shard_raw_missed)
+        if missed_shards is not None:
+            missed_shards.extend((name, directory) for name in shard_raw_missed)
         timed_out.extend(shard_timed_out)
     mutants_listed = sum(listed_sizes.values())
     complete = bool(found) and all(k in listed_sizes for k in found) and not missing
@@ -363,16 +398,17 @@ def main(argv):
     except (OSError, UnicodeError) as error:
         print(f"mutants-summary: cannot read survivor or critical list: {clean(str(error))}", file=sys.stderr)
         return 1
-    raw_missed = []
-    summary = merge(args.shards_dir, args.expected_shards, args.mutants_result, raw_missed)
+    missed_shards = []
+    summary = merge(args.shards_dir, args.expected_shards, args.mutants_result, missed_shards=missed_shards)
     if args.survivors is not None or args.critical is not None or args.fail_on_new_critical:
-        keys = [survivor_key(name) for name in raw_missed]
-        summary["accepted_survivors"] = sum(key in accepted for key in keys)
-        summary["new_survivors"] = sorted(key for key in keys if key not in accepted)
+        keys = [fingerprinted_key(name, directory) for name, directory in missed_shards]
+        is_accepted = [not key.endswith(" [fp:none]") and key in accepted for key in keys]
+        summary["accepted_survivors"] = sum(is_accepted)
+        summary["new_survivors"] = sorted(key for key, accepted_key in zip(keys, is_accepted) if not accepted_key)
         scoped = scoped_critical_regex(args.critical) if args.critical is not None else None
         new_critical = set()
-        for key, raw in zip(keys, raw_missed):
-            if key in accepted:
+        for key, (raw, _), accepted_key in zip(keys, missed_shards, is_accepted):
+            if accepted_key:
                 continue
             file_part = key.split(": ", 1)[0]
             whole_file = any(fnmatch.fnmatchcase(file_part, pattern) for pattern in critical)

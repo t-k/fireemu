@@ -8,6 +8,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.50.0] - 2026-11-12
+
 ### Added
 
 - Pub/Sub: `pubsub.restNegativeCache` (`"off"` by default; `"production"` is an explicit opt-in under the strict profile, and `productionExact` does not select it) reproduces production's REST negative cache as two production recordings settle it: after a real `404` of a `GET` or `PATCH` of a subscription, `GET`, `PATCH` and `DELETE` of it on the same connection answer `404` for about 10.35 s (the recorded edge lies between 10.20 s and 10.50 s), even after the subscription exists; the `PATCH` and `DELETE` do not run. Another connection, `:verb` requests, snapshots, topics, gRPC and requests with a query string are never answered from it, and a failed create and a `:seek` `404` do not arm it. Whether a `DELETE` `404` arms, the answer for a never-created name, the exemption by a recent `200` and the exact window edge are not recorded yet.
@@ -29,17 +31,14 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 - Test worlds copy Functions sources, dependency links and `NODE_PATH` roots only when `services` selects Functions (`functions` or `functions:<codebase>`) or is omitted. A selection such as `['auth', 'firestore']` skips that snapshot and drops the Functions section from the snapshotted configuration, because the daemon never loads Functions it was not asked to start. Select `functions` for tests that use Auth blocking functions or event-triggered functions.
 - Test worlds create each generation by copy-on-write where the platform supports it: `cp -c` on macOS (APFS) and a forced reflink per file on Linux (btrfs, XFS), with a plain copy as the fallback. Every generation still owns its bytes.
 - `fireemu doctor` reports the Node.js the Functions runner selects (`FIREEMU_NODE`, else the first `node` on `PATH` or in `VOLTA_HOME`), chosen by the code Functions start-up uses, instead of the `node` found on `PATH`. A `FIREEMU_NODE` that cannot run is reported as a problem. `doctor` also states that a Python codebase uses the `venv` in its own source.
+- Strict profile: a callable refuses an `Authorization` credential that is not a verified ID token of the project with the callable wrapper's own `401` envelope (`{"error":{"message":"Unauthenticated","status":"UNAUTHENTICATED"}}`, `application/json; charset=utf-8`, `Vary: Origin`), as production answered a malformed Bearer, a scheme in another case, `Bearer` without a token, another scheme and an unsigned three-part token, in two recordings on 2026-11-11: a real callable and a callable's code deployed as a plain `onRequest` function. Another scheme and `Bearer` without a token used to reach the handler as if no credential were sent, and a malformed Bearer was answered with the front end's `401` page. An ID token this project issued whose signature the daemon cannot verify or that has expired is answered with the same envelope: two re-recordings on 2026-11-11 (a real callable, right after the public grant and 60 s later) showed production's wrapper refusing both, which supersedes the front end's page recorded on 2026-09-27. More than one `Authorization` field still gets the front end's page (no recording sends the wrapper two). An empty `Authorization` value is no credential, as the installed firebase-functions reads it: the handler runs unauthenticated (unrecorded, inferred from the SDK); a value that is not text is refused with the envelope. The same refusal applies to a callable that a configured manifest serves as `onRequest`.
+- Strict profile: a callable's wrapper nested in an `onRequest` function (`onRequest(opts, onCall(...))`, which discovery cannot see as a callable) no longer accepts a credential the daemon did not verify as an identity: it refuses it with the wrapper's `401` envelope, as production's wrapper does. A plain `onRequest` function is unchanged and still receives every credential.
 
 ### Fixed
 
 - Test worlds: `Promise.all([world.control('POST', 'sessions/default:awaitIdle'), world.clock.advance(1000)])` no longer waits for itself. A pending `awaitIdle` no longer holds up later clock calls on the same world, `reset()` and `dispose()` cancel pending waits instead of waiting for their budget, and an `awaitIdle` request is bounded by its own `timeoutSeconds` (30 s by default) plus five seconds rather than by `requestTimeoutMs`.
 - Dependencies: rustix is updated to 1.1.6 for RUSTSEC-2026-0486 (extended-attribute reads with a zero-length buffer).
 - `fireemu config show` (text and `--json`) and `fireemu config lint --json` no longer print OIDC client secrets, API keys, Auth custom token signer keys, Pub/Sub local bearer tokens or App Check debug token digests in plaintext.
-
-### Changed
-
-- Strict profile: a callable refuses an `Authorization` credential that is not a verified ID token of the project with the callable wrapper's own `401` envelope (`{"error":{"message":"Unauthenticated","status":"UNAUTHENTICATED"}}`, `application/json; charset=utf-8`, `Vary: Origin`), as production answered a malformed Bearer, a scheme in another case, `Bearer` without a token, another scheme and an unsigned three-part token, in two recordings on 2026-11-11: a real callable and a callable's code deployed as a plain `onRequest` function. Another scheme and `Bearer` without a token used to reach the handler as if no credential were sent, and a malformed Bearer was answered with the front end's `401` page. An ID token this project issued whose signature the daemon cannot verify or that has expired is answered with the same envelope: two re-recordings on 2026-11-11 (a real callable, right after the public grant and 60 s later) showed production's wrapper refusing both, which supersedes the front end's page recorded on 2026-09-27. More than one `Authorization` field still gets the front end's page (no recording sends the wrapper two). An empty `Authorization` value is no credential, as the installed firebase-functions reads it: the handler runs unauthenticated (unrecorded, inferred from the SDK); a value that is not text is refused with the envelope. The same refusal applies to a callable that a configured manifest serves as `onRequest`.
-- Strict profile: a callable's wrapper nested in an `onRequest` function (`onRequest(opts, onCall(...))`, which discovery cannot see as a callable) no longer accepts a credential the daemon did not verify as an identity: it refuses it with the wrapper's `401` envelope, as production's wrapper does. A plain `onRequest` function is unchanged and still receives every credential.
 
 ## [0.49.0] - 2026-11-11
 
@@ -1324,7 +1323,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/fireemu/fireemu/compare/v0.49.0...HEAD
+[Unreleased]: https://github.com/fireemu/fireemu/compare/v0.50.0...HEAD
+[0.50.0]: https://github.com/fireemu/fireemu/compare/v0.49.0...v0.50.0
 [0.49.0]: https://github.com/fireemu/fireemu/compare/v0.48.0...v0.49.0
 [0.48.0]: https://github.com/fireemu/fireemu/compare/v0.47.0...v0.48.0
 [0.47.0]: https://github.com/t-k/fireemu/compare/v0.46.0...v0.47.0

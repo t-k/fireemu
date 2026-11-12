@@ -2788,6 +2788,21 @@ impl StorageState {
             .next_blob
             .checked_add(1)
             .ok_or(StorageError::IdentityExhausted)?;
+        let size = bytes.len() as u64;
+        let body = if let Some((dir, threshold)) = &self.spill {
+            if size >= *threshold {
+                let mut file = dir
+                    .create_file()
+                    .map_err(|e| StorageError::SpillFailed(e.to_string()))?;
+                file.append(&bytes)
+                    .map_err(|e| StorageError::SpillFailed(e.to_string()))?;
+                BlobBody::Spilled(Arc::new(file))
+            } else {
+                BlobBody::Memory(Arc::new(bytes))
+            }
+        } else {
+            BlobBody::Memory(Arc::new(bytes))
+        };
         self.next_blob = next_blob;
         let blob = BlobId(next_blob);
         self.next_generation = self.next_generation.max(object.generation);
@@ -2796,7 +2811,7 @@ impl StorageState {
             name: object.name.clone(),
             generation: object.generation,
             metageneration: object.metageneration,
-            size: bytes.len() as u64,
+            size,
             content_type: object.content_type,
             content_disposition: object.content_disposition,
             content_encoding: object.content_encoding,
@@ -2821,7 +2836,7 @@ impl StorageState {
             }
             self.remove_blob(old.blob);
         }
-        self.insert_blob(blob, BlobBody::Memory(Arc::new(bytes)));
+        self.insert_blob(blob, body);
         Ok(meta)
     }
 

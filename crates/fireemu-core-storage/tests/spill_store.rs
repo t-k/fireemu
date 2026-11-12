@@ -318,3 +318,73 @@ fn a_spill_directory_debug_output_names_the_type_and_not_the_path() {
     assert!(text.contains("SpillDir"), "{text}");
     assert!(!text.contains("does-not-appear"), "{text}");
 }
+
+#[test]
+fn imported_objects_spill_and_preserve_metadata_and_bytes() {
+    use fireemu_core_storage::store::ImportedObject;
+    use std::collections::BTreeMap;
+
+    let root = std::env::temp_dir().join(format!("spill-import-{}", std::process::id()));
+    let process = ProcessSpill::create(&root).unwrap();
+    let bucket = BucketName::try_new("example.appspot.com").unwrap();
+    let now = LogicalInstant::UNIX_EPOCH;
+    let imported = |name: &str, size: usize| ImportedObject {
+        bucket: bucket.clone(),
+        name: ObjectName::try_new(name).unwrap(),
+        generation: 42,
+        metageneration: 3,
+        content_type: "text/plain".to_owned(),
+        content_disposition: None,
+        content_encoding: None,
+        content_language: None,
+        cache_control: Some("public, max-age=60".to_owned()),
+        custom: BTreeMap::from([("custom".to_owned(), "value".to_owned())]),
+        custom_defined: true,
+        time_created: now,
+        updated: now,
+        download_tokens: vec![],
+        md5: None,
+        crc32c: None,
+        size: Some(size as u64),
+    };
+    let mut store = StorageState::new(1);
+    let mut memory = StorageState::new(1);
+    store.set_spill(Some((process.spill_dir(), 4)));
+    for (name, body) in [("large", &b"0123456789"[..]), ("small", &b"ab"[..])] {
+        let object = imported(name, body.len());
+        let meta = store
+            .insert_imported(object.clone(), body.to_vec())
+            .unwrap();
+        let expected = memory.insert_imported(object, body.to_vec()).unwrap();
+        assert_eq!(meta, expected);
+        assert_eq!(store.body_bytes(&meta).unwrap().as_ref(), body);
+        assert_eq!(store.body_shared(&meta).unwrap().as_slice(), body);
+    }
+    assert_eq!(store.retained_blob_bytes(), memory.retained_blob_bytes());
+    let files = spill_files(process.path());
+    assert_eq!(files.len(), 1);
+    assert_eq!(fs::read(&files[0]).unwrap(), b"0123456789");
+
+    let bad = root.join("not-a-directory");
+    fs::write(&bad, b"x").unwrap();
+    store.set_spill(Some((SpillDir::new(&bad), 4)));
+    let before = store.retained_blob_bytes();
+    let missing = imported("missing", 10);
+    assert!(matches!(
+        store.insert_imported(missing.clone(), b"0123456789".to_vec()),
+        Err(StorageError::SpillFailed(_))
+    ));
+    assert!(store.get(&bucket, &missing.name).is_none());
+    let existing = imported("large", 10);
+    let original = store.get(&bucket, &existing.name).unwrap().clone();
+    assert!(matches!(
+        store.insert_imported(existing, b"abcdefghij".to_vec()),
+        Err(StorageError::SpillFailed(_))
+    ));
+    assert_eq!(store.get(&bucket, &original.name), Some(&original));
+    assert_eq!(store.body_bytes(&original).unwrap().as_ref(), b"0123456789");
+    assert_eq!(store.retained_blob_bytes(), before);
+    drop(store);
+    drop(process);
+    fs::remove_dir_all(root).unwrap();
+}

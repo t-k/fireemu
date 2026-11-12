@@ -1,0 +1,908 @@
+{
+  "version": 1,
+  "recordedAgainst": {
+    "target": "production Cloud Functions 2nd gen function fireemuHttpProbe (us-central1, allUsers run.invoker), FUNCTIONS-HTTP sandbox project, deployed twice: variant `wrapper` is a callable's code served as a plain onRequest function (onRequest(opts, onCall(opts, handler)): httpsTrigger, no callable trigger or label), variant `callable` is the same handler as a real onCall function",
+    "task": "FUNCTIONS-HTTP-BEARER (owner ledger 2408), packet FUNCTIONS-HTTP-CALLABLE-INGRESS v1",
+    "note": "The project id, its number and every bucket name are left out. captures are the recorder's own records (callable-ingress/observation.mjs, bearer-observation.mjs captureFetch): status, kept headers, every header name, body byte count and SHA-256, body text; the host was never recorded."
+  },
+  "gitSha": "b41c114c1f39e59fe0a425814ae0c022ecaeaf40",
+  "corpusDigest": "ad3da40df55b9aad6c0e086dee3bf42fb4cb92323f00877c2da1bdc554fd232d",
+  "runs": {
+    "wrapper": {
+      "runId": "2026-11-11T091744.725Z",
+      "envelope": "FUNCTIONS-HTTP-CALLABLE-INGRESS-20261111-01",
+      "recordedAt": "2026-11-11T09:17:44.725Z",
+      "privateCapturesSha256": "0ede7c51032ab5e297a63539971311fd21e70b72f44b12bb045c627c73fd61cf",
+      "captures": [
+        {
+          "seq": 1,
+          "pass": 1,
+          "caseId": "no-authorization",
+          "method": "POST",
+          "path": "/",
+          "authorization": null,
+          "latencyMs": 457,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "24",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 24,
+          "bodySha256": "b267f186af5790ea4506732b69763cfa8252978c7092063dc79ad27f5e1cc0da",
+          "bodyText": "{\"result\":{\"auth\":null}}",
+          "error": null
+        },
+        {
+          "seq": 2,
+          "pass": 1,
+          "caseId": "malformed-bearer",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Bearer malformed",
+          "latencyMs": 258,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null
+        },
+        {
+          "seq": 3,
+          "pass": 1,
+          "caseId": "lowercase-scheme",
+          "method": "POST",
+          "path": "/",
+          "authorization": "bearer malformed",
+          "latencyMs": 187,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null
+        },
+        {
+          "seq": 4,
+          "pass": 1,
+          "caseId": "bare-scheme",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Bearer",
+          "latencyMs": 182,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null
+        },
+        {
+          "seq": 5,
+          "pass": 1,
+          "caseId": "basic-scheme",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Basic dXNlcjpwYXNz",
+          "latencyMs": 185,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null
+        },
+        {
+          "seq": 6,
+          "pass": 1,
+          "caseId": "unsigned-jwt",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ4In0.c2ln",
+          "latencyMs": 183,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null
+        },
+        {
+          "seq": 7,
+          "pass": 2,
+          "caseId": "no-authorization",
+          "method": "POST",
+          "path": "/",
+          "authorization": null,
+          "latencyMs": 183,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "24",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 24,
+          "bodySha256": "b267f186af5790ea4506732b69763cfa8252978c7092063dc79ad27f5e1cc0da",
+          "bodyText": "{\"result\":{\"auth\":null}}",
+          "error": null
+        },
+        {
+          "seq": 8,
+          "pass": 2,
+          "caseId": "malformed-bearer",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Bearer malformed",
+          "latencyMs": 177,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null
+        },
+        {
+          "seq": 9,
+          "pass": 2,
+          "caseId": "lowercase-scheme",
+          "method": "POST",
+          "path": "/",
+          "authorization": "bearer malformed",
+          "latencyMs": 183,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null
+        },
+        {
+          "seq": 10,
+          "pass": 2,
+          "caseId": "bare-scheme",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Bearer",
+          "latencyMs": 184,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null
+        },
+        {
+          "seq": 11,
+          "pass": 2,
+          "caseId": "basic-scheme",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Basic dXNlcjpwYXNz",
+          "latencyMs": 179,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null
+        },
+        {
+          "seq": 12,
+          "pass": 2,
+          "caseId": "unsigned-jwt",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ4In0.c2ln",
+          "latencyMs": 171,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null
+        }
+      ],
+      "judgement": {
+        "verdict": "recorded",
+        "reasons": [],
+        "answers": [
+          {
+            "caseId": "no-authorization",
+            "class": "served-by-function",
+            "status": 200,
+            "contentType": "application/json; charset=utf-8",
+            "bodyBytes": 24,
+            "bodySha256": "b267f186af5790ea4506732b69763cfa8252978c7092063dc79ad27f5e1cc0da"
+          },
+          {
+            "caseId": "malformed-bearer",
+            "class": "other",
+            "status": 401,
+            "contentType": "application/json; charset=utf-8",
+            "bodyBytes": 66,
+            "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8"
+          },
+          {
+            "caseId": "lowercase-scheme",
+            "class": "other",
+            "status": 401,
+            "contentType": "application/json; charset=utf-8",
+            "bodyBytes": 66,
+            "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8"
+          },
+          {
+            "caseId": "bare-scheme",
+            "class": "other",
+            "status": 401,
+            "contentType": "application/json; charset=utf-8",
+            "bodyBytes": 66,
+            "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8"
+          },
+          {
+            "caseId": "basic-scheme",
+            "class": "other",
+            "status": 401,
+            "contentType": "application/json; charset=utf-8",
+            "bodyBytes": 66,
+            "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8"
+          },
+          {
+            "caseId": "unsigned-jwt",
+            "class": "other",
+            "status": 401,
+            "contentType": "application/json; charset=utf-8",
+            "bodyBytes": 66,
+            "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8"
+          }
+        ],
+        "newShapes": [
+          "malformed-bearer",
+          "lowercase-scheme",
+          "bare-scheme",
+          "basic-scheme",
+          "unsigned-jwt"
+        ],
+        "needsReview": true,
+        "lockKept": false
+      },
+      "requests": {
+        "invocation": 12,
+        "control": 14,
+        "cleanup": 11,
+        "auth": 0,
+        "cliDeploy": 1,
+        "cliDelete": 1,
+        "token": 1,
+        "upload": 5
+      },
+      "cleanup": {
+        "actions": [
+          "function-deployed",
+          "public-invoker-granted",
+          "public-invoker-revoked",
+          "function-deleted",
+          "source-upload-deleted",
+          "service-identity-generation-possible"
+        ],
+        "builds": [
+          {
+            "status": "SUCCESS",
+            "createTime": "2026-11-11T09:18:29.424540638Z",
+            "finishTime": "2026-11-11T09:19:10.010932Z"
+          }
+        ],
+        "openBuilds": 0,
+        "closureReady": true
+      }
+    },
+    "callable": {
+      "runId": "2026-11-11T092202.271Z",
+      "envelope": "FUNCTIONS-HTTP-CALLABLE-INGRESS-20261111-02",
+      "recordedAt": "2026-11-11T09:22:02.271Z",
+      "privateCapturesSha256": "a1e5f550e71215bde6515b1b2e4efcdf13052a21be5b2b4781c1ae28c479a4e9",
+      "captures": [
+        {
+          "seq": 1,
+          "pass": 1,
+          "caseId": "no-authorization",
+          "method": "POST",
+          "path": "/",
+          "authorization": null,
+          "latencyMs": 442,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "24",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 24,
+          "bodySha256": "b267f186af5790ea4506732b69763cfa8252978c7092063dc79ad27f5e1cc0da",
+          "bodyText": "{\"result\":{\"auth\":null}}",
+          "error": null
+        },
+        {
+          "seq": 2,
+          "pass": 1,
+          "caseId": "malformed-bearer",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Bearer malformed",
+          "latencyMs": 218,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null
+        },
+        {
+          "seq": 3,
+          "pass": 1,
+          "caseId": "lowercase-scheme",
+          "method": "POST",
+          "path": "/",
+          "authorization": "bearer malformed",
+          "latencyMs": 196,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null
+        },
+        {
+          "seq": 4,
+          "pass": 1,
+          "caseId": "bare-scheme",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Bearer",
+          "latencyMs": 176,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null
+        },
+        {
+          "seq": 5,
+          "pass": 1,
+          "caseId": "basic-scheme",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Basic dXNlcjpwYXNz",
+          "latencyMs": 171,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null
+        },
+        {
+          "seq": 6,
+          "pass": 1,
+          "caseId": "unsigned-jwt",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ4In0.c2ln",
+          "latencyMs": 195,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null
+        },
+        {
+          "seq": 7,
+          "pass": 2,
+          "caseId": "no-authorization",
+          "method": "POST",
+          "path": "/",
+          "authorization": null,
+          "latencyMs": 182,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "24",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 24,
+          "bodySha256": "b267f186af5790ea4506732b69763cfa8252978c7092063dc79ad27f5e1cc0da",
+          "bodyText": "{\"result\":{\"auth\":null}}",
+          "error": null
+        },
+        {
+          "seq": 8,
+          "pass": 2,
+          "caseId": "malformed-bearer",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Bearer malformed",
+          "latencyMs": 173,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null
+        },
+        {
+          "seq": 9,
+          "pass": 2,
+          "caseId": "lowercase-scheme",
+          "method": "POST",
+          "path": "/",
+          "authorization": "bearer malformed",
+          "latencyMs": 198,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null
+        },
+        {
+          "seq": 10,
+          "pass": 2,
+          "caseId": "bare-scheme",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Bearer",
+          "latencyMs": 168,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null
+        },
+        {
+          "seq": 11,
+          "pass": 2,
+          "caseId": "basic-scheme",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Basic dXNlcjpwYXNz",
+          "latencyMs": 178,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null
+        },
+        {
+          "seq": 12,
+          "pass": 2,
+          "caseId": "unsigned-jwt",
+          "method": "POST",
+          "path": "/",
+          "authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ4In0.c2ln",
+          "latencyMs": 179,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "66",
+            "server": "Google Frontend",
+            "vary": "Origin"
+          },
+          "headerNames": [
+            "alt-svc",
+            "content-length",
+            "content-type",
+            "date",
+            "server",
+            "vary",
+            "x-cloud-trace-context"
+          ],
+          "bodyBytes": 66,
+          "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8",
+          "bodyText": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+          "error": null
+        }
+      ],
+      "judgement": {
+        "verdict": "recorded",
+        "reasons": [],
+        "answers": [
+          {
+            "caseId": "no-authorization",
+            "class": "served-by-function",
+            "status": 200,
+            "contentType": "application/json; charset=utf-8",
+            "bodyBytes": 24,
+            "bodySha256": "b267f186af5790ea4506732b69763cfa8252978c7092063dc79ad27f5e1cc0da"
+          },
+          {
+            "caseId": "malformed-bearer",
+            "class": "other",
+            "status": 401,
+            "contentType": "application/json; charset=utf-8",
+            "bodyBytes": 66,
+            "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8"
+          },
+          {
+            "caseId": "lowercase-scheme",
+            "class": "other",
+            "status": 401,
+            "contentType": "application/json; charset=utf-8",
+            "bodyBytes": 66,
+            "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8"
+          },
+          {
+            "caseId": "bare-scheme",
+            "class": "other",
+            "status": 401,
+            "contentType": "application/json; charset=utf-8",
+            "bodyBytes": 66,
+            "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8"
+          },
+          {
+            "caseId": "basic-scheme",
+            "class": "other",
+            "status": 401,
+            "contentType": "application/json; charset=utf-8",
+            "bodyBytes": 66,
+            "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8"
+          },
+          {
+            "caseId": "unsigned-jwt",
+            "class": "other",
+            "status": 401,
+            "contentType": "application/json; charset=utf-8",
+            "bodyBytes": 66,
+            "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8"
+          }
+        ],
+        "newShapes": [
+          "malformed-bearer",
+          "lowercase-scheme",
+          "bare-scheme",
+          "basic-scheme",
+          "unsigned-jwt"
+        ],
+        "needsReview": true,
+        "lockKept": false
+      },
+      "requests": {
+        "invocation": 12,
+        "control": 14,
+        "cleanup": 11,
+        "auth": 0,
+        "cliDeploy": 1,
+        "cliDelete": 1,
+        "token": 1,
+        "upload": 5
+      },
+      "cleanup": {
+        "actions": [
+          "function-deployed",
+          "public-invoker-granted",
+          "public-invoker-revoked",
+          "function-deleted",
+          "source-upload-deleted",
+          "service-identity-generation-possible"
+        ],
+        "builds": [
+          {
+            "status": "SUCCESS",
+            "createTime": "2026-11-11T09:22:42.794572087Z",
+            "finishTime": "2026-11-11T09:23:21.884397Z"
+          }
+        ],
+        "openBuilds": 0,
+        "closureReady": true
+      }
+    }
+  }
+}

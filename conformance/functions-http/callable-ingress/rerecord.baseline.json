@@ -1,0 +1,17 @@
+{
+  "note": "Recorded production answers the stage 3 re-recording is judged against. Three kinds are known: the callable's own answer to a request without Authorization (stage 3 functions-http/callable/auth-context#no-authorization, also run 2 of FUNCTIONS-HTTP-CALLABLE-INGRESS), the Google front end's 401 page (stage 3 functions-http/callable/auth-refusal, read from ../bearer-observation.baseline.json), and the callable wrapper's own 401 envelope (FUNCTIONS-HTTP-CALLABLE-INGRESS, 2026-11-11, both runs, both passes, five Authorization shapes).",
+  "wrapperEnvelope": {
+    "cite": "conformance/functions-http-callable-ingress-production.json, runs wrapper and callable, malformed-bearer",
+    "status": 401,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"error\":{\"message\":\"Unauthenticated\",\"status\":\"UNAUTHENTICATED\"}}",
+    "bodyBytes": 66,
+    "bodySha256": "d6d8a75a93869bce456da27bfbbf89962eeecb466374e5a3ec6dea93062b27d8"
+  },
+  "validToken": {
+    "cite": "stage 3 functions-http/callable/auth-context#valid-project-id-token, passes 1 and 2",
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "resultKeys": ["uid", "email", "emailVerified", "signInProvider"]
+  }
+}

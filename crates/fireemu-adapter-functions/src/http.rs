@@ -1125,33 +1125,122 @@ fn marked_callable_in_code(runtime: &FunctionsRuntime, function: &str) -> bool {
         .is_some_and(|entry| entry.platform_options.strict_callable_ingress)
 }
 
-fn strict_callable_bearer_refusal(
+/// The field that tells the runner the one `Authorization` field of a request to a non-callable HTTP
+/// endpoint is a Bearer of a user of the project (tools/runner-node/nested-callable.mjs). Every
+/// caller-supplied copy is removed before the daemon sets its own.
+const VERIFIED_CREDENTIAL_HEADER: &str = "x-fireemu-credential-verified";
+
+fn verified_single_credential(runtime: &FunctionsRuntime, raw: &hyper::HeaderMap) -> bool {
+    matches!(
+        field_values(raw, "authorization").as_slice(),
+        [only] if is_verified_user(runtime, only)
+    )
+}
+
+/// What the strict daemon answers a callable request for the credential it presents.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StrictCallableCredential {
+    /// No credential (an empty value is none), or one single Bearer that is a user of the project:
+    /// the request goes on.
+    Accepted,
+    /// The Google front end's 401 page, for more than one `Authorization` field (a request no
+    /// recording sends the wrapper). FUNCTIONS-HTTP stage 3 (2026-09-27) also recorded it for a
+    /// malformed Bearer and for an ID token of the project with an invalid signature or past its
+    /// expiry; two re-recordings on 2026-11-11 (FUNCTIONS-HTTP-CALLABLE-RERECORD) answered all of
+    /// those with the wrapper's envelope, so the page is no longer answered for any single
+    /// credential.
+    FrontEndPage,
+    /// The callable wrapper's own `401 UNAUTHENTICATED` envelope. Production recorded it for a
+    /// malformed Bearer, a scheme in another case, a scheme without a token, another scheme, a
+    /// three-part token that no Firebase project issued (FUNCTIONS-HTTP-CALLABLE-INGRESS, for a
+    /// real callable and for a callable's code served as `onRequest`) and, in the re-recordings, an
+    /// ID token of the project with an invalid signature or past its expiry: the front end hands
+    /// the request on and the wrapper refuses every single credential that is not a verified ID
+    /// token (an empty value is no credential, and is accepted).
+    WrapperRefusal,
+}
+
+/// Classifies the credential a strict callable request presents; see [`StrictCallableCredential`].
+///
+/// The daemon can verify only the credential it sees, while a runner's HTTP server decides which
+/// one the wrapper gets (Werkzeug joins the values with a comma, Node keeps the first), and the
+/// wrapper accepts any structurally valid ID token under the Auth emulator: `Bearer <forged
+/// token>` next to `AAAA` would have skipped this check and reached the wrapper as a forged
+/// identity. More than one `Authorization` field is therefore refused outright.
+pub(crate) fn strict_callable_credential(
+    runtime: &FunctionsRuntime,
+    presented: &[String],
+) -> StrictCallableCredential {
+    let authorization = match presented {
+        [] => return StrictCallableCredential::Accepted,
+        // An empty value is no credential: the SDK the wrapper runs reads it as missing and runs
+        // the handler unauthenticated (firebase-functions `checkAuthToken`). No recording covers
+        // this shape; strict follows the installed SDK. A value that is not text arrives here as
+        // a placeholder (`credential_values`), never as the empty string.
+        [single] if single.is_empty() => return StrictCallableCredential::Accepted,
+        [single] => single,
+        _ => return StrictCallableCredential::FrontEndPage,
+    };
+    if is_verified_user(runtime, authorization) {
+        StrictCallableCredential::Accepted
+    } else {
+        StrictCallableCredential::WrapperRefusal
+    }
+}
+
+fn is_verified_user(runtime: &FunctionsRuntime, authorization: &str) -> bool {
+    runtime.callable_auth_verifier().is_some_and(|verifier| {
+        matches!(
+            verifier
+                .principal_from_authorization_for_project(Some(authorization), runtime.project(),),
+            Ok(fireemu_adapter_grpc::rules::Principal::User(_))
+        )
+    })
+}
+
+/// The refusal for [`StrictCallableCredential`], or `None` when the request goes on.
+fn strict_callable_credential_refusal(
     runtime: &FunctionsRuntime,
     raw: &hyper::HeaderMap,
+    streaming: bool,
+    origin: Option<&str>,
 ) -> Option<Response<OutBody>> {
-    let presented = field_values(raw, "authorization");
-    strict_callable_bearer_unverified(runtime, &presented).then(|| {
-        typed(
+    let presented = credential_values(raw, "authorization");
+    match strict_callable_credential(runtime, &presented) {
+        StrictCallableCredential::Accepted => None,
+        StrictCallableCredential::FrontEndPage => Some(typed(
             StatusCode::UNAUTHORIZED,
             "text/html; charset=UTF-8",
             UNAUTHORIZED_PAGE,
-        )
-    })
+        )),
+        StrictCallableCredential::WrapperRefusal => {
+            let mut response = callable_credential_refusal(
+                &crate::callable::unauthenticated_response(),
+                streaming,
+                origin,
+            );
+            // The wrapper's CORS middleware sends it whatever the request's Origin.
+            response.headers_mut().insert(
+                hyper::header::VARY,
+                hyper::header::HeaderValue::from_static("Origin"),
+            );
+            Some(response)
+        }
+    }
 }
 
 /// Whether the credential a strict callable request presents is one the daemon cannot verify as
 /// a Bearer of one of the project's users. No credential, a single credential of another scheme
 /// and an empty token are left to the handler (the wrapper refuses them itself).
 ///
-/// More than one `Authorization` header is refused outright. The daemon can verify only the
-/// credential it sees, while a runner's HTTP server decides which one the wrapper gets (Werkzeug
-/// joins the values with a comma, Node keeps the first), and the wrapper accepts any structurally
-/// valid ID token under the Auth emulator: `Bearer <forged token>` next to `AAAA` would have
-/// skipped this check and reached the wrapper as a forged identity.
+/// This is the check a task delivered to a callable passes ([`crate::runtime`]); an HTTP request
+/// is classified by [`strict_callable_credential`], which also answers the credentials this one
+/// leaves to the wrapper, because production's wrapper refuses them with its own envelope.
 ///
+/// More than one `Authorization` header is refused outright (see [`strict_callable_credential`]).
 /// A task delivered to a callable that a configured manifest serves as a queue passes the same
-/// check ([`crate::runtime`]), because the Admin SDK's own verification under the Auth
-/// emulator does not check signatures.
+/// check, because the Admin SDK's own verification under the Auth emulator does not check
+/// signatures.
 pub(crate) fn strict_callable_bearer_unverified(
     runtime: &FunctionsRuntime,
     presented: &[String],
@@ -1167,14 +1256,7 @@ pub(crate) fn strict_callable_bearer_unverified(
     if !scheme.eq_ignore_ascii_case("bearer") || token.is_empty() {
         return false;
     }
-    let verified_user = runtime.callable_auth_verifier().is_some_and(|verifier| {
-        matches!(
-            verifier
-                .principal_from_authorization_for_project(Some(authorization), runtime.project(),),
-            Ok(fireemu_adapter_grpc::rules::Principal::User(_))
-        )
-    });
-    !verified_user
+    !is_verified_user(runtime, authorization)
 }
 
 /// Answers the Cloud Tasks routes, including the emulator diagnostics endpoint.
@@ -1737,6 +1819,28 @@ fn rebound_host_refusal(req: &Request<Incoming>) -> Option<Response<OutBody>> {
     })
 }
 
+/// The fields the strict daemon sets on a request to the runner: where the request came from (as the
+/// front end sets them) and whether the one credential of a non-callable HTTP endpoint was verified.
+///
+/// The runner cannot verify a credential. A callable's wrapper nested in a non-callable endpoint
+/// (invisible to discovery) refuses every credential the daemon did not verify here, as production's
+/// wrapper does; the field is the only way the runner learns it.
+fn add_strict_forwarding_headers(
+    headers: &mut Vec<(String, String)>,
+    peer_ip: std::net::IpAddr,
+    credential_verified: bool,
+) {
+    headers.retain(|(name, _)| {
+        !name.eq_ignore_ascii_case("x-forwarded-for")
+            && !name.eq_ignore_ascii_case("x-forwarded-proto")
+    });
+    headers.push(("x-forwarded-for".to_owned(), peer_ip.to_string()));
+    headers.push(("x-forwarded-proto".to_owned(), "https".to_owned()));
+    if credential_verified {
+        headers.push((VERIFIED_CREDENTIAL_HEADER.to_owned(), "1".to_owned()));
+    }
+}
+
 async fn respond(
     runtime: Arc<FunctionsRuntime>,
     channels: Arc<crate::eventarc_channels::ChannelStore>,
@@ -1769,7 +1873,7 @@ async fn respond(
         return Ok(refusal);
     }
     let method = req.method().as_str().to_owned();
-    let (callable, _plain_http, streaming_callable) = http_trigger_kinds(&runtime, function);
+    let (callable, plain_http, streaming_callable) = http_trigger_kinds(&runtime, function);
     let callable_preflight = callable && method == "OPTIONS";
     // The SDK's CORS middleware owns every callable OPTIONS response, including
     // explicit cors:false and origin lists. Preflights do not authenticate or invoke
@@ -1785,7 +1889,12 @@ async fn respond(
     if profile == FunctionsHttpProfile::Strict
         && ((callable && !callable_preflight) || (code_callable && method != "OPTIONS"))
     {
-        if let Some(denial) = strict_callable_bearer_refusal(&runtime, req.headers()) {
+        if let Some(denial) = strict_callable_credential_refusal(
+            &runtime,
+            req.headers(),
+            streaming,
+            origin.as_deref(),
+        ) {
             drain_refused_body(req.into_body()).await;
             return Ok(denial);
         }
@@ -1796,6 +1905,7 @@ async fn respond(
         .filter(|(k, _)| {
             !k.as_str()
                 .eq_ignore_ascii_case(crate::invoker::OWNER_TOKEN_HEADER)
+                && !k.as_str().eq_ignore_ascii_case(VERIFIED_CREDENTIAL_HEADER)
         })
         .filter_map(|(k, v)| {
             v.to_str()
@@ -1822,12 +1932,8 @@ async fn respond(
         }
     };
     if profile == FunctionsHttpProfile::Strict {
-        headers.retain(|(name, _)| {
-            !name.eq_ignore_ascii_case("x-forwarded-for")
-                && !name.eq_ignore_ascii_case("x-forwarded-proto")
-        });
-        headers.push(("x-forwarded-for".to_owned(), peer_ip.to_string()));
-        headers.push(("x-forwarded-proto".to_owned(), "https".to_owned()));
+        let verified = plain_http && verified_single_credential(&runtime, req.headers());
+        add_strict_forwarding_headers(&mut headers, peer_ip, verified);
     }
     let body = match collect_body(req.into_body(), body_limit).await {
         Ok(body) => body,
@@ -1854,6 +1960,23 @@ async fn respond(
 /// The empty string is not a value anything accepts: it classifies as malformed for App Check
 /// and fails ID token verification. What matters is that it still counts as an instance, so a
 /// second copy cannot hide behind a byte that does not render.
+/// The placeholder a credential field that is not text is presented as: never empty (an empty value
+/// is no credential), never a Bearer, never verified.
+const NON_TEXT_CREDENTIAL: &str = "\u{FFFD}";
+
+/// Like [`field_values`] for a credential: a value that is not renderable as text is a credential
+/// that must be refused, so it is not collapsed into the empty string (which is no credential).
+fn credential_values(headers: &hyper::HeaderMap, name: &str) -> Vec<String> {
+    headers
+        .get_all(name)
+        .iter()
+        .map(|v| {
+            v.to_str()
+                .map_or_else(|_| NON_TEXT_CREDENTIAL.to_owned(), str::to_owned)
+        })
+        .collect()
+}
+
 fn field_values(headers: &hyper::HeaderMap, name: &str) -> Vec<String> {
     headers
         .get_all(name)
@@ -2692,5 +2815,42 @@ mod strict_eventarc_tests {
             // Another test may take a number in between, so "later" rather than "next".
             assert!(pair[1] > pair[0], "the counter only moves forward");
         }
+    }
+}
+
+#[cfg(test)]
+mod credential_values_tests {
+    use super::{credential_values, field_values, NON_TEXT_CREDENTIAL};
+    use hyper::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+
+    fn one(value: &[u8]) -> HeaderMap {
+        let mut map = HeaderMap::new();
+        map.append(AUTHORIZATION, HeaderValue::from_bytes(value).unwrap());
+        map
+    }
+
+    #[test]
+    fn an_empty_credential_stays_empty_and_a_value_that_is_not_text_is_never_empty() {
+        // The empty value is no credential (the SDK reads it as missing).
+        assert_eq!(credential_values(&one(b""), "authorization"), [""]);
+        for value in [&b"\xff"[..], b"\xc3\xa9", b"Bearer \xfe\xfe", b"\x80"] {
+            let presented = credential_values(&one(value), "authorization");
+            assert_eq!(presented, [NON_TEXT_CREDENTIAL], "{value:?}");
+            assert!(!presented[0].is_empty());
+            // The general collection collapses it into the empty string: the reason for the split.
+            assert_eq!(
+                field_values(&one(value), "authorization"),
+                [""],
+                "{value:?}"
+            );
+        }
+        let mut two = one(b"");
+        two.append(AUTHORIZATION, HeaderValue::from_bytes(b"\xff").unwrap());
+        assert_eq!(
+            credential_values(&two, "authorization"),
+            ["", NON_TEXT_CREDENTIAL],
+            "every instance counts"
+        );
+        assert!(credential_values(&HeaderMap::new(), "authorization").is_empty());
     }
 }

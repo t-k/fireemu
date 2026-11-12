@@ -64,7 +64,13 @@ test("a target spec gets its own resources, and the named target keeps its old o
     packageName: `projects/${P}/locations/us-central1/repositories/gcf-artifacts/packages/fireemu--oracle--query__us--central1__fireemu_http_probe`,
     imagePrefix: `us-central1-docker.pkg.dev/${P}/gcf-artifacts/fireemu--oracle--query__us--central1__fireemu_http_probe`,
     deployArgs: ["deploy", "--only", "functions:functions-http-oracle:fireemuHttpProbe"],
-    deleteArgs: ["functions:delete", "fireemuHttpProbe", "--region", "us-central1", "--force"],
+    deleteArgs: [
+      "functions:delete",
+      "functions-http-oracle:fireemuHttpProbe",
+      "--region",
+      "us-central1",
+      "--force",
+    ],
   });
   const other = production.targetResources(spec({ region: "europe-west1" }));
   assert.deepEqual(other, {
@@ -561,7 +567,7 @@ test("a spec cannot be named like a codebase, and cannot sit beside functions of
   );
 });
 
-test("the function list of a region must be complete, and the named targets are not listed at all", async () => {
+test("the function list of a region must be complete, and the named targets are listed too (their delete is by a name filter)", async () => {
   const target = spec();
   let pages = 0;
   const endless = async (_m, url) => {
@@ -576,9 +582,10 @@ test("the function list of a region must be complete, and the named targets are 
     async (_m, url) => (urls.push(url), { status: 404, value: {} }),
     "http",
   );
-  assert.ok(
-    urls.every((u) => !u.includes("/functions?")),
-    "the named target reads exactly what it read before",
+  assert.equal(
+    urls.filter((u) => u.includes("/functions?")).length,
+    1,
+    "the named target's absence check also lists the region once",
   );
   // the listing of pages follows the token
   const seen = [];
@@ -703,7 +710,13 @@ test("the named targets keep their literal CLI arguments and resource names (gol
     packageName: `projects/${P}/locations/us-central1/repositories/gcf-artifacts/packages/fireemu--oracle--query__us--central1__fireemu_callable_probe`,
     imagePrefix: `us-central1-docker.pkg.dev/${P}/gcf-artifacts/fireemu--oracle--query__us--central1__fireemu_callable_probe`,
     deployArgs: ["deploy", "--only", "functions:functions-http-oracle:fireemuCallableProbe"],
-    deleteArgs: ["functions:delete", "fireemuCallableProbe", "--region", "us-central1", "--force"],
+    deleteArgs: [
+      "functions:delete",
+      "functions-http-oracle:fireemuCallableProbe",
+      "--region",
+      "us-central1",
+      "--force",
+    ],
   });
 });
 

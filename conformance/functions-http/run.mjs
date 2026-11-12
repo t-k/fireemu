@@ -16,6 +16,7 @@ import {
   localExpiredToken,
   validateCorpus,
 } from "./harness.mjs";
+import { guardedFetch } from "./send-guard.mjs";
 import { runCases } from "./session.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -38,7 +39,7 @@ const localAuthUrl = (path) => {
 };
 
 async function localAuth(method, body) {
-  const response = await fetch(localAuthUrl(method), {
+  const response = await guardedFetch(localAuthUrl(method), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),

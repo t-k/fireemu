@@ -1321,6 +1321,7 @@ pub struct RuntimeConfig {
     /// agent's grants. Default: `implicit` unless `productionExact` or the key asks for `iam`.
     pub pubsub_dead_letter_authorization: DeadLetterAuthorization,
     /// `pubsub.restNegativeCache`: whether REST repeats a missing subscription's 404 on a connection.
+    /// An explicit opt-in: `productionExact` does not select it (owner line 2482, ruling 4).
     pub pubsub_rest_negative_cache: RestNegativeCacheMode,
     /// `database.defaultAccess`: what a Realtime Database without rules allows.
     pub database_default_access: DatabaseDefaultAccess,
@@ -4455,11 +4456,6 @@ impl RuntimeConfig {
         } else {
             DeadLetterAuthorization::Implicit
         };
-        self.pubsub_rest_negative_cache = if exact {
-            RestNegativeCacheMode::Production
-        } else {
-            RestNegativeCacheMode::Off
-        };
         self.database_default_access = if exact {
             DatabaseDefaultAccess::Locked
         } else {
@@ -4561,10 +4557,6 @@ impl RuntimeConfig {
             (
                 "pubsub.deadLetterAuthorization",
                 self.pubsub_dead_letter_authorization.as_config_str(),
-            ),
-            (
-                "pubsub.restNegativeCache",
-                self.pubsub_rest_negative_cache.as_config_str(),
             ),
             (
                 "appCheck.debugTokens",
@@ -7182,8 +7174,7 @@ mod tests {
                     (
                         "functions.authBlockingToken"
                         | "eventarc.authentication"
-                        | "hosting.cacheControl"
-                        | "pubsub.restNegativeCache",
+                        | "hosting.cacheControl",
                         true,
                     ) => json!("production"),
                     // The key only matters to the strict profile; the emulator profile
@@ -10932,56 +10923,41 @@ mod tests {
                 RuntimeConfig::from_json(&json!({"schemaVersion": 1, "profile": profile})).unwrap();
             assert_eq!(cfg.pubsub_rest_negative_cache, RestNegativeCacheMode::Off);
         }
-        // `productionExact` turns it on; an explicit value wins in both directions.
-        let source = |cfg: &RuntimeConfig| {
-            cfg.development_defaults
-                .iter()
-                .find(|entry| entry["key"] == "pubsub.restNegativeCache")
-                .unwrap()["source"]
-                .as_str()
-                .unwrap()
-                .to_owned()
-        };
-        for (input, mode, expected_source) in [
+        // `productionExact` does not turn it on (owner line 2482: the link waits for a recording that
+        // settles the open questions); only an explicit "production" does, and an explicit "off" is
+        // honoured whatever else is set.
+        for (input, mode) in [
             (
                 json!({"schemaVersion": 1, "productionExact": true}),
-                RestNegativeCacheMode::Production,
-                "productionExact",
+                RestNegativeCacheMode::Off,
             ),
             (
                 json!({"schemaVersion": 1, "productionExact": false}),
                 RestNegativeCacheMode::Off,
-                "default",
             ),
-            (
-                json!({"schemaVersion": 1}),
-                RestNegativeCacheMode::Off,
-                "default",
-            ),
+            (json!({"schemaVersion": 1}), RestNegativeCacheMode::Off),
             (
                 json!({"schemaVersion": 1, "productionExact": true, "pubsub": {"restNegativeCache": "off"}}),
                 RestNegativeCacheMode::Off,
-                "explicit",
-            ),
-            (
-                json!({"schemaVersion": 1, "productionExact": false, "pubsub": {"restNegativeCache": "production"}}),
-                RestNegativeCacheMode::Production,
-                "explicit",
             ),
             (
                 json!({"schemaVersion": 1, "pubsub": {"restNegativeCache": "production"}}),
                 RestNegativeCacheMode::Production,
-                "explicit",
             ),
             (
                 json!({"schemaVersion": 1, "productionExact": true, "pubsub": {"restNegativeCache": "production"}}),
                 RestNegativeCacheMode::Production,
-                "explicit",
             ),
         ] {
             let cfg = RuntimeConfig::from_json(&input).unwrap();
             assert_eq!(cfg.pubsub_rest_negative_cache, mode, "{input}");
-            assert_eq!(source(&cfg), expected_source, "{input}");
+            // It is not a development default: it never appears among them.
+            assert!(
+                cfg.development_defaults
+                    .iter()
+                    .all(|entry| entry["key"] != "pubsub.restNegativeCache"),
+                "{input}"
+            );
         }
     }
 

@@ -18,7 +18,11 @@ Two recordings of the observation packet `PUBSUB-NEGCACHE` on a disposable Pub/S
 | A create whose body `name` equals the URL name does not clear the entry. | N4 |
 | The entry serves for at least 10.2 s from the start of the arming request. | N2a |
 
-## Documented choices
+## Not linked to `productionExact`
+
+The link (owner line 2482) waits for a follow-up observation that settles the open questions below; until then `pubsub.restNegativeCache = "production"` is an explicit opt-in and `productionExact` leaves it off.
+
+## Documented choices (not recorded)
 
 - The window edge lies in (10.20 s, 10.50 s]: 11 of 12 reads at 10.50 s or later were forwarded, one `DELETE`-armed entry still answered at 10.50 s. fireemu uses 10.35 s.
 - A `DELETE` that answers 404 does not arm (the recordings disagree on its second read).

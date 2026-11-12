@@ -167,4 +167,5 @@ export interface TestWorld {
 
 export function createTestWorld(options?: TestWorldOptions): Promise<TestWorld>;
 export function dumpPaths(directory: string): { json: string; html: string };
+export function writeDiagnosticsDump(directory: string, control: TestWorld['control']): Promise<{ json: string; html: string }>;
 export function withTestWorld<T>(options: TestWorldOptions, callback: (world: TestWorld) => T): Promise<Awaited<T>>;

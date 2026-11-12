@@ -46,14 +46,21 @@ module.exports.json = options => (req,res,next) => {
 for(const name of ['text','urlencoded','raw'])module.exports[name]=()=> (_req,_res,next)=>next();
 `;
 const fixtureSource = `
-const handler = async (req, res) => {
+const handler = async (req, res, auth) => {
   const first = process.env.FUNCTIONS_EMULATOR;
   await Promise.resolve();
   const later = process.env.FUNCTIONS_EMULATOR;
   const timer = await new Promise(resolve => setTimeout(() => resolve(process.env.FUNCTIONS_EMULATOR), 1));
-  res.json({first: first ?? null, later, timer, marker: 'x-fireemu-task-identity' in req.headers});
+  res.json({first: first ?? null, later, timer, auth: auth ?? null, marker: 'x-fireemu-task-identity' in req.headers});
 };
-const task = (req, res) => handler(req, res);
+const task = (req, res) => {
+  let auth;
+  if (!process.env.FUNCTIONS_EMULATOR && req.headers.authorization?.startsWith('Bearer ')) {
+    const payload = req.headers.authorization.slice(7).split('.')[1];
+    try { auth = JSON.parse(Buffer.from(payload, 'base64url').toString()); } catch {}
+  }
+  return handler(req, res, auth);
+};
 task.__endpoint = {platform:'gcfv1', taskQueueTrigger:{}};
 const http = (req, res) => handler(req, res);
 http.__endpoint = {platform:'gcfv1', httpsTrigger:{}};
@@ -93,26 +100,26 @@ async function start(t, {profile}={}) {
 }
 
 
-test('strict dispatch hides only the first read for each marked task', {timeout:10000}, async t => {
+test('strict marked tasks build auth while the handler and timer see the flag', {timeout:10000}, async t => {
   const f = await start(t, {profile:'strict'});
   for (let i = 0; i < 2; i++) {
-    const response = await f.httpCall('task', {}, {headers:{'x-fireemu-task-identity':'1'}});
+    const response = await f.httpCall('task', {}, {headers:{'x-fireemu-task-identity':'1', authorization:'Bearer e30.eyJzdWIiOiJ0YXNrIn0.'}});
     assert.equal(response.status, 200);
-    assert.deepEqual(JSON.parse(response.text), {first:null, later:'true', timer:'true', marker:false});
+    assert.deepEqual(JSON.parse(response.text), {first:'true', later:'true', timer:'true', auth:{sub:'task'}, marker:false});
   }
-  for (const headers of [{authorization:'Bearer a.b.c'}, {'x-fireemu-task-identity':'yes'}]) {
+  for (const headers of [{authorization:'Bearer e30.eyJzdWIiOiJ0YXNrIn0.'}, {'x-fireemu-task-identity':'yes', authorization:'Bearer e30.eyJzdWIiOiJ0YXNrIn0.'}]) {
     const response = await f.httpCall('task', {}, {headers});
     assert.equal(response.status, 200);
-    assert.deepEqual(JSON.parse(response.text), {first:'true', later:'true', timer:'true', marker:false});
+    assert.deepEqual(JSON.parse(response.text), {first:'true', later:'true', timer:'true', auth:null, marker:false});
   }
-  const response = await f.httpCall('http', {}, {headers:{'x-fireemu-task-identity':'1'}});
+  const response = await f.httpCall('http', {}, {headers:{'x-fireemu-task-identity':'1', authorization:'Bearer e30.eyJzdWIiOiJ0YXNrIn0.'}});
   assert.equal(response.status, 200);
-  assert.deepEqual(JSON.parse(response.text), {first:'true', later:'true', timer:'true', marker:false});
+  assert.deepEqual(JSON.parse(response.text), {first:'true', later:'true', timer:'true', auth:null, marker:false});
 });
 
 test('emulator profile removes the marker without hiding the flag', {timeout:10000}, async t => {
   const f = await start(t, {profile:'emulator'});
-  const response = await f.httpCall('task', {}, {headers:{'x-fireemu-task-identity':'1'}});
+  const response = await f.httpCall('task', {}, {headers:{'x-fireemu-task-identity':'1', authorization:'Bearer e30.eyJzdWIiOiJ0YXNrIn0.'}});
   assert.equal(response.status, 200);
-  assert.deepEqual(JSON.parse(response.text), {first:'true', later:'true', timer:'true', marker:false});
+  assert.deepEqual(JSON.parse(response.text), {first:'true', later:'true', timer:'true', auth:null, marker:false});
 });

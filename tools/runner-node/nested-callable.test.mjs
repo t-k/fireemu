@@ -38,9 +38,9 @@ test("the daemon's marker is read and removed from every spelling, whatever the 
   }
 });
 
-test("only a request to a non-callable HTTP endpoint in the strict profile is marked", () => {
+test("only a request to a non-callable endpoint is marked", () => {
   assert.equal(markNonCallableRequest(request(), plain), true);
-  assert.equal(markNonCallableRequest(request(), { strict: false, nonCallableHttp: true }), false);
+  assert.equal(markNonCallableRequest(request(), { strict: false, nonCallableHttp: true }), true);
   assert.equal(markNonCallableRequest(request(), { strict: true, nonCallableHttp: false }), false);
   assert.equal(markNonCallableRequest(request(), {}), false);
   // A request that was not marked is handed to the wrapper unchanged, whatever it carries.
@@ -170,7 +170,7 @@ test("a request without headers, or with raw headers that are not a list, is nei
   const bare = { method: "POST" };
   assert.equal(markNonCallableRequest(bare, plain), true);
   assert.equal(requestForCallableWrapper(bare), bare);
-  assert.equal(markNonCallableRequest({}, { strict: false, nonCallableHttp: true }), false);
+  assert.equal(markNonCallableRequest({}, { strict: false, nonCallableHttp: true }), true);
   for (const rawHeaders of ["x-fireemu-credential-verified: 1", { length: 2 }, 7, null]) {
     const req = { headers: {}, rawHeaders };
     markNonCallableRequest(req, plain);
@@ -197,16 +197,19 @@ test("the wrapper sees only App Check tokens admitted by the daemon", () => {
   }
 });
 
-test("a task dispatched to a plain HTTP export hides a forged App Check token from its nested wrapper", () => {
+test("every non-callable invocation path hides a forged App Check token from its nested wrapper", () => {
   for (const strict of [false, true]) {
-    const req = request({
-      "x-cloudtasks-taskname": "task-1",
-      "x-firebase-appcheck": "forged.token.signature",
-      [VERIFIED_APP_CHECK_HEADER]: "0",
-    });
-    markNonCallableRequest(req, { strict, nonCallableHttp: true });
-    assert.equal(requestForCallableWrapper(req).header("x-firebase-appcheck"), undefined);
-    assert.equal(req.header("x-firebase-appcheck"), "forged.token.signature");
+    for (const path of ["direct HTTP", "direct queue URL", "task to HTTP", "task to queue"]) {
+      for (const marker of [undefined, "0"]) {
+        const headers = { "x-firebase-appcheck": "forged.token.signature" };
+        if (path.startsWith("task")) headers["x-cloudtasks-taskname"] = "task-1";
+        if (marker !== undefined) headers[VERIFIED_APP_CHECK_HEADER] = marker;
+        const req = request(headers);
+        markNonCallableRequest(req, { strict, nonCallableHttp: true });
+        assert.equal(requestForCallableWrapper(req).header("x-firebase-appcheck"), undefined, path);
+        assert.equal(req.header("x-firebase-appcheck"), "forged.token.signature", path);
+      }
+    }
   }
 });
 
@@ -226,10 +229,22 @@ test("property: a nested wrapper cannot read an unadmitted App Check token", () 
   }
 });
 
-test("without App Check selected the emulator profile leaves the nested request unchanged", () => {
+test("a missing App Check marker cannot admit a token", () => {
   const req = request({ "x-firebase-appcheck": "unverified" });
-  assert.equal(markNonCallableRequest(req, { strict: false, nonCallableHttp: true }), false);
-  assert.equal(requestForCallableWrapper(req), req);
+  assert.equal(markNonCallableRequest(req, { strict: false, nonCallableHttp: true }), true);
+  assert.equal(requestForCallableWrapper(req).header("x-firebase-appcheck"), undefined);
+});
+
+test("a daemon marker also guards an entry discovered as callable", () => {
+  const req = request({
+    authorization: "Bearer admitted",
+    "x-firebase-appcheck": "forged.token.signature",
+    [VERIFIED_APP_CHECK_HEADER]: "0",
+  });
+  assert.equal(markNonCallableRequest(req, { strict: true, nonCallableHttp: false }), true);
+  const seen = requestForCallableWrapper(req);
+  assert.equal(seen.header("x-firebase-appcheck"), undefined);
+  assert.equal(seen.header("authorization"), "Bearer admitted");
 });
 
 test("an admitted App Check token populates request.app in the SDK wrapper", async (t) => {

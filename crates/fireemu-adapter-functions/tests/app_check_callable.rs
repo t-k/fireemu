@@ -923,6 +923,38 @@ async fn start_with_env_marking(
 }
 
 #[tokio::test]
+async fn direct_http_marks_forged_app_check_for_plain_and_queue_targets() {
+    use fireemu_adapter_functions::http::FunctionsHttpProfile::{Emulator, Strict};
+
+    for profile in [Emulator, Strict] {
+        for queue_mapped in [false, true] {
+            let env = if queue_mapped {
+                vec![("FIREEMU_FAKE_TASK_ECHO".into(), "1".into())]
+            } else {
+                vec![]
+            };
+            let h = start_with_env(true, env, profile, false).await;
+            h.runtime.set_owner_token("test-owner".to_owned());
+            let response = h
+                .request(
+                    "POST",
+                    "echo",
+                    &[
+                        ("x-fireemu-owner-token", "test-owner"),
+                        ("x-firebase-appcheck", "forged.token.signature"),
+                        ("x-fireemu-appcheck-verified", "1"),
+                    ],
+                )
+                .await;
+            assert_eq!(response.status, 200, "{profile:?}, queue={queue_mapped}");
+            let body: Value = serde_json::from_slice(&response.body).expect("echo body");
+            assert_eq!(echoed(&body, "x-fireemu-appcheck-verified"), ["0"]);
+            h.stop().await;
+        }
+    }
+}
+
+#[tokio::test]
 async fn task_dispatch_marks_a_forged_app_check_token_as_unverified() {
     let log = std::env::temp_dir().join(format!(
         "fireemu-task-appcheck-{}.jsonl",

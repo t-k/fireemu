@@ -1936,7 +1936,7 @@ async fn respond(
             }
         }
     };
-    if plain_http {
+    if !callable {
         let app_check = field_values(req.headers(), APP_CHECK_HEADER);
         add_app_check_verification_header(&runtime, function, &app_check, &mut headers);
     }

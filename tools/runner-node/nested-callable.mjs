@@ -28,8 +28,8 @@ const CONTEXT = Symbol.for("fireemu.endpointContext");
 /// the SDK reads it as an invalid credential without decoding it.
 export const UNVERIFIED_CREDENTIAL = "fireemu-unverified-credential";
 
-/// Reads and removes the daemon's marker, then marks the request when it is served by a
-/// non-callable HTTP endpoint in the strict profile. Returns whether the request was marked.
+/// Reads and removes the daemon's markers, then marks requests to non-callable entries.
+/// A missing App Check marker never admits a token. Returns whether the request was marked.
 export function markNonCallableRequest(req, { strict, nonCallableHttp }) {
   const marker = req.headers?.[VERIFIED_CREDENTIAL_HEADER];
   const appCheckMarker = req.headers?.[VERIFIED_APP_CHECK_HEADER];
@@ -47,9 +47,9 @@ export function markNonCallableRequest(req, { strict, nonCallableHttp }) {
     }
     req.rawHeaders = kept;
   }
-  if (!nonCallableHttp || (!strict && appCheckMarker === undefined)) return false;
+  if (!nonCallableHttp && appCheckMarker === undefined) return false;
   Object.defineProperty(req, CONTEXT, {
-    value: Object.freeze({ credentialVerified: !strict || marker === "1", appCheckVerified: appCheckMarker === undefined || appCheckMarker === "1" }),
+    value: Object.freeze({ credentialVerified: !nonCallableHttp || !strict || marker === "1", appCheckVerified: appCheckMarker === "1" }),
     configurable: true,
   });
   return true;

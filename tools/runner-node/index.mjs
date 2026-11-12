@@ -1396,11 +1396,10 @@ async function makeHttpServer(functions, manifest) {
         .send(`no HTTP function ${req.params.project}/${req.params.region}/${req.params.name}`);
       return;
     }
-    // A request to a non-callable HTTP endpoint is marked in the strict profile, so that a callable
-    // wrapper nested in it refuses a credential the daemon did not verify (nested-callable.mjs).
+    // Guard nested callable wrappers for every non-callable entry, including task queues.
     markNonCallableRequest(req, {
       strict: strictProfile(),
-      nonCallableHttp: spec.trigger?.type === "http" && spec.trigger.callable !== true,
+      nonCallableHttp: spec.trigger?.type !== "http" || spec.trigger.callable !== true,
     });
     // Without App Check a callable that could consume a token never sees one, whichever path
     // the request took here (spec 13.4; app-check-token.mjs).

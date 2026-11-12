@@ -163,3 +163,27 @@ fn credential_scan_accepts_underscore_and_hyphen_in_each_position() {
     let key = format!("{} {}{}", "x".repeat(20), "AIza", "a".repeat(35));
     assert_eq!(scrub(&key).1, 1, "key after a long prefix");
 }
+
+#[test]
+fn string_budget_cuts_on_character_boundaries_and_html_escapes() {
+    let long = "a".repeat(10_000);
+    let boundary = format!("{}😀<", "a".repeat(4095));
+    let escaped = format!("<{}", "b".repeat(10_000));
+    let bundle = Bundle::from_input(
+        input(0, vec![], vec![long, boundary, escaped]),
+        Limits::default(),
+    );
+    assert_eq!(bundle.logs.lines[0].len(), 4096);
+    assert_eq!(bundle.logs.lines[1], "a".repeat(4095));
+    assert_eq!(bundle.logs.lines[2].len(), 4096);
+    assert!(fireemu_adapter_support::diagnostics::to_html(&bundle).contains("&lt;"));
+    let cuts: Vec<_> = bundle
+        .truncations
+        .iter()
+        .filter(|t| t.section == "strings")
+        .collect();
+    assert_eq!(cuts.len(), 3);
+    assert_eq!((cuts[0].kept, cuts[0].dropped), (4096, 5904));
+    assert_eq!((cuts[1].kept, cuts[1].dropped), (4096, 5));
+    assert_eq!((cuts[2].kept, cuts[2].dropped), (4096, 5905));
+}

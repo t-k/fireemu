@@ -18,9 +18,19 @@ pub fn scrub(text: &str) -> (String, u64) {
             let parts: Vec<_> = word.split('.').collect();
             parts.len() == 3
                 && parts[0].starts_with("eyJ")
-                && parts
-                    .iter()
-                    .all(|p| p.len() >= 10 && p.bytes().all(token_char))
+                && parts[0].len() >= 7
+                && parts[1].len() >= 4
+                && parts.iter().all(|p| p.bytes().all(token_char))
+        });
+    // Only long base64url runs next to a refresh label are detected; opaque tokens elsewhere may survive.
+    let refresh = ["refreshtoken", "refresh_token", "refresh"]
+        .iter()
+        .any(|label| {
+            lower.match_indices(label).any(|(i, _)| {
+                let rest = &text[i + label.len()..];
+                let rest = rest.trim_start_matches([':', '=', '"']);
+                rest.bytes().take_while(|b| token_char(*b)).count() >= 40
+            })
         });
     if lower.contains("authorization")
         || bearer
@@ -29,6 +39,7 @@ pub fn scrub(text: &str) -> (String, u64) {
         || text.contains("-----BEGIN ")
         || text.contains("\"private_key\"")
         || jwt
+        || refresh
     {
         return ("[redacted]".into(), 1);
     }

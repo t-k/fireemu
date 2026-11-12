@@ -30,6 +30,13 @@ fn each_credential_shape_is_masked_on_its_own() {
         format!("{}{}", "-----BEG", "IN PRIVATE KEY-----"),
         format!("{}{}", "\"private", "_key\": 1"),
         jwt,
+        format!(
+            "{}.{}.{}",
+            "eyJ".to_owned() + &"a".repeat(5),
+            "b".repeat(4),
+            ""
+        ),
+        format!("refreshToken\":\"{}", "r".repeat(60)),
     ];
     for case in &cases {
         assert!(masked(case), "not masked: {case:?}");
@@ -47,7 +54,7 @@ fn near_misses_of_each_shape_are_kept() {
         format!("{}{}", "BEGIN ", "PRIVATE KEY"),
         format!(
             "{}.{}.{}",
-            "eyJ".to_owned() + &"a".repeat(5),
+            "eyJ".to_owned() + &"a".repeat(3),
             "b".repeat(10),
             "c".repeat(10)
         ),

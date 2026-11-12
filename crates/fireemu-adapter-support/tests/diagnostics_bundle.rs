@@ -50,7 +50,7 @@ proptest! {
         i.functions.events = vec![json!(null); n];
         i.logs.lines = vec![String::new(); n];
         i.rules.denials = vec![RuleDenial { service: String::new(), location: String::new(), method: String::new(), path: String::new(), uid: None, reason: String::new(), conditions: vec![] }; n];
-        let b = Bundle::from_input(i, Limits { max_events: limit, max_log_lines: limit, max_denials: limit });
+        let b = Bundle::from_input(i, Limits { max_events: limit, max_log_lines: limit, max_denials: limit, ..Limits::default() });
         prop_assert!(b.functions.events.len() <= limit);
         prop_assert!(b.logs.lines.len() <= limit);
         prop_assert!(b.rules.denials.len() <= limit);

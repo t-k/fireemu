@@ -157,6 +157,8 @@ pub struct Limits {
     pub max_events: usize,
     /// Maximum retained log lines.
     pub max_log_lines: usize,
+    /// Maximum bytes retained in each string value.
+    pub max_string_bytes: usize,
 }
 impl Default for Limits {
     fn default() -> Self {
@@ -164,6 +166,7 @@ impl Default for Limits {
             max_denials: 1000,
             max_events: 1000,
             max_log_lines: 1000,
+            max_string_bytes: 4096,
         }
     }
 }
@@ -196,6 +199,7 @@ pub struct Bundle {
 
 impl Bundle {
     /// Builds a bounded bundle and scrubs sensitive text.
+    #[allow(clippy::too_many_lines)]
     pub fn from_input(mut input: BundleInput, limits: Limits) -> Self {
         fn limit<T>(items: &mut Vec<T>, max: usize, section: &str, out: &mut Vec<Truncation>) {
             if items.len() > max {
@@ -207,16 +211,29 @@ impl Bundle {
                 items.truncate(max);
             }
         }
-        fn clean(v: &mut Value, count: &mut u64) {
+        fn clean(v: &mut Value, count: &mut u64, max: usize, cuts: &mut Vec<Truncation>) {
             match v {
                 Value::String(s) => {
                     let (new, n) = redact::scrub(s);
                     *s = new;
                     *count += n;
+                    if s.len() > max {
+                        let mut end = max;
+                        while !s.is_char_boundary(end) {
+                            end -= 1;
+                        }
+                        // For string truncations, kept is the byte limit and dropped is the number of bytes removed.
+                        cuts.push(Truncation {
+                            section: "strings".into(),
+                            kept: max,
+                            dropped: (s.len() - end) as u64,
+                        });
+                        s.truncate(end);
+                    }
                 }
                 Value::Array(a) => {
                     for x in a {
-                        clean(x, count);
+                        clean(x, count, max, cuts);
                     }
                 }
                 Value::Object(o) => {
@@ -224,7 +241,7 @@ impl Bundle {
                     for (k, mut v) in old {
                         let (k, n) = redact::scrub(&k);
                         *count += n;
-                        clean(&mut v, count);
+                        clean(&mut v, count, max, cuts);
                         o.insert(k, v);
                     }
                 }
@@ -266,8 +283,34 @@ impl Bundle {
         // Scrub a value representation so nested JSON keys and values receive the same treatment.
         let mut v = to_value(&b);
         let mut count = 0;
-        clean(&mut v, &mut count);
+        // Config keys are array elements in the JSON representation, so scrub them separately without cutting them.
+        let mut config = v
+            .as_object_mut()
+            .expect("bundle object")
+            .remove("config")
+            .expect("config");
+        let existing_truncations = v
+            .as_object_mut()
+            .expect("bundle object")
+            .remove("truncations")
+            .expect("truncations");
+        let mut cuts = Vec::new();
+        clean(&mut v, &mut count, limits.max_string_bytes, &mut cuts);
+        for pair in config.as_array_mut().expect("config array") {
+            let pair = pair.as_array_mut().expect("config pair");
+            let (key, n) = redact::scrub(pair[0].as_str().expect("config key"));
+            pair[0] = Value::String(key);
+            count += n;
+            clean(&mut pair[1], &mut count, limits.max_string_bytes, &mut cuts);
+        }
+        v.as_object_mut()
+            .expect("bundle object")
+            .insert("config".into(), config);
+        v.as_object_mut()
+            .expect("bundle object")
+            .insert("truncations".into(), existing_truncations);
         b = from_value(&v).expect("scrubbing preserves bundle shape");
+        b.truncations.extend(cuts);
         b.redactions = count;
         b
     }

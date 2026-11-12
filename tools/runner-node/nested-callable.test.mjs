@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   UNVERIFIED_CREDENTIAL,
   VERIFIED_CREDENTIAL_HEADER,
+  VERIFIED_APP_CHECK_HEADER,
   guardCallableWrapper,
   markNonCallableRequest,
   requestForCallableWrapper,
@@ -174,5 +175,80 @@ test("a request without headers, or with raw headers that are not a list, is nei
     const req = { headers: {}, rawHeaders };
     markNonCallableRequest(req, plain);
     assert.equal(req.rawHeaders, rawHeaders);
+  }
+});
+
+test("the wrapper sees only App Check tokens admitted by the daemon", () => {
+  for (const strict of [true, false]) {
+    for (const marker of ["0", "1"]) {
+      const req = request({
+        [VERIFIED_APP_CHECK_HEADER]: marker,
+        "x-firebase-appcheck": "header.payload.signature",
+        authorization: "Bearer forged",
+      }, ["X-Fireemu-AppCheck-Verified", marker, "X-Firebase-AppCheck", "header.payload.signature"]);
+      markNonCallableRequest(req, { strict, nonCallableHttp: true });
+      const seen = requestForCallableWrapper(req);
+      assert.equal(seen.header("X-Firebase-AppCheck"), marker === "1" ? "header.payload.signature" : undefined);
+      assert.equal(req.header("X-Firebase-AppCheck"), "header.payload.signature");
+      assert.equal(req.headers[VERIFIED_APP_CHECK_HEADER], undefined);
+      assert.deepEqual(req.rawHeaders, ["X-Firebase-AppCheck", "header.payload.signature"]);
+      assert.equal(seen.header("authorization"), strict ? UNVERIFIED_CREDENTIAL : "Bearer forged");
+    }
+  }
+});
+
+test("property: a nested wrapper cannot read an unadmitted App Check token", () => {
+  let seed = 12345;
+  const alphabet = "abcXYZ019._- ";
+  for (let run = 0; run < 500; run += 1) {
+    let token = "";
+    for (let i = 0; i < 20; i += 1) {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      token += alphabet[seed % alphabet.length];
+    }
+    const req = request({ [VERIFIED_APP_CHECK_HEADER]: "0", "x-firebase-appcheck": token });
+    markNonCallableRequest(req, plain);
+    assert.equal(requestForCallableWrapper(req).header("X-Firebase-AppCheck"), undefined);
+    assert.equal(req.header("X-Firebase-AppCheck"), token);
+  }
+});
+
+test("without App Check selected the emulator profile leaves the nested request unchanged", () => {
+  const req = request({ "x-firebase-appcheck": "unverified" });
+  assert.equal(markNonCallableRequest(req, { strict: false, nonCallableHttp: true }), false);
+  assert.equal(requestForCallableWrapper(req), req);
+});
+
+test("an admitted App Check token populates request.app in the SDK wrapper", async (t) => {
+  const { existsSync } = await import("node:fs");
+  const { createRequire } = await import("node:module");
+  const { EventEmitter } = await import("node:events");
+  const sdk = new URL("../../conformance/node_modules/firebase-functions/lib/common/providers/https.js", import.meta.url);
+  if (!existsSync(sdk)) return t.skip("firebase-functions is not installed under conformance");
+  const previousMode = process.env.FIREBASE_DEBUG_MODE;
+  const previousFeatures = process.env.FIREBASE_DEBUG_FEATURES;
+  process.env.FIREBASE_DEBUG_MODE = "true";
+  process.env.FIREBASE_DEBUG_FEATURES = '{"skipTokenVerification":true}';
+  try {
+    const { onCallHandler } = createRequire(import.meta.url)(sdk.pathname);
+    const wrapper = guardCallableWrapper(onCallHandler({ cors: { origin: false }, enforceAppCheck: true }, (call) => ({ app: call.app }), "gcfv2"));
+    const encode = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
+    const token = `${encode({ alg: "none" })}.${encode({ sub: "app-id" })}.signature`;
+    for (const [marker, expectedStatus] of [["0", 401], ["1", 200]]) {
+      const req = request({ "content-type": "application/json", "x-firebase-appcheck": token, [VERIFIED_APP_CHECK_HEADER]: marker });
+      markNonCallableRequest(req, plain);
+      const res = new EventEmitter();
+      res.status = (status) => { res.statusCode = status; return res; };
+      res.send = (body) => { res.body = body; res.emit("finish"); return res; };
+      res.setHeader = () => {};
+      res.getHeader = () => undefined;
+      await wrapper(req, res);
+      assert.equal(res.statusCode, expectedStatus);
+      if (marker === "1") assert.equal(res.body.result.app.appId, "app-id");
+      else assert.equal(res.body.error.status, "UNAUTHENTICATED");
+    }
+  } finally {
+    if (previousMode === undefined) delete process.env.FIREBASE_DEBUG_MODE; else process.env.FIREBASE_DEBUG_MODE = previousMode;
+    if (previousFeatures === undefined) delete process.env.FIREBASE_DEBUG_FEATURES; else process.env.FIREBASE_DEBUG_FEATURES = previousFeatures;
   }
 });

@@ -2413,6 +2413,62 @@ async fn marker_sent(h: &Harness, headers: &[(&str, &str)]) -> Vec<String> {
 async fn strict_tells_the_runner_which_credential_of_a_plain_http_function_it_verified() {
     use fireemu_adapter_functions::http::FunctionsHttpProfile::{Emulator, Strict};
     const FIELD: &str = VERIFIED_CREDENTIAL_FIELD;
+    let h = start_with_consume_profile(true, "disabled", Strict).await;
+    let app_token = token_for(&h.gate, PROJECT, APP_ID);
+    for (token, expected) in [(&app_token, "1"), (&format!("{app_token}x"), "0")] {
+        let response = h
+            .request("POST", "echo", &[("x-firebase-appcheck", token)])
+            .await;
+        let body: Value = serde_json::from_slice(&response.body).expect("echo body");
+        assert_eq!(echoed(&body, "x-fireemu-appcheck-verified"), [expected]);
+        assert_eq!(echoed(&body, "x-firebase-appcheck"), [token.as_str()]);
+    }
+    let response = h
+        .request(
+            "POST",
+            "echo",
+            &[
+                ("connection", "x-fireemu-appcheck-verified"),
+                ("x-firebase-appcheck", "forged"),
+            ],
+        )
+        .await;
+    let body: Value = serde_json::from_slice(&response.body).expect("echo body");
+    assert_eq!(echoed(&body, "x-fireemu-appcheck-verified"), ["0"]);
+    let other_app = token_for(&h.gate, "demo-other", OTHER_APP_ID);
+    for headers in [
+        vec![("x-firebase-appcheck", other_app.as_str())],
+        vec![
+            ("x-firebase-appcheck", app_token.as_str()),
+            ("X-Firebase-AppCheck", app_token.as_str()),
+        ],
+    ] {
+        let response = h.request("POST", "echo", &headers).await;
+        let body: Value = serde_json::from_slice(&response.body).expect("echo body");
+        assert_eq!(echoed(&body, "x-fireemu-appcheck-verified"), ["0"]);
+    }
+    let response = h
+        .request(
+            "POST",
+            "echo",
+            &[
+                ("X-Fireemu-AppCheck-Verified", "1"),
+                ("x-firebase-appcheck", "forged"),
+            ],
+        )
+        .await;
+    let body: Value = serde_json::from_slice(&response.body).expect("echo body");
+    assert_eq!(echoed(&body, "x-fireemu-appcheck-verified"), ["0"]);
+    h.stop().await;
+    let h = start_with_consume_profile(true, "disabled", Emulator).await;
+    let app_token = token_for(&h.gate, PROJECT, APP_ID);
+    let response = h
+        .request("POST", "echo", &[("x-firebase-appcheck", &app_token)])
+        .await;
+    let body: Value = serde_json::from_slice(&response.body).expect("echo body");
+    assert_eq!(echoed(&body, "x-fireemu-appcheck-verified"), ["1"]);
+    h.stop().await;
+
     let h = start_with_consume_profile(false, "disabled", Strict).await;
     let (_, valid) = h.user("nested@example.com");
     assert_eq!(marker_sent(&h, &[("authorization", &valid)]).await, ["1"]);

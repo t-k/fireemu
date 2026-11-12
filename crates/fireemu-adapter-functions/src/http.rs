@@ -431,7 +431,8 @@ pub async fn forward(
         if !is_framable_name(k) || !is_framable_value(v) {
             return Err(format!("refusing to forward the unframable header {k:?}"));
         }
-        if is_hop_by_hop(k, &connection_named)
+        if (is_hop_by_hop(k, &connection_named)
+            && !k.eq_ignore_ascii_case(VERIFIED_APP_CHECK_HEADER))
             || k.eq_ignore_ascii_case("content-length")
             || k.eq_ignore_ascii_case("expect")
         {
@@ -543,7 +544,8 @@ fn streaming_request(
                 "refusing to forward the unframable header {name:?}"
             ));
         }
-        if is_hop_by_hop(name, &connection_named)
+        if (is_hop_by_hop(name, &connection_named)
+            && !name.eq_ignore_ascii_case(VERIFIED_APP_CHECK_HEADER))
             || name.eq_ignore_ascii_case("content-length")
             || name.eq_ignore_ascii_case("expect")
         {
@@ -1129,6 +1131,7 @@ fn marked_callable_in_code(runtime: &FunctionsRuntime, function: &str) -> bool {
 /// endpoint is a Bearer of a user of the project (tools/runner-node/nested-callable.mjs). Every
 /// caller-supplied copy is removed before the daemon sets its own.
 const VERIFIED_CREDENTIAL_HEADER: &str = "x-fireemu-credential-verified";
+const VERIFIED_APP_CHECK_HEADER: &str = "x-fireemu-appcheck-verified";
 
 fn verified_single_credential(runtime: &FunctionsRuntime, raw: &hyper::HeaderMap) -> bool {
     matches!(
@@ -1906,6 +1909,7 @@ async fn respond(
             !k.as_str()
                 .eq_ignore_ascii_case(crate::invoker::OWNER_TOKEN_HEADER)
                 && !k.as_str().eq_ignore_ascii_case(VERIFIED_CREDENTIAL_HEADER)
+                && !k.as_str().eq_ignore_ascii_case(VERIFIED_APP_CHECK_HEADER)
         })
         .filter_map(|(k, v)| {
             v.to_str()
@@ -1931,6 +1935,34 @@ async fn respond(
             }
         }
     };
+    if plain_http {
+        if let Some(trust) = runtime.callable_trust() {
+            let app_check = field_values(
+                req.headers(),
+                fireemu_core_app_check::header::APP_CHECK_HEADER,
+            );
+            let decision = trust.sanitize(&crate::callable::CallableRequest {
+                function,
+                enforce_app_check: false,
+                consume_app_check_token: false,
+                headers: &[],
+                app_check: &app_check,
+                authorization: &[],
+                now: runtime.now(),
+            });
+            let verified = matches!(
+                decision,
+                crate::callable::CallableDecision::Forward {
+                    app_check: crate::callable::CredentialState::Valid,
+                    ..
+                }
+            );
+            headers.push((
+                VERIFIED_APP_CHECK_HEADER.to_owned(),
+                if verified { "1" } else { "0" }.to_owned(),
+            ));
+        }
+    }
     if profile == FunctionsHttpProfile::Strict {
         let verified = plain_http && verified_single_credential(&runtime, req.headers());
         add_strict_forwarding_headers(&mut headers, peer_ip, verified);

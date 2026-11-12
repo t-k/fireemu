@@ -20,6 +20,7 @@
 
 /// The field the daemon sets on a request to a non-callable HTTP endpoint in the strict profile.
 export const VERIFIED_CREDENTIAL_HEADER = "x-fireemu-credential-verified";
+export const VERIFIED_APP_CHECK_HEADER = "x-fireemu-appcheck-verified";
 
 const CONTEXT = Symbol.for("fireemu.endpointContext");
 
@@ -31,19 +32,24 @@ export const UNVERIFIED_CREDENTIAL = "fireemu-unverified-credential";
 /// non-callable HTTP endpoint in the strict profile. Returns whether the request was marked.
 export function markNonCallableRequest(req, { strict, nonCallableHttp }) {
   const marker = req.headers?.[VERIFIED_CREDENTIAL_HEADER];
-  if (req.headers) delete req.headers[VERIFIED_CREDENTIAL_HEADER];
+  const appCheckMarker = req.headers?.[VERIFIED_APP_CHECK_HEADER];
+  if (req.headers) {
+    for (const name of Object.keys(req.headers)) {
+      if ([VERIFIED_CREDENTIAL_HEADER, VERIFIED_APP_CHECK_HEADER].includes(name.toLowerCase())) delete req.headers[name];
+    }
+  }
   if (Array.isArray(req.rawHeaders)) {
     const kept = [];
     for (let i = 0; i + 1 < req.rawHeaders.length; i += 2) {
-      if (String(req.rawHeaders[i]).toLowerCase() !== VERIFIED_CREDENTIAL_HEADER) {
+      if (![VERIFIED_CREDENTIAL_HEADER, VERIFIED_APP_CHECK_HEADER].includes(String(req.rawHeaders[i]).toLowerCase())) {
         kept.push(req.rawHeaders[i], req.rawHeaders[i + 1]);
       }
     }
     req.rawHeaders = kept;
   }
-  if (!strict || !nonCallableHttp) return false;
+  if (!nonCallableHttp || (!strict && appCheckMarker === undefined)) return false;
   Object.defineProperty(req, CONTEXT, {
-    value: Object.freeze({ credentialVerified: marker === "1" }),
+    value: Object.freeze({ credentialVerified: !strict || marker === "1", appCheckVerified: appCheckMarker === undefined || appCheckMarker === "1" }),
     configurable: true,
   });
   return true;
@@ -54,15 +60,19 @@ export function markNonCallableRequest(req, { strict, nonCallableHttp }) {
 /// `Authorization` is [`UNVERIFIED_CREDENTIAL`]. The view leaves the caller's own request untouched.
 export function requestForCallableWrapper(req) {
   const context = req?.[CONTEXT];
-  if (!context || context.credentialVerified) return req;
-  const authorization = req.headers?.authorization;
-  if (typeof authorization !== "string" || authorization === "") return req;
-  return Object.create(req, {
-    headers: {
-      value: { ...req.headers, authorization: UNVERIFIED_CREDENTIAL },
-      enumerable: true,
-    },
-  });
+  if (!context) return req;
+  const headers = { ...req.headers };
+  let changed = false;
+  if (!context.credentialVerified && typeof headers.authorization === "string" && headers.authorization !== "") {
+    headers.authorization = UNVERIFIED_CREDENTIAL;
+    changed = true;
+  }
+  if (!context.appCheckVerified && headers["x-firebase-appcheck"] !== undefined) {
+    delete headers["x-firebase-appcheck"];
+    changed = true;
+  }
+  if (!changed) return req;
+  return Object.create(req, { headers: { value: headers, enumerable: true } });
 }
 
 /// A callable wrapper that reads its request through [`requestForCallableWrapper`]. The result keeps

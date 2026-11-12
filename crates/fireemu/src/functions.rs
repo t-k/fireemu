@@ -30,7 +30,7 @@ use crate::config::{
 mod isolation;
 mod runner_checks;
 
-pub(crate) use isolation::retain_current_cursors;
+pub(crate) use runner_checks::{process_notice, retain_current_cursors};
 
 /// One Pub/Sub topic and emulator subscription required by a loaded function manifest.
 #[derive(Debug, Clone, PartialEq, Eq)]

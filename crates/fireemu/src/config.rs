@@ -3001,10 +3001,12 @@ impl RuntimeConfig {
     /// `"function"` written in the configuration is never softened and is refused there.
     #[must_use]
     pub fn effective_functions_isolation(&self) -> FunctionsIsolation {
-        let explicit = self
-            .development_defaults
-            .iter()
-            .any(|entry| entry["key"] == "functions.isolation" && entry["source"] == "explicit");
+        let is = |entry: &Value, pointer: &str, text: &str| {
+            entry.pointer(pointer).and_then(Value::as_str) == Some(text)
+        };
+        let explicit = self.development_defaults.iter().any(|entry| {
+            is(entry, "/key", "functions.isolation") && is(entry, "/source", "explicit")
+        });
         if self.functions_isolation == FunctionsIsolation::Function
             && !explicit
             && (self.functions_runner.is_some() || self.functions_inspect_port.is_some())
@@ -4141,25 +4143,12 @@ impl RuntimeConfig {
         // `functions.source` stays the first codebase's directory, which is what every
         // single-codebase project has and what the banner prints.
         self.functions_source = chosen.first().map(|c| c.source.clone());
-        if self.functions_isolation == FunctionsIsolation::Function {
-            report.notices.push(format!(
-                "functions: functions.isolation is \"function\": every function of {} runs in its own runner process",
-                chosen
-                    .iter()
-                    .map(|c| c.codebase.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        } else if chosen.len() > 1 {
-            report.notices.push(format!(
-                "functions: {} codebases are loaded ({}), one runner process each",
-                chosen.len(),
-                chosen
-                    .iter()
-                    .map(|c| c.codebase.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
+        let names: Vec<&str> = chosen.iter().map(|c| c.codebase.as_str()).collect();
+        if let Some(notice) = crate::functions::process_notice(
+            self.functions_isolation == FunctionsIsolation::Function,
+            &names,
+        ) {
+            report.notices.push(notice);
         }
         self.functions_loaded = chosen;
         Ok(())

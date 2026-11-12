@@ -47,6 +47,35 @@ pub(super) fn debugger_port_refusal(label: &str, requested: Option<u16>) -> Stri
     }
 }
 
+/// The start-up notice that says how many processes serve the loaded codebases, if there is anything to
+/// say: with one process per function, which codebases that is true of; otherwise, when several codebases are
+/// loaded, that each has its own process. One codebase served by one process needs no notice.
+pub(crate) fn process_notice(dedicated: bool, codebases: &[&str]) -> Option<String> {
+    let names = codebases.join(", ");
+    if dedicated {
+        Some(format!(
+            "functions: functions.isolation is \"function\": every function of {names} runs in its own runner process"
+        ))
+    } else if codebases.len() > 1 {
+        Some(format!(
+            "functions: {} codebases are loaded ({names}), one runner process each",
+            codebases.len()
+        ))
+    } else {
+        None
+    }
+}
+
+/// Drops the state kept for a runner that is no longer current. The log pump keeps one cursor per
+/// runner unit, keyed by [`RunnerUnit::key`](fireemu_adapter_functions::runtime::RunnerUnit::key):
+/// a unit that is still current keeps its cursor, so its lines are forwarded once.
+pub(crate) fn retain_current_cursors<V>(
+    cursors: &mut std::collections::BTreeMap<String, V>,
+    current: &[String],
+) {
+    cursors.retain(|key, _| current.contains(key));
+}
+
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
@@ -125,5 +154,47 @@ mod tests {
             debugger_port_refusal("api", None),
             "the Functions codebase \"api\": the dynamically assigned debugger port is not active"
         );
+    }
+
+    #[test]
+    fn a_cursor_survives_only_while_its_runner_is_current() {
+        let mut cursors: std::collections::BTreeMap<String, u64> =
+            [("api/a", 1), ("api/b", 2), ("old", 3)]
+                .into_iter()
+                .map(|(key, value)| (key.to_owned(), value))
+                .collect();
+        retain_current_cursors(
+            &mut cursors,
+            &["api/a".to_owned(), "api/b".to_owned(), "new".to_owned()],
+        );
+        assert_eq!(
+            cursors.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["api/a", "api/b"]
+        );
+        assert_eq!(cursors["api/b"], 2);
+        retain_current_cursors(&mut cursors, &[]);
+        assert!(cursors.is_empty());
+    }
+
+    #[test]
+    fn the_process_notice_names_the_codebases_that_have_dedicated_processes_or_their_own() {
+        assert_eq!(
+            process_notice(true, &["api"]).as_deref(),
+            Some("functions: functions.isolation is \"function\": every function of api runs in its own runner process")
+        );
+        assert_eq!(
+            process_notice(true, &["api", "workers"]).as_deref(),
+            Some("functions: functions.isolation is \"function\": every function of api, workers runs in its own runner process")
+        );
+        assert_eq!(
+            process_notice(false, &["api", "workers"]).as_deref(),
+            Some("functions: 2 codebases are loaded (api, workers), one runner process each")
+        );
+        assert_eq!(
+            process_notice(false, &["a", "b", "c"]).as_deref(),
+            Some("functions: 3 codebases are loaded (a, b, c), one runner process each")
+        );
+        assert_eq!(process_notice(false, &["api"]), None);
+        assert_eq!(process_notice(false, &[]), None);
     }
 }

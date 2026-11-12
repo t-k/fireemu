@@ -98,16 +98,6 @@ pub(super) fn function_spawn_spec(base: &SpawnSpec, function: &FunctionSpec) -> 
     }
 }
 
-/// Drops the state kept for a runner that is no longer current. The log pump keeps one cursor per
-/// runner unit, keyed by [`RunnerUnit::key`](fireemu_adapter_functions::runtime::RunnerUnit::key):
-/// a unit that is still current keeps its cursor, so its lines are forwarded once.
-pub(crate) fn retain_current_cursors<V>(
-    cursors: &mut std::collections::BTreeMap<String, V>,
-    current: &[String],
-) {
-    cursors.retain(|key, _| current.contains(key));
-}
-
 /// Whether a function's runner is started with the codebase rather than on its first trigger.
 ///
 /// Production starts an instance on the first request, so a function's runner does too: its process
@@ -399,26 +389,6 @@ mod tests {
             at_launch(true),
             vec!["web", "doc", "cron", "queue", "block"]
         );
-    }
-
-    #[test]
-    fn a_cursor_survives_only_while_its_runner_is_current() {
-        let mut cursors: std::collections::BTreeMap<String, u64> =
-            [("api/a", 1), ("api/b", 2), ("old", 3)]
-                .into_iter()
-                .map(|(key, value)| (key.to_owned(), value))
-                .collect();
-        retain_current_cursors(
-            &mut cursors,
-            &["api/a".to_owned(), "api/b".to_owned(), "new".to_owned()],
-        );
-        assert_eq!(
-            cursors.keys().map(String::as_str).collect::<Vec<_>>(),
-            vec!["api/a", "api/b"]
-        );
-        assert_eq!(cursors["api/b"], 2);
-        retain_current_cursors(&mut cursors, &[]);
-        assert!(cursors.is_empty());
     }
 
     #[test]

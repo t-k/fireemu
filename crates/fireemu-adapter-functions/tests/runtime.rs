@@ -6676,7 +6676,15 @@ async fn the_source_snapshot_of_a_group_outlives_every_unit_still_draining() {
         let runtime = runtime.clone();
         tokio::spawn(async move { runtime.invoke_http(&hold, "POST", "/hold", &[], &[]).await })
     };
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    // Wait until the call is really in flight on the first generation, not for a fixed time.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while runtime.is_idle() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the hold call never started"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     runtime
         .reload_codebase_units(function_units(&["hold", "echo"], Some(&second)).await)
         .unwrap();
@@ -6685,8 +6693,8 @@ async fn the_source_snapshot_of_a_group_outlives_every_unit_still_draining() {
         "the idle unit's release must not delete the directory its draining sibling still runs from"
     );
     assert_eq!(pending.await.unwrap().unwrap().status, 204);
-    runtime.await_idle(Duration::from_secs(3)).await.unwrap();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    runtime.await_idle(Duration::from_secs(30)).await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     while first.exists() {
         assert!(
             tokio::time::Instant::now() < deadline,

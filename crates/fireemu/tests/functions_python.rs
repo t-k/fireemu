@@ -400,10 +400,12 @@ if response.code == 200:
             503,
             0,
         ),
+        // `seen` reads what `bc_user` recorded in the same process, so this case keeps the shared runner
+        // that productionExact would otherwise replace by one process per function.
         (
             "override",
             Some(
-                r#"{"schemaVersion":1,"productionExact":true,"functions":{"authBlockingToken":"emulated"}}"#,
+                r#"{"schemaVersion":1,"productionExact":true,"functions":{"authBlockingToken":"emulated","isolation":"codebase"}}"#,
             ),
             200,
             1,

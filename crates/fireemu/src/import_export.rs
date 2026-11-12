@@ -4640,6 +4640,155 @@ mod tests {
     use fireemu_core_export::auth::{AuthConfig, AuthSettingsNamespace, AuthSettingsRecord};
     use fireemu_core_types::time::{days_from_civil, LogicalInstant};
 
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn spilled_and_memory_objects_round_trip_through_export_artifacts() {
+        use fireemu_adapter_grpc::gateway::Gateway;
+        use fireemu_adapter_grpc::local::LocalBackend;
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthRegistry, AuthStore};
+        use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+        use fireemu_core_session::clock::VirtualClock;
+        use fireemu_core_storage::name::{BucketName, ObjectName};
+        use fireemu_core_storage::spill::ProcessSpill;
+        use fireemu_core_storage::store::{NewMetadata, Precondition, StorageState};
+        use fireemu_core_types::determinism::SplitMix64;
+        use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+        use std::sync::{Arc, Mutex};
+
+        let root = super::trusted_temp::TrustedTempDir::new("storage-spill-roundtrip");
+        let process = ProcessSpill::create(&root.join("spill")).unwrap();
+        let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
+        let auth = Arc::new(AuthRegistry::new(
+            "demo-app",
+            Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(1),
+                TotpPolicy::default(),
+            ))),
+        ));
+        let backend = Arc::new(LocalBackend::new(
+            Gateway {
+                enforce_limits: true,
+                ctx: PlanningContext {
+                    edition: FirestoreEdition::Standard,
+                    api_mode: FirestoreApiMode::Native,
+                    policy: IndexValidationPolicy::Production,
+                },
+                indexes: IndexSet::default(),
+            },
+            clock.clone(),
+            1,
+        ));
+        let storage = Arc::new(fireemu_adapter_http::storage::StorageState {
+            store: Mutex::new(StorageState::new(1)),
+            clock: clock.clone(),
+            auth: auth.clone(),
+            tenancy: None,
+            rules: Arc::new(fireemu_adapter_http::storage::StorageRulesRegistry::default()),
+            project: "demo-app".to_owned(),
+            events: None,
+            barrier: None,
+            firestore: None,
+            faults: None,
+            clock_observer: None,
+            app_check_policy: None,
+            admin_capability: None,
+            server_requests: fireemu_adapter_http::storage::StorageServerRequests::default(),
+            token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
+            allow_unsigned_id_tokens: false,
+            control_token: None,
+        });
+        let database = Arc::new(Mutex::new(fireemu_adapter_database::rest::Database::new(
+            fireemu_adapter_database::rest::RestOptions::default(),
+            1,
+        )));
+        let endpoints = super::Endpoints {
+            backend: &backend,
+            auth: &auth,
+            storage: &storage,
+            clock: &clock,
+            database: &database,
+            project: "demo-app",
+            blocking: None,
+            auth_operation_gate: None,
+        };
+        let products = super::Products {
+            firestore: false,
+            auth: false,
+            storage: true,
+            database: false,
+        };
+        let bucket = BucketName::try_new("demo-app.appspot.com").unwrap();
+        let name = ObjectName::try_new("object").unwrap();
+        let mut results = Vec::new();
+        for spill in [false, true] {
+            {
+                let mut store = storage.store.lock().unwrap();
+                *store = StorageState::new(1);
+                if spill {
+                    store.set_spill(Some((process.spill_dir(), 0)));
+                }
+                store
+                    .put(
+                        &bucket,
+                        &name,
+                        b"body for export".to_vec(),
+                        NewMetadata {
+                            content_type: Some("text/plain".to_owned()),
+                            custom: Some(
+                                [("key".to_owned(), "value".to_owned())]
+                                    .into_iter()
+                                    .collect(),
+                            ),
+                            ..NewMetadata::default()
+                        },
+                        Precondition::default(),
+                        LogicalInstant::UNIX_EPOCH,
+                    )
+                    .unwrap();
+            }
+            if spill {
+                assert!(std::fs::read_dir(process.path()).unwrap().next().is_some());
+            }
+            let original = storage
+                .store
+                .lock()
+                .unwrap()
+                .get(&bucket, &name)
+                .unwrap()
+                .clone();
+            let dir = root.join(if spill {
+                "spilled-export"
+            } else {
+                "memory-export"
+            });
+            super::export(&dir, products, &endpoints, "test").unwrap();
+            let prepared = super::prepare(
+                &dir,
+                products,
+                "demo-app",
+                false,
+                fireemu_core_storage::store::MAX_OBJECT_BYTES,
+            )
+            .unwrap();
+            *storage.store.lock().unwrap() = StorageState::new(1);
+            super::apply(prepared, &endpoints).unwrap();
+            let store = storage.store.lock().unwrap();
+            let restored = store.get(&bucket, &name).unwrap();
+            let mut comparable = restored.clone();
+            comparable.blob = original.blob;
+            assert_eq!(comparable, original);
+            assert_eq!(
+                store.body_bytes(restored).unwrap().as_ref(),
+                b"body for export"
+            );
+            results.push((comparable, store.body_bytes(restored).unwrap().to_vec()));
+        }
+        assert_eq!(results[0], results[1]);
+    }
+
     /// A password policy survives an export and import in each enforcement state, the
     /// unspecified one included (AUTH-CONFIG-SDK: production stores an unspecified state).
     #[test]

@@ -3022,6 +3022,7 @@ pub(crate) fn release_storage_spill(storage: &fireemu_adapter_http::storage::Sto
 #[allow(clippy::too_many_arguments)]
 fn storage_state(
     cfg: &RuntimeConfig,
+    spill_root: &std::path::Path,
     clock: &Arc<Mutex<VirtualClock>>,
     registry: &Arc<fireemu_core_auth::store::AuthRegistry>,
     tenancy: &fireemu_core_session::tenancy::SharedTenancy,
@@ -3046,7 +3047,7 @@ fn storage_state(
     let spill = cfg
         .storage_spill_object_bytes
         .map(|threshold| {
-            fireemu_core_storage::spill::ProcessSpill::create(&spill_root())
+            fireemu_core_storage::spill::ProcessSpill::create(spill_root)
                 .map(|process| (process.spill_dir(), threshold))
                 .map_err(|error| format!("cannot create Storage spill directory: {error}"))
         })
@@ -4195,14 +4196,13 @@ mod config_reload_tests {
         };
         let backend = Arc::new(LocalBackend::new(gateway, clock.clone(), cfg.seed));
         let faults = Arc::new(fireemu_core_session::fault::FaultRegistry::new());
-        let path = std::env::temp_dir()
-            .join("fireemu")
-            .join(format!("fireemu-spill-{}", std::process::id()));
-        assert_eq!(spill_root(), std::env::temp_dir().join("fireemu"));
+        let root = scratch("spill-opt-in");
+        let path = root.join(format!("fireemu-spill-{}", std::process::id()));
         assert!(!path.exists());
         let build = |cfg: &RuntimeConfig| {
             storage_state(
                 cfg,
+                &root,
                 &clock,
                 &registry,
                 &tenancy,
@@ -4226,7 +4226,6 @@ mod config_reload_tests {
             assert!(path.is_dir());
             drop(state);
             assert!(!path.exists());
-            std::fs::remove_dir(spill_root()).unwrap();
         }
         #[cfg(not(unix))]
         {
@@ -4274,14 +4273,13 @@ mod config_reload_tests {
         };
         let backend = Arc::new(LocalBackend::new(gateway, clock.clone(), cfg.seed));
         let faults = Arc::new(fireemu_core_session::fault::FaultRegistry::new());
-        let path = std::env::temp_dir()
-            .join("fireemu")
-            .join(format!("fireemu-spill-{}", std::process::id()));
-        assert_eq!(spill_root(), std::env::temp_dir().join("fireemu"));
+        let root = scratch("spill-shutdown");
+        let path = root.join(format!("fireemu-spill-{}", std::process::id()));
         assert!(!path.exists());
         let build = |cfg: &RuntimeConfig| {
             storage_state(
                 cfg,
+                &root,
                 &clock,
                 &registry,
                 &tenancy,
@@ -4308,8 +4306,6 @@ mod config_reload_tests {
             "shutdown must remove the spill directory while the state is still alive"
         );
         drop(state);
-        // Leave the shared root only if no other process left a directory in it.
-        let _ = std::fs::remove_dir(spill_root());
     }
 
     /// Every ruleset slot the daemon creates at start carries the profile's meaning of a lone

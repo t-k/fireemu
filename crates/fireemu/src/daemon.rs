@@ -849,6 +849,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     }
     let storage = storage_state(
         &cfg,
+        &crate::spill_root(),
         &clock,
         &registry,
         &tenancy,

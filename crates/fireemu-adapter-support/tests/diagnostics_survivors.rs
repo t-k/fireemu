@@ -2,11 +2,11 @@
 //! redactions, every configuration value kind through `from_value`, and the `_`, `-` and offset
 //! rules of the credential scan.
 
+use fireemu_adapter_support::diagnostics::redact::scrub;
 use fireemu_adapter_support::diagnostics::{
-    from_value, to_value, Bundle, BundleInput, ConfigValue, FunctionsSection, LogSection, Limits,
+    from_value, to_value, Bundle, BundleInput, ConfigValue, FunctionsSection, Limits, LogSection,
     PendingSection, RuleCondition, RuleDenial, RulesSection, Versions,
 };
-use fireemu_adapter_support::diagnostics::redact::scrub;
 
 fn denial(i: u32) -> RuleDenial {
     RuleDenial {
@@ -16,16 +16,30 @@ fn denial(i: u32) -> RuleDenial {
         path: format!("notes/n{i}"),
         uid: None,
         reason: "no allow".into(),
-        conditions: vec![RuleCondition { line: 1, column: 2, excerpt: None, outcome: "false".into() }],
+        conditions: vec![RuleCondition {
+            line: 1,
+            column: 2,
+            excerpt: None,
+            outcome: "false".into(),
+        }],
     }
 }
 
 fn input(denials: usize, config: Vec<(String, ConfigValue)>, logs: Vec<String>) -> BundleInput {
     BundleInput {
         generated_at: "2026-11-12T00:00:00Z".into(),
-        versions: Versions { fireemu: "0.50.0".into(), runtimes: vec![], sdks: vec![] },
+        versions: Versions {
+            fireemu: "0.50.0".into(),
+            runtimes: vec![],
+            sdks: vec![],
+        },
         config,
-        functions: FunctionsSection { events: vec![], attempts: vec![], retries: vec![], log_gaps: false },
+        functions: FunctionsSection {
+            events: vec![],
+            attempts: vec![],
+            retries: vec![],
+            log_gaps: false,
+        },
         rules: RulesSection {
             history_enabled: false,
             retention: 7,
@@ -34,20 +48,37 @@ fn input(denials: usize, config: Vec<(String, ConfigValue)>, logs: Vec<String>) 
             dropped: 3,
         },
         indexes: vec![],
-        pending: PendingSection { tasks: vec![], resources: vec![] },
-        logs: LogSection { lines: logs, dropped_ranges: vec![] },
+        pending: PendingSection {
+            tasks: vec![],
+            resources: vec![],
+        },
+        logs: LogSection {
+            lines: logs,
+            dropped_ranges: vec![],
+        },
     }
 }
 
 #[test]
 fn a_list_exactly_at_its_limit_is_kept_whole_and_one_over_is_cut() {
-    let limits = Limits { max_denials: 5, ..Limits::default() };
+    let limits = Limits {
+        max_denials: 5,
+        ..Limits::default()
+    };
     let at = Bundle::from_input(input(5, vec![], vec![]), limits);
     assert_eq!(at.rules.denials.len(), 5);
-    assert!(at.truncations.iter().all(|t| t.section != "rules.denials"), "{:?}", at.truncations);
+    assert!(
+        at.truncations.iter().all(|t| t.section != "rules.denials"),
+        "{:?}",
+        at.truncations
+    );
     let over = Bundle::from_input(input(6, vec![], vec![]), limits);
     assert_eq!(over.rules.denials.len(), 5);
-    let cut = over.truncations.iter().find(|t| t.section == "rules.denials").expect("truncation");
+    let cut = over
+        .truncations
+        .iter()
+        .find(|t| t.section == "rules.denials")
+        .expect("truncation");
     assert_eq!((cut.kept, cut.dropped), (5, 1));
 }
 
@@ -56,7 +87,11 @@ fn redactions_are_counted_once_each_across_sections() {
     let secret_a = format!("{}{}", "Author", "ization: one");
     let secret_b = format!("{}{}", "ya", "29.two");
     let b = Bundle::from_input(
-        input(0, vec![(secret_a, ConfigValue::Str("plain".into()))], vec![secret_b]),
+        input(
+            0,
+            vec![(secret_a, ConfigValue::Str("plain".into()))],
+            vec![secret_b],
+        ),
         Limits::default(),
     );
     assert_eq!(b.redactions, 2);
@@ -65,7 +100,8 @@ fn redactions_are_counted_once_each_across_sections() {
 #[test]
 fn redactions_inside_object_keys_are_counted() {
     let mut b = input(0, vec![], vec![]);
-    b.functions.events = vec![serde_json::json!({ format!("{}{}", "Author", "ization: k"): 1, "plain": 2 })];
+    b.functions.events =
+        vec![serde_json::json!({ format!("{}{}", "Author", "ization: k"): 1, "plain": 2 })];
     let bundle = Bundle::from_input(b, Limits::default());
     assert_eq!(bundle.redactions, 1);
 }
@@ -101,7 +137,10 @@ fn every_configuration_value_kind_and_scalar_round_trips_through_from_value() {
 
 #[test]
 fn a_wrong_scalar_type_is_refused_by_name() {
-    let mut value = to_value(&Bundle::from_input(input(0, vec![], vec![]), Limits::default()));
+    let mut value = to_value(&Bundle::from_input(
+        input(0, vec![], vec![]),
+        Limits::default(),
+    ));
     value["rules"]["retention"] = serde_json::json!("seven");
     assert!(from_value(&value).unwrap_err().contains("integer"));
 }
@@ -112,7 +151,12 @@ fn credential_scan_accepts_underscore_and_hyphen_in_each_position() {
     assert_eq!(scrub(&bearer).1, 1);
     let dashed = format!("{}{}", "use Bear", "er -x1");
     assert_eq!(scrub(&dashed).1, 1);
-    let jwt = format!("{}.{}.{}", "eyJ_".to_owned() + &"a".repeat(8), "b-".repeat(5), "c".repeat(10));
+    let jwt = format!(
+        "{}.{}.{}",
+        "eyJ_".to_owned() + &"a".repeat(8),
+        "b-".repeat(5),
+        "c".repeat(10)
+    );
     assert_eq!(scrub(&jwt).1, 1, "jwt with _ and - segments");
     let key = format!("{} {}{}", "x".repeat(20), "AIza", "a".repeat(35));
     assert_eq!(scrub(&key).1, 1, "key after a long prefix");

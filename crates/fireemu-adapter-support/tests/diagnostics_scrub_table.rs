@@ -5,14 +5,23 @@ use fireemu_adapter_support::diagnostics::redact::scrub;
 
 fn masked(text: &str) -> bool {
     let (out, count) = scrub(text);
-    assert_eq!(out == "[redacted]", count == 1, "count and output disagree for {text:?}");
+    assert_eq!(
+        out == "[redacted]",
+        count == 1,
+        "count and output disagree for {text:?}"
+    );
     count == 1
 }
 
 #[test]
 fn each_credential_shape_is_masked_on_its_own() {
     let api_key = format!("{}{}", "AIza", "a".repeat(35));
-    let jwt = format!("{}.{}.{}", "eyJ".to_owned() + &"a".repeat(10), "b".repeat(10), "c".repeat(10));
+    let jwt = format!(
+        "{}.{}.{}",
+        "eyJ".to_owned() + &"a".repeat(10),
+        "b".repeat(10),
+        "c".repeat(10)
+    );
     let cases = [
         format!("{}{}", "Author", "ization: header"),
         format!("{}{}", "use Bear", "er abcdefgh"),
@@ -36,8 +45,18 @@ fn near_misses_of_each_shape_are_kept() {
         format!("{}{}", "AIza", "a".repeat(34)),
         format!("{}{}", "ya", "30.token-value"),
         format!("{}{}", "BEGIN ", "PRIVATE KEY"),
-        format!("{}.{}.{}", "eyJ".to_owned() + &"a".repeat(5), "b".repeat(10), "c".repeat(10)),
-        format!("{}.{}.{}", "xyz".to_owned() + &"a".repeat(10), "b".repeat(10), "c".repeat(10)),
+        format!(
+            "{}.{}.{}",
+            "eyJ".to_owned() + &"a".repeat(5),
+            "b".repeat(10),
+            "c".repeat(10)
+        ),
+        format!(
+            "{}.{}.{}",
+            "xyz".to_owned() + &"a".repeat(10),
+            "b".repeat(10),
+            "c".repeat(10)
+        ),
         "plain log line with no credential".to_owned(),
     ];
     for text in &kept {
@@ -48,7 +67,10 @@ fn near_misses_of_each_shape_are_kept() {
 
 #[test]
 fn a_home_directory_path_is_rewritten_and_counted() {
-    assert_eq!(scrub("/Users/alice/project/src/lib.rs"), ("~/project/src/lib.rs".to_owned(), 1));
+    assert_eq!(
+        scrub("/Users/alice/project/src/lib.rs"),
+        ("~/project/src/lib.rs".to_owned(), 1)
+    );
     assert_eq!(scrub("/home/bob/x"), ("~/x".to_owned(), 1));
     assert_eq!(scrub("C:\\Users\\carol\\y.txt"), ("~/y.txt".to_owned(), 1));
     assert_eq!(scrub("/Users/alice"), ("~/".to_owned(), 1));

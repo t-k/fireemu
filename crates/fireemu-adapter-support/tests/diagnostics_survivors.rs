@@ -44,7 +44,9 @@ fn input(denials: usize, config: Vec<(String, ConfigValue)>, logs: Vec<String>) 
             history_enabled: false,
             retention: 7,
             history_started_at: None,
-            denials: (0..denials as u32).map(denial).collect(),
+            denials: (0..denials)
+                .map(|i| denial(u32::try_from(i).expect("small test count")))
+                .collect(),
             dropped: 3,
         },
         indexes: vec![],

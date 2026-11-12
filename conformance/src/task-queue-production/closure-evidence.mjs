@@ -5,7 +5,7 @@
 //   node closure-evidence.mjs --write    rewrites the record's evidence (the rest of the record is kept)
 //
 // A condition is VERIFIED when none of its cases is a mismatch, unknown or outside its timing in the run-versus-run comparison and
-// in both strict-versus-recording comparisons, and it is not named in NOT_COMPARED below. Nothing here promotes the parent.
+// in both strict-versus-recording comparisons, and it is not named in NOT_COMPARED below. The coordinator decides the parent status.
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -166,6 +166,7 @@ export function conditionEvidence(
     localTests = LOCAL_CONTROLS,
     testExists = repositoryTestExists,
     regressionHolds = repositoryRegressionHolds,
+    closureReview,
   } = {},
 ) {
   const id = condition.conditionId;
@@ -179,7 +180,7 @@ export function conditionEvidence(
     "reason",
   ])
     delete base[key];
-  for (const key of ["localEvidence", "regressionEvidence"]) delete base[key];
+  for (const key of ["localEvidence", "regressionEvidence", "reviewEvidence"]) delete base[key];
   if (condition.evidenceType === "fireemu-only") {
     // A control is verified by the tests that exercise it, all of which must exist; it makes no claim about production.
     if (localTests.length > 0 && localTests.every(({ file, test }) => testExists(file, test)))
@@ -188,6 +189,24 @@ export function conditionEvidence(
   }
   if (condition.evidenceType === "closure-gate") {
     // The release regression is verified once its run, replay, judge, tests and workflow steps exist; the review is the coordinator's.
+    if (
+      id.endsWith("/closure-review") &&
+      closureReview?.decision === "APPROVED" &&
+      closureReview.reviews?.length > 0
+    )
+      return {
+        ...base,
+        status: "VERIFIED",
+        productionEvidence: [],
+        reviewEvidence: closureReview.reviews.map(
+          ({ reportPath, reportSha256, reviewedCommit, outcome }) => ({
+            ...(reportPath === undefined ? {} : { reportPath }),
+            ...(reportSha256 === undefined ? {} : { reportSha256 }),
+            reviewedCommit,
+            outcome,
+          }),
+        ),
+      };
     if (id.endsWith("/final-artifact-regression") && regressionHolds(REGRESSION))
       return {
         ...base,
@@ -312,7 +331,9 @@ export function derive(record) {
     fixtureSha256,
   }));
   const conditions = record.conditions.map((condition) =>
-    conditionEvidence(condition, { runs, strict1, strict2 }, productionEvidence),
+    conditionEvidence(condition, { runs, strict1, strict2 }, productionEvidence, {
+      closureReview: record.closureReview,
+    }),
   );
   return {
     recordings,
@@ -324,12 +345,13 @@ export function derive(record) {
 }
 
 const ADDED_LIMITATIONS = Object.freeze([
-  "Two production recordings (stage 1) back the verified conditions; the parent stays IMPLEMENTING until an independent review approves the record.",
+  "Two production recordings (stage 1) back the verified conditions; the parent is COMPAT_VERIFIED for the recorded cases after an independent closure review and a delta review (closureReview).",
   "The reuse window of a task id is refused for 3600 seconds under strict productionExact (`functions.taskNameReuse` `production`, documented as about one hour); its expiry was not observed. The default profile frees a finished name at once, and an explicit key wins over productionExact.",
   "Production's default queue retry config comes from a recording: the default queue of a function that declared no retry options read back (getQueue, both runs) with maxAttempts 100, minBackoff 0.100 s, maxBackoff 3600 s and maxDoublings 16 and no maxRetryDuration, the Cloud Tasks documentation's defaults. `functions.taskRetryDefaults` `production` (selected by productionExact) fills maxAttempts 100 for a field the function does not declare; the default profile keeps the official emulator's 3 attempts, and a declared value is always kept.",
   "Production's retry gaps grew past the declared maxBackoff in both runs (queue tqwindow, maxBackoff 2 s, 100 attempts: 1 s, then ten gaps of 2 s, then 4 s three times, 8 s twice and 10 s from the seventeenth gap on). `functions.taskRetryBackoff` `production` (selected by productionExact) follows that schedule as a floor under the declared gap, and the comparison claims every gap of the shorter side. Not recorded: how the growth depends on the declared maxBackoff (no other queue of the program failed twelve times), whether it depends on the elapsed time, and the gaps after the observation ended; the length of the observation differs between runs, which is the observation-window known difference (ruling 16).",
-  "Strict delivers an `Authorization: Bearer` identity token of three segments to a task that named an `oidcToken`, so that `request.auth` is present in an `onTaskDispatched` handler as in production. The emulator issues it unsigned (`alg: none`, an empty third segment) with Google's claim names: only the scheme, the segment count and the presence of `request.auth` are production's, not the signature or the values (ruling 17).",
-  "The answers of createTask, deleteTask and the refusals are printed as production printed them (two-space JSON in proto field order with a newline at the end, `<`, `>` and `&` escaped, `application/json; charset=UTF-8`), including the `details` of an argument error; the order of the members of `headers` varied between production's runs and is not compared. The byte length is not compared because the task's URL differs (ruling 18).",
+  "Strict delivers an `Authorization: Bearer` identity token of three segments to a task that named an `oidcToken`, so that `request.auth` is present in an `onTaskDispatched` handler as in production. The emulator issues it unsigned (`alg: none`, an empty third segment) with Google's claim names: only the scheme, the segment count and the presence of `request.auth` are production's, not the signature or the values (rulings 17 and 23). The handler and its timers see `FUNCTIONS_EMULATOR=\"true\"` (ruling 22).",
+  "The strict FUNCTIONS_EMULATOR hide covers the next read inside a dispatch scope, which is the SDK's request.auth check; an onInit callback that reads FUNCTIONS_EMULATOR during the first dispatch would take that read (coordinator re-check of ruling 22, 2026-11-12).",
+  "The answers of createTask, deleteTask and the refusals are printed as production printed them (two-space JSON in proto field order with a newline at the end, `<`, `>` and `&` escaped, `application/json; charset=UTF-8`), including the `details` of an argument error; the order of the members of `headers` varied between production's runs and is not compared. The byte length is not compared because the task's URL differs (rulings 18 and 24). getTask stays 405 in strict under KD-QUEUE-READS (rulings 3 and 24).",
   "A strict createTask whose body is not JSON is refused with 400, which production does not do (a task body is any bytes); the daemon needs a JSON body to deliver to an `onTaskDispatched` function. A refusal of that kind is not a recorded production answer.",
   "The emulator profile is unchanged by this closure: it keeps the official emulator's answers, plain-text refusals, header shape, 100 KiB request limit, forever-kept names and retry defaults (ruling 20).",
 ]);
@@ -375,7 +397,7 @@ export const applyEvidence = (record) => {
   const evidence = derive(record);
   const owned = (text) =>
     ADDED_LIMITATIONS.includes(text) ||
-    /No production observation exists yet|task reuse window is documented|^The reuse window of a task id is refused|^The production default queue retries 100 times|^Production's default queue retry config|^Production's retry gaps grew|^Strict delivers an `Authorization|^The answers of createTask|^A strict createTask whose body|^The emulator profile is unchanged/.test(
+    /No production observation exists yet|^Two production recordings \(stage 1\) back the verified conditions|task reuse window is documented|^The reuse window of a task id is refused|^The production default queue retries 100 times|^Production's default queue retry config|^Production's retry gaps grew|^Strict delivers an `Authorization|^The answers of createTask|^A strict createTask whose body|^The emulator profile is unchanged/.test(
       text,
     );
   const kept = record.limitations.filter((text) => !owned(text));

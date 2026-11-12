@@ -1,4 +1,4 @@
-// The TASK-QUEUE-FUNCTIONS closure record at the IMPLEMENTING stage: its structure, its scope, the pin of the program, and
+// The approved TASK-QUEUE-FUNCTIONS closure record: its structure, its scope, the pin of the program, and
 // that it claims only what the two recordings and the committed comparisons show.
 import "./record/isolation.mjs";
 import assert from "node:assert/strict";
@@ -15,9 +15,9 @@ const record = JSON.parse(await readFile(new URL(path, root), "utf8"));
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const isText = (value) => typeof value === "string" && value.trim().length > 0;
 
-test("the record is the implementing parent on the events sandbox, verified only where two recordings back it", () => {
+test("the record is the verified parent on the events sandbox, verified only where two recordings back it", () => {
   assert.equal(record.parent, "TASK-QUEUE-FUNCTIONS");
-  assert.equal(record.parentStatus, "IMPLEMENTING");
+  assert.equal(record.parentStatus, "COMPAT_VERIFIED");
   assert.equal(record.inventoryStatus, "PROPOSED");
   assert.equal(record.oracleTrack, "disposable-sandbox");
   assert.deepEqual(record.oracle, {
@@ -26,8 +26,13 @@ test("the record is the implementing parent on the events sandbox, verified only
     generations: [2],
     runtime: "nodejs22",
   });
-  assert.equal(record.closureReview, undefined, "no review has approved it");
-  // The release regression is described (R38) although the parent is not yet promoted.
+  assert.equal(record.closureReview.decision, "APPROVED");
+  assert.ok(record.closureReview.reviews.length >= 2);
+  for (const review of record.closureReview.reviews)
+    assert.ok(
+      /^[0-9a-f]{64}$/.test(review.reportSha256 ?? "") ||
+        (review.reviewer === "project coordinator" && isText(review.scope)),
+    );
   assert.equal(record.integratedRegression.productionRequests, 0);
   assert.deepEqual(
     record.integratedRegression.comparisons.map((c) => c.path),
@@ -56,12 +61,7 @@ test("the record is the implementing parent on the events sandbox, verified only
   const notVerified = ["dedup-window-expiry", "queue-config-mapping", "max-dispatches-per-second"];
   for (const condition of record.conditions) {
     const name = condition.conditionId.split("/")[1];
-    // The review of the record is the coordinator's, after the delta review.
-    const expected = notVerified.includes(name)
-      ? "NOT_COMPARED"
-      : name === "closure-review"
-        ? "PLANNED"
-        : "VERIFIED";
+    const expected = notVerified.includes(name) ? "NOT_COMPARED" : "VERIFIED";
     assert.equal(condition.status, expected, condition.conditionId);
     if (expected === "VERIFIED" && condition.evidenceType === "production-parity") {
       assert.equal(condition.productionEvidence.length, 2, condition.conditionId);
@@ -71,8 +71,7 @@ test("the record is the implementing parent on the events sandbox, verified only
     if (name === "local-controls") assert.ok(condition.localEvidence.length >= 10);
     if (name === "final-artifact-regression") assert.equal(condition.regressionEvidence.run, "R38");
     if (expected === "NOT_COMPARED") assert.ok(isText(condition.reason), condition.conditionId);
-    if (expected === "PLANNED")
-      assert.deepEqual(condition.productionEvidence, [], condition.conditionId);
+    assert.notEqual(condition.status, "PLANNED");
   }
 });
 

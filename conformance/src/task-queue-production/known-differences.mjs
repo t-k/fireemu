@@ -72,7 +72,7 @@ export const KNOWN_DIFFERENCES = Object.freeze([
     paths: [],
     window: { minAttempts: 18 },
     ruling: 16,
-    what: "A queue that retries a hundred times is observed for as long as the run lasts (45 and 44 attempts in the two recordings, about 24 locally), so the deliveries of the two sides are compared up to the shorter side, which must hold at least 18 attempts: the first eleven gaps follow the declared schedule and the gaps from the twelfth on are 4, 8 and 10 s in production and in strict under productionExact. Which gaps follow after the last one observed, and how the growth depends on the declared maxBackoff, are not recorded.",
+    what: "A queue that retries a hundred times is observed for as long as the run lasts (45 and 44 attempts in the two recordings, 20 in the committed replay), so the deliveries of the two sides are compared up to the shorter side, which must hold at least 18 attempts: the first eleven gaps follow the declared schedule and the gaps from the twelfth on are 4, 8 and 10 s in production and in strict under productionExact. Which gaps follow after the last one observed, and how the growth depends on the declared maxBackoff, are not recorded.",
   },
   {
     id: "KD-LOCAL-PATH",

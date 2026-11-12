@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "parent": "TASK-QUEUE-FUNCTIONS",
-  "parentStatus": "IMPLEMENTING",
+  "parentStatus": "COMPAT_VERIFIED",
   "inventoryStatus": "PROPOSED",
   "oracleTrack": "disposable-sandbox",
   "oracle": {
@@ -1601,8 +1601,26 @@
       "recipeIds": [
         "task-queue/closure-review"
       ],
-      "status": "PLANNED",
-      "productionEvidence": []
+      "status": "VERIFIED",
+      "productionEvidence": [],
+      "reviewEvidence": [
+        {
+          "reportPath": "docs.local/reviews/2026-11-12-task-queue-closure-promotion-review.md",
+          "reportSha256": "93df5a84357980c78bc7709e22257b6c55b47a59994e54e6934f23b074b9996f",
+          "reviewedCommit": "2d46367cb8624d8cce6509edd37bf501f2cce491",
+          "outcome": "PROMOTE-AFTER-FIXES"
+        },
+        {
+          "reportPath": "docs.local/reviews/2026-11-12-task-queue-closure-delta-review.md",
+          "reportSha256": "8952b97d1e8bb49d46edd5e794c4da77a308485f449585f721ec66d4d6b3f3b3",
+          "reviewedCommit": "40e005cca0df84d6d8417296192dfb593b0f032d",
+          "outcome": "PROMOTE-AFTER-FIXES"
+        },
+        {
+          "reviewedCommit": "62cac651fb2d690abea91b8ab86955ebd5f70ab6",
+          "outcome": "APPROVED"
+        }
+      ]
     }
   ],
   "excludedFromParent": [
@@ -1683,14 +1701,15 @@
     }
   ],
   "limitations": [
-    "Two production recordings (stage 1) back the verified conditions; the parent stays IMPLEMENTING until an independent review approves the record.",
+    "Two production recordings (stage 1) back the verified conditions; the parent is COMPAT_VERIFIED for the recorded cases after an independent closure review and a delta review (closureReview).",
     "The in-memory Cloud Tasks of the recorder's tests is a model of documented rules, not an observation; no judge accepts a shape from it.",
     "A queue id cannot be created again for days after a delete (400 'existed too recently', measured 2026-11-07), so each attempt of a recording needs new function ids and a failed attempt costs a deploy.",
     "The reuse window of a task id is refused for 3600 seconds under strict productionExact (`functions.taskNameReuse` `production`, documented as about one hour); its expiry was not observed. The default profile frees a finished name at once, and an explicit key wins over productionExact.",
     "Production's default queue retry config comes from a recording: the default queue of a function that declared no retry options read back (getQueue, both runs) with maxAttempts 100, minBackoff 0.100 s, maxBackoff 3600 s and maxDoublings 16 and no maxRetryDuration, the Cloud Tasks documentation's defaults. `functions.taskRetryDefaults` `production` (selected by productionExact) fills maxAttempts 100 for a field the function does not declare; the default profile keeps the official emulator's 3 attempts, and a declared value is always kept.",
     "Production's retry gaps grew past the declared maxBackoff in both runs (queue tqwindow, maxBackoff 2 s, 100 attempts: 1 s, then ten gaps of 2 s, then 4 s three times, 8 s twice and 10 s from the seventeenth gap on). `functions.taskRetryBackoff` `production` (selected by productionExact) follows that schedule as a floor under the declared gap, and the comparison claims every gap of the shorter side. Not recorded: how the growth depends on the declared maxBackoff (no other queue of the program failed twelve times), whether it depends on the elapsed time, and the gaps after the observation ended; the length of the observation differs between runs, which is the observation-window known difference (ruling 16).",
-    "Strict delivers an `Authorization: Bearer` identity token of three segments to a task that named an `oidcToken`, so that `request.auth` is present in an `onTaskDispatched` handler as in production. The emulator issues it unsigned (`alg: none`, an empty third segment) with Google's claim names: only the scheme, the segment count and the presence of `request.auth` are production's, not the signature or the values (ruling 17).",
-    "The answers of createTask, deleteTask and the refusals are printed as production printed them (two-space JSON in proto field order with a newline at the end, `<`, `>` and `&` escaped, `application/json; charset=UTF-8`), including the `details` of an argument error; the order of the members of `headers` varied between production's runs and is not compared. The byte length is not compared because the task's URL differs (ruling 18).",
+    "Strict delivers an `Authorization: Bearer` identity token of three segments to a task that named an `oidcToken`, so that `request.auth` is present in an `onTaskDispatched` handler as in production. The emulator issues it unsigned (`alg: none`, an empty third segment) with Google's claim names: only the scheme, the segment count and the presence of `request.auth` are production's, not the signature or the values (rulings 17 and 23). The handler and its timers see `FUNCTIONS_EMULATOR=\"true\"` (ruling 22).",
+    "The strict FUNCTIONS_EMULATOR hide covers the next read inside a dispatch scope, which is the SDK's request.auth check; an onInit callback that reads FUNCTIONS_EMULATOR during the first dispatch would take that read (coordinator re-check of ruling 22, 2026-11-12).",
+    "The answers of createTask, deleteTask and the refusals are printed as production printed them (two-space JSON in proto field order with a newline at the end, `<`, `>` and `&` escaped, `application/json; charset=UTF-8`), including the `details` of an argument error; the order of the members of `headers` varied between production's runs and is not compared. The byte length is not compared because the task's URL differs (rulings 18 and 24). getTask stays 405 in strict under KD-QUEUE-READS (rulings 3 and 24).",
     "A strict createTask whose body is not JSON is refused with 400, which production does not do (a task body is any bytes); the daemon needs a JSON body to deliver to an `onTaskDispatched` function. A refusal of that kind is not a recorded production answer.",
     "The emulator profile is unchanged by this closure: it keeps the official emulator's answers, plain-text refusals, header shape, 100 KiB request limit, forever-kept names and retry defaults (ruling 20)."
   ],
@@ -1705,7 +1724,7 @@
   "comparisons": {
     "runVsRun": {
       "path": "conformance/task-queue-production-run-comparison.json",
-      "sha256": "24c9080f866caa75c31e38e72f35aedb360eae99f28d2ac8f73613cf0d4b2c89",
+      "sha256": "39ca48e2dabde013b4bea5155b51872cfd84d5374ac8a0d75fc157d8cd1a6e27",
       "rows": 122,
       "summary": {
         "MATCH": 90,
@@ -1717,7 +1736,7 @@
     },
     "strictVsPass1": {
       "path": "conformance/task-queue-production-strict-vs-pass-1.json",
-      "sha256": "0676487a2d98c37cb06f62038542f7527b198831b800fbe200ca9cb5d0dfc9bf",
+      "sha256": "1150f3f0a123df2025f65009759a41a16a6dc90044098ffacb1675af022e6d35",
       "rows": 122,
       "summary": {
         "MATCH": 57,
@@ -1729,7 +1748,7 @@
     },
     "strictVsPass2": {
       "path": "conformance/task-queue-production-strict-vs-pass-2.json",
-      "sha256": "8a50fc974ad4680f4477e1d89ee24c364fcfae8773fc0ea42c9ee7dbf8f2a04c",
+      "sha256": "86816c298482262a6953f62242cf9a82ef7eb57d0e2dbeafc0d05512e60fae6e",
       "rows": 122,
       "summary": {
         "MATCH": 57,
@@ -1747,7 +1766,7 @@
   },
   "knownDifferences": {
     "path": "conformance/src/task-queue-production/known-differences.mjs",
-    "sha256": "fd2b17eaf5dd442aaec8664487d937f58e50216b122a93469bb72c0476609a41",
+    "sha256": "d8c7aa4e58201cf0290d069ec862bf4dfef2b9de573b26d432e7e2a8d22d882e",
     "entries": [
       "KD-LOCAL-URL",
       "KD-QUEUE-READS",
@@ -1764,7 +1783,7 @@
     "comparisons": [
       {
         "path": "conformance/task-queue-production-run-comparison.json",
-        "sha256": "24c9080f866caa75c31e38e72f35aedb360eae99f28d2ac8f73613cf0d4b2c89",
+        "sha256": "39ca48e2dabde013b4bea5155b51872cfd84d5374ac8a0d75fc157d8cd1a6e27",
         "rows": 122,
         "summary": {
           "MATCH": 90,
@@ -1776,7 +1795,7 @@
       },
       {
         "path": "conformance/task-queue-production-strict-vs-pass-1.json",
-        "sha256": "0676487a2d98c37cb06f62038542f7527b198831b800fbe200ca9cb5d0dfc9bf",
+        "sha256": "1150f3f0a123df2025f65009759a41a16a6dc90044098ffacb1675af022e6d35",
         "rows": 122,
         "summary": {
           "MATCH": 57,
@@ -1788,7 +1807,7 @@
       },
       {
         "path": "conformance/task-queue-production-strict-vs-pass-2.json",
-        "sha256": "8a50fc974ad4680f4477e1d89ee24c364fcfae8773fc0ea42c9ee7dbf8f2a04c",
+        "sha256": "86816c298482262a6953f62242cf9a82ef7eb57d0e2dbeafc0d05512e60fae6e",
         "rows": 122,
         "summary": {
           "MATCH": 57,
@@ -1807,5 +1826,34 @@
       "requires": "the structure verdicts of every row equal the committed ones, with productionExact set (local.mjs does)"
     },
     "releaseBindingNote": "Run R38 of conformance/src/release-strict-regression.mjs reproduces the three comparisons on the packed binary (strict profile, productionExact, loopback only), judged by conformance/src/task-queue-production/release-judge.mjs: the same cases with the same structure and parts, no mismatch, no unknown, no timing outside twice the committed tolerance, both concurrency properties MATCH, and the comparison of the two recordings equal to the committed one. The conformance workflow runs the same replay on a fresh build (conformance.yml, step \"strict replay of the task queue recordings\")."
+  },
+  "closureReview": {
+    "decision": "APPROVED",
+    "decidedOn": "2026-11-12",
+    "decider": "project coordinator",
+    "decisionRef": "owner ledger 2417, 2459; coordinator rulings 1-25",
+    "reviewedCommit": "62cac651fb2d690abea91b8ab86955ebd5f70ab6",
+    "reviews": [
+      {
+        "reviewer": "independent promotion reviewer",
+        "reportPath": "docs.local/reviews/2026-11-12-task-queue-closure-promotion-review.md",
+        "reportSha256": "93df5a84357980c78bc7709e22257b6c55b47a59994e54e6934f23b074b9996f",
+        "reviewedCommit": "2d46367cb8624d8cce6509edd37bf501f2cce491",
+        "outcome": "PROMOTE-AFTER-FIXES"
+      },
+      {
+        "reviewer": "independent promotion reviewer",
+        "reportPath": "docs.local/reviews/2026-11-12-task-queue-closure-delta-review.md",
+        "reportSha256": "8952b97d1e8bb49d46edd5e794c4da77a308485f449585f721ec66d4d6b3f3b3",
+        "reviewedCommit": "40e005cca0df84d6d8417296192dfb593b0f032d",
+        "outcome": "PROMOTE-AFTER-FIXES"
+      },
+      {
+        "reviewer": "project coordinator",
+        "reviewedCommit": "62cac651fb2d690abea91b8ab86955ebd5f70ab6",
+        "outcome": "APPROVED",
+        "scope": "re-check of D1 (FUNCTIONS_EMULATOR hidden only for the SDK read, strict only) and S-a to S-d"
+      }
+    ]
   }
 }

@@ -119,7 +119,7 @@ test("a fireemu-only condition is verified by the tests it names, all of which m
   );
 });
 
-test("the release regression is verified only when it is wired, and the review never by this tool", () => {
+test("the release regression needs wiring and the review needs approval and evidence", () => {
   const gate = (name) =>
     condition({ conditionId: `TASK-QUEUE-FUNCTIONS/${name}`, evidenceType: "closure-gate" });
   const wired = conditionEvidence(gate("final-artifact-regression"), ok(), evidence, {
@@ -138,6 +138,20 @@ test("the release regression is verified only when it is wired, and the review n
       .status,
     "PLANNED",
   );
+  const review = { reviewedCommit: "commit", outcome: "APPROVED" };
+  for (const closureReview of [
+    { decision: "APPROVED", reviews: [] },
+    { decision: "PENDING", reviews: [review] },
+  ])
+    assert.equal(
+      conditionEvidence(gate("closure-review"), ok(), evidence, { closureReview }).status,
+      "PLANNED",
+    );
+  const approved = conditionEvidence(gate("closure-review"), ok(), evidence, {
+    closureReview: { decision: "APPROVED", reviews: [review] },
+  });
+  assert.equal(approved.status, "VERIFIED");
+  assert.deepEqual(approved.reviewEvidence, [review]);
   assert.equal(repositoryRegressionHolds(REGRESSION), true, "the repository wires R38");
   for (const broken of [
     { ...REGRESSION, runner: "conformance/src/no-such-file.mjs" },

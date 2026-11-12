@@ -2405,11 +2405,127 @@ async fn marker_sent(h: &Harness, headers: &[(&str, &str)]) -> Vec<String> {
     echoed(&body, VERIFIED_CREDENTIAL_FIELD)
 }
 
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn strict_nested_callable_refuses_forged_app_check_and_accepts_admitted_token() {
+    use fireemu_adapter_functions::http::FunctionsHttpProfile::Strict;
+    use std::path::Path;
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let sdk = std::env::var("FE_SOURCE_SDK_ROOT").unwrap_or_else(|_| {
+        root.join("conformance/node_modules/firebase-functions")
+            .to_string_lossy()
+            .into_owned()
+    });
+    let dir = root.join(format!(
+        "target/codex-out/nested-app-check-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("package.json"), r#"{"main":"index.cjs"}"#).unwrap();
+    std::fs::write(dir.join("index.cjs"), format!("
+const {{ onRequest, onCall }} = require({sdk_path});
+exports.nested = onRequest({{ cors: false }}, onCall({{ enforceAppCheck: true }}, (request) => ({{ app: request.app ?? null }})));
+", sdk_path = serde_json::json!(Path::new(&sdk).join("lib/v2/providers/https.js").to_string_lossy()))).unwrap();
+    let spec = SpawnSpec {
+        command: vec![
+            "node".into(),
+            root.join("tools/runner-node/index.mjs")
+                .to_string_lossy()
+                .into_owned(),
+            "--source".into(),
+            dir.to_string_lossy().into_owned(),
+        ],
+        cwd: None,
+        env: [
+            ("GCLOUD_PROJECT", PROJECT),
+            (
+                "NODE_PATH",
+                Path::new(&sdk).parent().unwrap().to_str().unwrap(),
+            ),
+            ("FIREEMU_RUNNER_SECRET", "runner-secret"),
+            ("FIREEMU_HTTP_PROFILE", "strict"),
+            ("FIREBASE_DEBUG_MODE", "true"),
+            (
+                "FIREBASE_DEBUG_FEATURES",
+                r#"{"skipTokenVerification":true}"#,
+            ),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.into(), value.into()))
+        .collect(),
+        hello_timeout: Duration::from_secs(60),
+    };
+    let runner = Runner::spawn_spec(&spec)
+        .await
+        .expect("the real runner starts");
+    let manifest =
+        parse_manifest(runner.hello().manifest.as_ref().expect("a manifest")).expect("it parses");
+    let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
+    let runtime = FunctionsRuntime::new(
+        manifest,
+        FunctionsConfig {
+            project: PROJECT.into(),
+            ..FunctionsConfig::for_tests(1000, "runner-secret".into())
+        },
+        clock.clone(),
+        Arc::new(runner),
+        Some(spec),
+    );
+    let gate = gate();
+    let auth = Arc::new(Mutex::new(AuthStore::new(
+        PROJECT,
+        SplitMix64::new(3),
+        TotpPolicy::default(),
+    )));
+    let verifier = Arc::new(RulesEnforcer::new(
+        Arc::new(RulesetSlot::default()),
+        auth.clone(),
+        clock,
+    ));
+    runtime.set_callable_auth_verifier(verifier.clone());
+    let policy = ServiceAdmission::new(gate.clone(), "functions", BaselineMode::Unenforced)
+        .map(Arc::new)
+        .unwrap();
+    runtime.set_callable_trust(Arc::new(CallableTrust::new(policy, verifier, PROJECT)));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server_runtime = runtime.clone();
+    let server = tokio::spawn(async move {
+        fireemu_adapter_functions::http::serve_functions_with_profile(
+            listener,
+            server_runtime,
+            fireemu_adapter_functions::http::HttpAdmission::new(),
+            Strict,
+        )
+        .await
+    });
+    let h = Harness {
+        addr,
+        gate,
+        auth,
+        runtime,
+        server,
+    };
+    let token = h.token();
+    let forged = format!("{token}x");
+    let (status, body) = h.call("nested", &[("x-firebase-appcheck", &forged)]).await;
+    assert_eq!(status, 401, "{body}");
+    assert_eq!(body["error"]["status"], "UNAUTHENTICATED");
+    let (status, body) = h.call("nested", &[("x-firebase-appcheck", &token)]).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["result"]["app"]["appId"], APP_ID);
+    assert_eq!(body["result"]["app"]["token"]["app_id"], APP_ID);
+    h.stop().await;
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// A callable's wrapper nested in an `onRequest` function cannot be seen by discovery, so the strict
 /// daemon tells the runner whether the one credential of a request to a non-callable HTTP endpoint is
 /// a Bearer of a user of the project; the runner refuses the rest where a callable wrapper reads it
 /// (tools/runner-node/nested-callable.mjs).
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn strict_tells_the_runner_which_credential_of_a_plain_http_function_it_verified() {
     use fireemu_adapter_functions::http::FunctionsHttpProfile::{Emulator, Strict};
     const FIELD: &str = VERIFIED_CREDENTIAL_FIELD;

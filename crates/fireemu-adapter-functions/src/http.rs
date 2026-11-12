@@ -1888,9 +1888,9 @@ async fn respond(
     // `onRequest` function, strict profile, no App Check) runs the callable's wrapper too, so
     // its requests pass the same Bearer check. A preflight is the SDK's CORS handling and
     // carries no credential check, as for a callable.
-    let code_callable = marked_callable_in_code(&runtime, function);
     if profile == FunctionsHttpProfile::Strict
-        && ((callable && !callable_preflight) || (code_callable && method != "OPTIONS"))
+        && (callable || marked_callable_in_code(&runtime, function))
+        && method != "OPTIONS"
     {
         if let Some(denial) = strict_callable_credential_refusal(
             &runtime,
@@ -1936,32 +1936,7 @@ async fn respond(
         }
     };
     if plain_http {
-        if let Some(trust) = runtime.callable_trust() {
-            let app_check = field_values(
-                req.headers(),
-                fireemu_core_app_check::header::APP_CHECK_HEADER,
-            );
-            let decision = trust.sanitize(&crate::callable::CallableRequest {
-                function,
-                enforce_app_check: false,
-                consume_app_check_token: false,
-                headers: &[],
-                app_check: &app_check,
-                authorization: &[],
-                now: runtime.now(),
-            });
-            let verified = matches!(
-                decision,
-                crate::callable::CallableDecision::Forward {
-                    app_check: crate::callable::CredentialState::Valid,
-                    ..
-                }
-            );
-            headers.push((
-                VERIFIED_APP_CHECK_HEADER.to_owned(),
-                if verified { "1" } else { "0" }.to_owned(),
-            ));
-        }
+        add_app_check_verification_header(&runtime, function, req.headers(), &mut headers);
     }
     if profile == FunctionsHttpProfile::Strict {
         let verified = plain_http && verified_single_credential(&runtime, req.headers());
@@ -1971,20 +1946,47 @@ async fn respond(
         Ok(body) => body,
         Err(answer) => return Ok(*answer),
     };
-    let path_and_query = match query {
-        Some(q) => format!("{path}?{q}"),
-        None => path,
-    };
     invoke_runner(
         &runtime,
         &target,
         &method,
-        &path_and_query,
+        &query.map_or_else(|| path.clone(), |q| format!("{path}?{q}")),
         &headers,
         &body,
         HttpIngressMode { profile, streaming },
     )
     .await
+}
+
+fn add_app_check_verification_header(
+    runtime: &FunctionsRuntime,
+    function: &str,
+    raw: &hyper::HeaderMap,
+    headers: &mut Vec<(String, String)>,
+) {
+    if let Some(trust) = runtime.callable_trust() {
+        let app_check = field_values(raw, fireemu_core_app_check::header::APP_CHECK_HEADER);
+        let decision = trust.sanitize(&crate::callable::CallableRequest {
+            function,
+            enforce_app_check: false,
+            consume_app_check_token: false,
+            headers: &[],
+            app_check: &app_check,
+            authorization: &[],
+            now: runtime.now(),
+        });
+        let verified = matches!(
+            decision,
+            crate::callable::CallableDecision::Forward {
+                app_check: crate::callable::CredentialState::Valid,
+                ..
+            }
+        );
+        headers.push((
+            VERIFIED_APP_CHECK_HEADER.to_owned(),
+            if verified { "1" } else { "0" }.to_owned(),
+        ));
+    }
 }
 
 /// Every instance of one field, in wire order, with an unrenderable value as an empty string.

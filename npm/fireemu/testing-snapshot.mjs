@@ -25,7 +25,7 @@ export const cloneSupport={
   file:process.platform==='linux',
   tree:process.platform==='darwin',
   treeCommand:'/bin/cp',
-  treeArguments:(source,destination)=>['-c','-R',source,destination],
+  treeArguments:(source,destination)=>['-c','-R','-p',source,destination],
 };
 
 /** Counters for one snapshot or generation copy; `noClone` remembers source devices that cannot clone. */

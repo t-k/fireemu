@@ -153,6 +153,50 @@ test('a failed move is reported and the wait never starts', native, async t => {
   await assert.rejects(world.clock.advanceAndSettle({ seconds: -5 }), /control 400/);
 });
 
+test('reset aborts the pending awaitIdle request synchronously', native, async t => {
+  const world = await worldWithTasks(t);
+  await scheduleTask(world, 'later', 60_000);
+  const realFetch = globalThis.fetch;
+  let signal, recorded;
+  const started = new Promise(resolve => { recorded = resolve; });
+  t.mock.method(globalThis, 'fetch', (url, init) => {
+    if (!String(url).endsWith(':awaitIdle')) return realFetch(url, init);
+    signal = init.signal;
+    recorded();
+    return new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+  });
+  const idle = world.control('POST', 'sessions/default:awaitIdle', { timeoutSeconds: 30 });
+  await started;
+  await delay(200);
+  assert.equal(signal.aborted, false);
+  const reset = world.reset();
+  assert.equal(signal.aborted, true);
+  await assert.rejects(idle, /cancelled: the world was reset/);
+  await reset;
+});
+
+test('dispose aborts the advanceAndSettle awaitIdle request synchronously', native, async t => {
+  const world = await worldWithTasks(t);
+  await scheduleTask(world, 'later', 60_000);
+  const realFetch = globalThis.fetch;
+  let signal, recorded;
+  const started = new Promise(resolve => { recorded = resolve; });
+  t.mock.method(globalThis, 'fetch', (url, init) => {
+    if (!String(url).endsWith(':awaitIdle')) return realFetch(url, init);
+    signal = init.signal;
+    recorded();
+    return new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+  });
+  const idle = world.clock.advanceAndSettle(10, { scope: 'all', timeoutSeconds: 30 });
+  await started;
+  await delay(200);
+  assert.equal(signal.aborted, false);
+  const dispose = world.dispose();
+  assert.equal(signal.aborted, true);
+  await assert.rejects(idle, /cancelled: the world was disposed/);
+  await dispose;
+});
+
 test('a reset cancels a pending awaitIdle and the world keeps working afterwards', native, async t => {
   const world = await worldWithTasks(t);
   await scheduleTask(world, 'later', 60_000);
@@ -331,4 +375,17 @@ test('advanceAndSettle waits 20 seconds by default for work that never becomes i
   await assert.rejects(world.clock.advanceAndSettle(1000, { scope: 'all' }), error => error.status === 504);
   const waited = Date.now() - started;
   assert.ok(waited >= 18_000 && waited < 30_000, `the default budget is 20 s, waited ${waited} ms`);
+});
+
+test('an awaitIdle request that the daemon never answers ends after its budget plus five seconds', { ...native, timeout: 40_000 }, async t => {
+  const world = await worldWithTasks(t);
+  const realFetch = globalThis.fetch;
+  t.mock.method(globalThis, 'fetch', (url, init) => {
+    if (!String(url).endsWith(':awaitIdle')) return realFetch(url, init);
+    return new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true }));
+  });
+  const started = Date.now();
+  await assert.rejects(world.control('POST', 'sessions/default:awaitIdle', { timeoutSeconds: 0 }), error => error.name === 'TimeoutError');
+  const waited = Date.now() - started;
+  assert.ok(waited >= 4500 && waited < 20_000, `waited ${waited} ms`);
 });

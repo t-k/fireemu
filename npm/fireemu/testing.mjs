@@ -89,6 +89,13 @@ function retainCleanupError(error,cleanupError){
   if(error&&typeof error==='object')try{error.cleanupError=cleanupError;}catch{}
 }
 
+// AbortSignal.any needs Node 20.3; the package supports Node 20.
+function anySignal(...signals){
+  const controller=new AbortController();
+  for(const signal of signals)signal.addEventListener('abort',()=>controller.abort(signal.reason),{once:true});
+  return controller.signal;
+}
+
 /** Create an independent emulator world; no method changes the parent's environment. */
 export async function createTestWorld(options={}){
   options={...options,nodePathExcludes:Array.isArray(options.nodePathExcludes)?[...options.nodePathExcludes]:options.nodePathExcludes,config:typeof options.config==='object'?structuredClone(options.config):options.config,services:options.services?[...options.services]:undefined,env:{...(options.env??{...process.env,NODE_PATH:''})},clock:options.clock?{...options.clock}:undefined};
@@ -173,7 +180,7 @@ export async function createTestWorld(options={}){
   // awaitIdle blocks until work finishes, which can need a clock move issued after it: it must not hold the ordered lane.
   const waitsForIdle=(method,path)=>String(method).toUpperCase()==='POST'&&typeof path==='string'&&/:awaitIdle(?:\?.*)?$/.test(path);
   const control=(method,path,body)=>waitsForIdle(method,path)
-    ?queue.waiting(async()=>{check();return requestFor(current,method,path,body,idleSignal(body));})
+    ?queue.waiting(async signal=>{check();return requestFor(current,method,path,body,anySignal(idleSignal(body),signal));})
     :queue.ordered(async()=>{check();return requestFor(current,method,path,body);});
   const advanceBody=duration=>typeof duration==='number'?{millis:duration}:duration;
   const advanceAndSettle=async(duration,settings={})=>{
@@ -194,10 +201,10 @@ export async function createTestWorld(options={}){
       }
       return {active,clock,timers};
     });
-    const settled=queue.waiting(async()=>{
+    const settled=queue.waiting(async signal=>{
       const {active,clock,timers}=await moved;
       const body={scope,timeoutSeconds};
-      const idle=await requestFor(active,'POST','/v1/sessions/default:awaitIdle',body,idleSignal(body));
+      const idle=await requestFor(active,'POST','/v1/sessions/default:awaitIdle',body,anySignal(idleSignal(body),signal));
       return {clock,timers,idle};
     });
     return settled;

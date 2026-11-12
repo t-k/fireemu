@@ -644,6 +644,37 @@ test('a source that cannot be read still fails when clones fall back to the real
   await assert.rejects(snapshotInputs({ ...options, services: ['functions'] }, f.world), /EACCES|permission denied/i);
 });
 
+test('the macOS tree clone preserves modes', () => {
+  assert.deepEqual(cloneSupport.treeArguments('a', 'b'), ['-c', '-R', '-p', 'a', 'b']);
+});
+
+for (const platformClone of [false, true]) {
+  test(`tree cloning preserves file and directory modes: ${platformClone ? 'macOS' : 'portable'}`, { skip: process.platform === 'win32' || (platformClone && process.platform !== 'darwin') }, async t => {
+    let baseline, inputs;
+    t.after(async () => {
+      for (const root of [baseline, inputs]) if (root) await chmod(join(root, 'readonly'), 0o700).catch(() => {});
+    });
+    const f = await fixture(t);
+    if (!platformClone) await withCloneSupport(t, { tree: true, treeCommand: 'cp', treeArguments: (source, destination) => ['-R', '-p', source, destination] });
+    baseline = join(f.root, 'baseline');
+    inputs = join(f.world, 'generation', 'inputs');
+    await mkdir(baseline);
+    const modes = { executable: 0o755, group: 0o640, file: 0o444, directory: 0o750, 'directory/inside': 0o640, readonly: 0o555, 'readonly/inside': 0o444 };
+    for (const name of ['directory', 'readonly']) await mkdir(join(baseline, name));
+    for (const name of ['executable', 'group', 'file', 'directory/inside', 'readonly/inside']) await writeFile(join(baseline, name), 'x');
+    for (const [name, mode] of Object.entries(modes)) await chmod(join(baseline, name), mode);
+    const previousUmask = process.umask(0o077);
+    t.after(() => process.umask(previousUmask));
+    try {
+      const generation = await prepareGeneration({ baseline, config: { daemon: {} }, nodePaths: [], totals: { files: 5, directories: 3, symlinks: 0, bytes: 5 } }, join(f.world, 'generation'));
+      assert.equal(generation.stats.method, 'clone');
+      for (const name of Object.keys(modes)) assert.equal((await stat(join(inputs, name))).mode & 0o777, (await stat(join(baseline, name))).mode & 0o777, name);
+    } finally {
+      process.umask(previousUmask);
+    }
+  });
+}
+
 // The tree clone is the platform copy tool run over the whole baseline; plain `cp -R` stands in
 // for `cp -c -R` so the path runs on every platform.
 const plainCopy = { tree: true, treeCommand: 'cp', treeArguments: (source, destination) => ['-R', source, destination] };

@@ -126,7 +126,7 @@ Ordering rules for one world:
 
 - Clock helpers and ordinary `world.control()` calls run one at a time, in call order.
 - An `awaitIdle` call starts after the ordered calls issued before it and never delays the ones issued after it. Several `awaitIdle` calls may be pending together.
-- `reset()` and `dispose()` wait for every earlier clock helper and `control()` call and hold back later calls. They cancel pending `awaitIdle` and `advanceAndSettle` waits, which reject with an error saying the world was reset or disposed: the generation being waited on is being retired.
+- `reset()` and `dispose()` wait for every earlier clock helper and `control()` call and hold back later calls. They cancel pending `awaitIdle` and `advanceAndSettle` waits, which abort their HTTP request at once and reject with an error saying the world was reset or disposed: the generation being waited on is being retired.
 - An `awaitIdle` request may take its own `timeoutSeconds` (30 s when omitted, at most 600 s) plus five seconds; `requestTimeoutMs` applies to every other control call.
 
 ## Create parallel worlds

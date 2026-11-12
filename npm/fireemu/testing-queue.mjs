@@ -16,7 +16,7 @@ const settle = promise => promise.then(() => {}, () => {});
  */
 export function waitRequestTimeoutMs(body) {
   const seconds = typeof body?.timeoutSeconds === 'number' && Number.isFinite(body.timeoutSeconds) ? Math.min(Math.max(body.timeoutSeconds, 0), 600) : 30;
-  return seconds * 1000 + 5000;
+  return Math.ceil(seconds * 1000) + 5000;
 }
 
 export function createWorldQueue() {
@@ -38,13 +38,14 @@ export function createWorldQueue() {
       return job;
     },
     waiting(operation) {
+      const controller = new AbortController();
       let cancel;
       let skip = false;
-      // A cancelled wait rejects at once, without waiting for the calls ahead of it, and never starts.
-      const cancelled = new Promise((_, reject) => { cancel = reason => { skip = true; reject(reason); }; });
+      // A cancelled wait aborts its signal and rejects at once; if not started, it never starts.
+      const cancelled = new Promise((_, reject) => { cancel = reason => { skip = true; controller.abort(reason); reject(reason); }; });
       cancellable.add(cancel);
       const job = Promise.race([
-        Promise.all([barrier, ordered]).then(() => (skip ? cancelled : operation())),
+        Promise.all([barrier, ordered]).then(() => (skip ? cancelled : operation(controller.signal))),
         cancelled,
       ]);
       const done = settle(job);

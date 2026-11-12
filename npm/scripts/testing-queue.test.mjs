@@ -13,7 +13,8 @@ function harness() {
   const add = (kind, name = String(ops.length), reason) => {
     if (kind === 'exclusive') reasons.add(reason ?? CANCEL);
     const op = { kind, name, started: false, finished: false, cancelled: false };
-    op.promise = queue[kind](() => new Promise((resolve, reject) => {
+    op.promise = queue[kind](signal => new Promise((resolve, reject) => {
+      if (kind === 'waiting') op.signal = signal;
       op.started = true;
       op.finish = value => { op.finished = true; resolve(value); };
       op.fail = error => { op.finished = true; reject(error); };
@@ -98,6 +99,45 @@ test('an exclusive call cancels running waiting calls with its reason and does n
   assert.equal(idle.finished, false, 'the wait itself was left unsatisfied');
   assert.equal(reset.started, true, 'the exclusive call starts without anyone finishing the wait');
   reset.finish(); await settleAll();
+});
+
+test('a running wait is synchronously aborted by an exclusive call', async () => {
+  const { add } = harness();
+  const idle = add('waiting');
+  await settleAll();
+  assert.equal(idle.signal.aborted, false);
+  const reason = Error('reset');
+  const reset = add('exclusive', 'reset', reason);
+  assert.equal(idle.signal.aborted, true);
+  assert.equal(idle.signal.reason, reason);
+  await assert.rejects(idle.promise, error => error === reason);
+  await settleAll();
+  assert.equal(reset.started, true);
+  reset.finish();
+});
+
+test('a completed wait is not aborted by a later exclusive call', async () => {
+  const { add } = harness();
+  const idle = add('waiting');
+  await settleAll();
+  idle.finish();
+  await idle.promise;
+  await settleAll();
+  const reset = add('exclusive');
+  assert.equal(idle.signal.aborted, false);
+  await settleAll();
+  reset.finish();
+});
+
+test('a wait admitted after an exclusive call receives a fresh signal', async () => {
+  const { add } = harness();
+  const reset = add('exclusive');
+  const idle = add('waiting');
+  await settleAll();
+  reset.finish();
+  await settleAll();
+  assert.equal(idle.signal.aborted, false);
+  idle.finish();
 });
 
 test('a waiting call cancelled before it starts never starts', { timeout: 10_000 }, async () => {
@@ -253,15 +293,24 @@ test('an awaitIdle request may take its wait budget plus five seconds', () => {
   assert.equal(waitRequestTimeoutMs({ timeoutSeconds: 2.5 }), 7_500);
   assert.equal(waitRequestTimeoutMs({ timeoutSeconds: 10_000 }), 605_000, 'the daemon clamps the budget to 600 s');
   assert.equal(waitRequestTimeoutMs({ timeoutSeconds: -5 }), 5_000);
+  for (const [timeoutSeconds, expected] of [[1.2345, 6235], [0.0001, 5001], [599.9999, 605000], [600.0001, 605000], [601, 605000], [5e-324, 5001], [0.1 + 0.2, 5301]]) assert.equal(waitRequestTimeoutMs({ timeoutSeconds }), expected);
   for (const timeoutSeconds of ['20', NaN, Infinity, null, {}]) assert.equal(waitRequestTimeoutMs({ timeoutSeconds }), 35_000, `${String(timeoutSeconds)} falls back to the daemon default`);
 });
 
 test('the wait request timeout follows the clamp rule for any budget', () => {
   const random = prng(7);
+  const budgets = [0, 600];
   for (let count = 0; count < 2000; count++) {
-    const timeoutSeconds = Math.round((random() - 0.2) * 1400 * 100) / 100;
-    const expected = Math.min(Math.max(timeoutSeconds, 0), 600) * 1000 + 5000;
-    assert.equal(waitRequestTimeoutMs({ timeoutSeconds }), expected, `${timeoutSeconds} s`);
-    assert.ok(waitRequestTimeoutMs({ timeoutSeconds }) >= 5000 && waitRequestTimeoutMs({ timeoutSeconds }) <= 605_000);
+    const scale = 10 ** (1 + count % 6);
+    budgets.push(Math.round((random() - 0.2) * 1400 * scale) / scale);
+  }
+  for (const timeoutSeconds of budgets) {
+    const r = waitRequestTimeoutMs({ timeoutSeconds });
+    const budget = Math.min(Math.max(timeoutSeconds, 0), 600) * 1000;
+    assert.ok(Number.isInteger(r), `${timeoutSeconds} s`);
+    assert.ok(r >= 5000 && r <= 605000);
+    // Compare the budget part alone: adding 5000 to a float such as 521729.00000000006 would round away the excess.
+    assert.ok(r - 5000 >= budget && r - 5000 < budget + 1, `${timeoutSeconds} s gave ${r}`);
+    assert.doesNotThrow(() => AbortSignal.timeout(r));
   }
 });

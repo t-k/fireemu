@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { resolveBinary, ensureExecutable } from './binary.mjs';
 import { snapshotInputs, prepareGeneration, removeSnapshotTree } from './testing-snapshot.mjs';
+import { createWorldQueue, waitRequestTimeoutMs } from './testing-queue.mjs';
 import { createControlClient } from './control.mjs';
 
 const endpointVariables = {firestore:'FIRESTORE_EMULATOR_HOST',auth:'FIREBASE_AUTH_EMULATOR_HOST',storage:'FIREBASE_STORAGE_EMULATOR_HOST',functions:'FIREEMU_FUNCTIONS_HOST',eventarc:'CLOUD_EVENTARC_EMULATOR_HOST',tasks:'CLOUD_TASKS_EMULATOR_HOST',pubsub:'PUBSUB_EMULATOR_HOST',database:'FIREBASE_DATABASE_EMULATOR_HOST',hub:'FIREBASE_EMULATOR_HUB',logging:'FIREBASE_LOGGING_EMULATOR_HOST'};
@@ -78,6 +79,12 @@ function snapshotFailure(error,signal){
   return Error(`test world snapshot aborted${reason?.message?`: ${reason.message}`:''}`,{cause:reason??error});
 }
 
+// FIREEMU_TEST_WORLD_STATS=1 prints each snapshot and generation copy cost to stderr.
+function logSnapshotStats(label,stats){
+  if(process.env.FIREEMU_TEST_WORLD_STATS!=='1')return;
+  process.stderr.write(`fireemu test world ${label}: ${stats.files} files, ${stats.bytes} bytes, ${stats.method}, ${stats.elapsedMs} ms\n`);
+}
+
 function retainCleanupError(error,cleanupError){
   if(error&&typeof error==='object')try{error.cleanupError=cleanupError;}catch{}
 }
@@ -105,6 +112,14 @@ export async function writeDiagnosticsDump(directory,control){
   return paths;
 }
 
+// AbortSignal.any needs Node 20.3; the package supports Node 20.
+function anySignal(...signals){
+  const controller=new AbortController();
+  for(const signal of signals)signal.addEventListener('abort',()=>controller.abort(signal.reason),{once:true});
+  return controller.signal;
+
+}
+
 /** Create an independent emulator world; no method changes the parent's environment. */
 export async function createTestWorld(options={}){
   options={...options,nodePathExcludes:Array.isArray(options.nodePathExcludes)?[...options.nodePathExcludes]:options.nodePathExcludes,config:typeof options.config==='object'?structuredClone(options.config):options.config,services:options.services?[...options.services]:undefined,env:{...(options.env??{...process.env,NODE_PATH:''})},clock:options.clock?{...options.clock}:undefined};
@@ -120,10 +135,11 @@ export async function createTestWorld(options={}){
   if(services&&(!Array.isArray(services)||!services.length||services.some(name=>typeof name!=='string'||! /^(auth|firestore|storage|functions(?::[A-Za-z0-9_-]+)?|pubsub|database|appcheck)$/.test(name))))throw TypeError('services must name supported test-world services');
   const id=randomUUID();
   const directory=await mkdtemp(join(resolve(options.tempRoot??tmpdir()),'fireemu-world-'));
-  let snapshot,current,tail=Promise.resolve(),closing=false,disposed=false,generation=0;
+  let snapshot,current,closing=false,disposed=false,generation=0;
+  const queue=createWorldQueue();
+  const snapshotLog={initial:undefined,generations:[]};
   const clients=new Set();
   const retiring=new Set();
-  const enqueue=operation=>{const job=tail.then(operation);tail=job.catch(()=>{});return job;};
   const check=()=>{if(closing||disposed)throw Error('test world is disposed');if(!current?.descriptor||current.process.result())throw Error('test world generation is unavailable');};
   const retire=async()=>{
     if(current)retiring.add(current);
@@ -136,12 +152,18 @@ export async function createTestWorld(options={}){
     const failures=[...clientResults,...daemonResults].filter(result=>result.status==='rejected').map(result=>result.reason);
     if(failures.length)throw new AggregateError(failures,'test world retirement failed; cleanup can be retried');
   };
+  const idleSignal=body=>AbortSignal.timeout(waitRequestTimeoutMs(body));
   const requestFor=async(active,method,path,body,signal)=>{
     try{return await active.control.request(method,path,body,{signal});}
     catch(error){
       if(error.code==='FIREEMU_CONTROL_HTTP')error.message=`test world ${error.message}`;
       throw error;
     }
+  };
+  const recordGeneration=(number,stats)=>{
+    const entry=Object.freeze({generation:number,...stats});
+    snapshotLog.generations.push(entry);
+    logSnapshotStats(`generation ${number}`,entry);
   };
   const start=async(prepared,generationDirectory)=>{
     options.signal?.throwIfAborted();
@@ -179,7 +201,38 @@ export async function createTestWorld(options={}){
       throw Error('fireemu test-world startup timed out');
     }catch(error){await retire();throw error;}
   };
-  const control=(method,path,body)=>enqueue(async()=>{check();return requestFor(current,method,path,body);});
+  // awaitIdle blocks until work finishes, which can need a clock move issued after it: it must not hold the ordered lane.
+  const waitsForIdle=(method,path)=>String(method).toUpperCase()==='POST'&&typeof path==='string'&&/:awaitIdle(?:\?.*)?$/.test(path);
+  const control=(method,path,body)=>waitsForIdle(method,path)
+    ?queue.waiting(async signal=>{check();return requestFor(current,method,path,body,anySignal(idleSignal(body),signal));})
+    :queue.ordered(async()=>{check();return requestFor(current,method,path,body);});
+  const advanceBody=duration=>typeof duration==='number'?{millis:duration}:duration;
+  const advanceAndSettle=async(duration,settings={})=>{
+    // Due timers exist only where Functions runs with virtual timers; elsewhere the daemon refuses runDue.
+    const {scope='runnable',timeoutSeconds=20,runTimers=services.some(name=>name==='functions'||name.startsWith('functions:'))&&snapshot.config.functions?.clock?.timers==='virtual'}=settings;
+    if(scope!=='all'&&scope!=='runnable')throw TypeError('scope must be all or runnable');
+    if(typeof timeoutSeconds!=='number'||!Number.isFinite(timeoutSeconds)||timeoutSeconds<0||timeoutSeconds>600)throw TypeError('timeoutSeconds must be a number from 0 through 600');
+    if(typeof runTimers!=='boolean')throw TypeError('runTimers must be a boolean');
+    // The wait is admitted right behind the move, so it sees the move and never delays later clock calls.
+    const moved=queue.ordered(async()=>{
+      check();
+      const active=current;
+      const clock=await requestFor(active,'POST','/v1/sessions/default/clock:advance',advanceBody(duration));
+      let timers;
+      if(runTimers)for(let round=0;round<100;round++){
+        timers=await requestFor(active,'POST','/v1/sessions/default/clock:runDue',{budget:1000});
+        if(!timers?.codebases?.some(codebase=>codebase.timers?.due>0))break;
+      }
+      return {active,clock,timers};
+    });
+    const settled=queue.waiting(async signal=>{
+      const {active,clock,timers}=await moved;
+      const body={scope,timeoutSeconds};
+      const idle=await requestFor(active,'POST','/v1/sessions/default:awaitIdle',body,anySignal(idleSignal(body),signal));
+      return {clock,timers,idle};
+    });
+    return settled;
+  };
   const world={
     get generation(){return generation;},
     get uiUrl(){check();return current.descriptor.uiUrl??undefined;},
@@ -191,24 +244,26 @@ export async function createTestWorld(options={}){
     clock:Object.freeze({
       get:()=>control('GET','/v1/sessions/default'),
       set:(instant,{allowBackwards=false}={})=>control('POST','/v1/sessions/default/clock:set',{instant,allowBackwards}),
-      advance:duration=>control('POST','/v1/sessions/default/clock:advance',typeof duration==='number'?{millis:duration}:duration),
+      advance:duration=>control('POST','/v1/sessions/default/clock:advance',advanceBody(duration)),
       advanceTo:instant=>control('POST','/v1/sessions/default/clock:advanceTo',{instant}),
       runDue:(budget=1000)=>control('POST','/v1/sessions/default/clock:runDue',{budget}),
+      advanceAndSettle,
     }),
-    reset:()=>enqueue(async()=>{
+    get snapshotStats(){return Object.freeze({initial:snapshotLog.initial,generations:Object.freeze([...snapshotLog.generations])});},
+    reset:()=>queue.exclusive(async()=>{
       check();
       await retire();
       const next=generation+1,generationDirectory=join(directory,`generation-${next}`),budget=snapshotBudget(options,snapshotTimeout);
       let prepared;
-      try{prepared=await prepareGeneration(snapshot,generationDirectory,budget.signal);budget.check();}
+      try{prepared=await prepareGeneration(snapshot,generationDirectory,budget.signal);budget.check();recordGeneration(next,prepared.stats);}
       catch(error){const failure=snapshotFailure(error,budget.signal);if(prepared)try{await removeSnapshotTree(generationDirectory);}catch(cleanupError){retainCleanupError(failure,cleanupError);}throw failure;}
       finally{budget.close();}
       await start(prepared,generationDirectory);
       return world;
-    }),
-    dispose:()=>{closing=true;return enqueue(async()=>{if(disposed)return;await retire();await removeSnapshotTree(directory);disposed=true;});},
+    },Error('test world call cancelled: the world was reset')),
+    dispose:()=>{closing=true;return queue.exclusive(async()=>{if(disposed)return;await retire();await removeSnapshotTree(directory);disposed=true;},Error('test world call cancelled: the world was disposed'));},
     async run(command,args=[],runOptions={}){
-      await tail;check();
+      await queue.settled();check();
       const active=current;
       const windows=process.platform==='win32';
       const stdio=runOptions.stdio==='inherit'?['pipe','inherit','inherit']:['pipe','pipe','pipe'];
@@ -233,9 +288,12 @@ export async function createTestWorld(options={}){
   const budget=snapshotBudget(options,snapshotTimeout),generationDirectory=join(directory,'generation-1');
   try{
     snapshot=await snapshotInputs(options,directory,budget.signal);
+    snapshotLog.initial=Object.freeze({...snapshot.stats,functions:snapshot.functionsSkipped?'skipped':'included'});
+    logSnapshotStats('initial',snapshotLog.initial);
     services??=['auth','firestore','storage',...(snapshot.functionsConfigured?['functions']:[])];
     const prepared=await prepareGeneration(snapshot,generationDirectory,budget.signal);
     budget.check();
+    recordGeneration(1,prepared.stats);
     budget.close();
     await start(prepared,generationDirectory);
     return Object.freeze(world);

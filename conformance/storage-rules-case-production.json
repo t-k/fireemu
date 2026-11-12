@@ -1,0 +1,901 @@
+{
+  "source": "production recording STORAGE-RULES-CASE (run r1, two recordings, 2026-11-11, fireemu-oracle-query default bucket); project, bucket and run prefix are not in the file",
+  "plan": "conformance/src/storage-rules-s9/plan-case.mjs (family case: rulesets core and wide, 41 rows)",
+  "outcome": {
+    "complete": true,
+    "closureReady": true,
+    "unknowns": 0,
+    "problems": 0,
+    "rows": 82
+  },
+  "note": "ctl-lower-i answered 403 in recording 1 (18.6 s after its ruleset was released) and 200 in recording 2. The wide switches of the same run served the previous ruleset until 14.4 s (recording 1) and 20.0 s (recording 2) after the release (wideSwitchPolls, marker old). A stale ruleset turns an allow into a 403 and never the reverse, so a 200 in either recording settles a row.",
+  "rows": [
+    {
+      "recording": 1,
+      "program": "core",
+      "id": "ctl-upper-true",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 536,
+      "secondsAfterRelease": 15.9
+    },
+    {
+      "recording": 1,
+      "program": "core",
+      "id": "ctl-upper-false",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 16.6
+    },
+    {
+      "recording": 1,
+      "program": "core",
+      "id": "ctl-lower-true",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 536,
+      "secondsAfterRelease": 17.8
+    },
+    {
+      "recording": 1,
+      "program": "core",
+      "id": "ctl-ascii-other",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 537,
+      "secondsAfterRelease": 18.5
+    },
+    {
+      "recording": 1,
+      "program": "core",
+      "id": "ctl-lower-i",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 18.6
+    },
+    {
+      "recording": 1,
+      "program": "core",
+      "id": "ctl-size-nonascii",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 539,
+      "secondsAfterRelease": 19.2
+    },
+    {
+      "recording": 1,
+      "program": "core",
+      "id": "ctl-size-emoji",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 536,
+      "secondsAfterRelease": 20.1
+    },
+    {
+      "recording": 1,
+      "program": "core",
+      "id": "acute-lower-same",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 538,
+      "secondsAfterRelease": 21.0
+    },
+    {
+      "recording": 1,
+      "program": "core",
+      "id": "acute-lower-mapped",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 21.3
+    },
+    {
+      "recording": 1,
+      "program": "core",
+      "id": "acute-upper-mapped",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 21.3
+    },
+    {
+      "recording": 1,
+      "program": "core",
+      "id": "acute-upper-same",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 538,
+      "secondsAfterRelease": 22.2
+    },
+    {
+      "recording": 1,
+      "program": "core",
+      "id": "sharp-upper-full",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 22.2
+    },
+    {
+      "recording": 1,
+      "program": "core",
+      "id": "sharp-upper-same",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 538,
+      "secondsAfterRelease": 22.7
+    },
+    {
+      "recording": 1,
+      "program": "core",
+      "id": "dotted-lower-full",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 22.8
+    },
+    {
+      "recording": 1,
+      "program": "core",
+      "id": "dotted-lower-simple",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 22.8
+    },
+    {
+      "recording": 1,
+      "program": "core",
+      "id": "dotted-lower-same",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 539,
+      "secondsAfterRelease": 23.2
+    },
+    {
+      "recording": 1,
+      "program": "core",
+      "id": "dotless-upper-mapped",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 23.2
+    },
+    {
+      "recording": 1,
+      "program": "core",
+      "id": "dotless-upper-same",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 540,
+      "secondsAfterRelease": 23.8
+    },
+    {
+      "recording": 1,
+      "program": "core",
+      "id": "sigma-final",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 23.8
+    },
+    {
+      "recording": 1,
+      "program": "core",
+      "id": "sigma-plain",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 23.8
+    },
+    {
+      "recording": 1,
+      "program": "core",
+      "id": "sigma-same",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 532,
+      "secondsAfterRelease": 25.0
+    },
+    {
+      "recording": 1,
+      "program": "core",
+      "id": "alpha-lower-mapped",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 25.3
+    },
+    {
+      "recording": 1,
+      "program": "core",
+      "id": "alpha-lower-same",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 538,
+      "secondsAfterRelease": 25.8
+    },
+    {
+      "recording": 1,
+      "program": "core",
+      "id": "rt-lower-same",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 540,
+      "secondsAfterRelease": 26.2
+    },
+    {
+      "recording": 1,
+      "program": "core",
+      "id": "rt-lower-mapped",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 26.2
+    },
+    {
+      "recording": 1,
+      "program": "core",
+      "id": "rt-upper-sharp-full",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 26.3
+    },
+    {
+      "recording": 1,
+      "program": "core",
+      "id": "rt-upper-sharp-same",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 546,
+      "secondsAfterRelease": 27.1
+    },
+    {
+      "recording": 1,
+      "program": "core",
+      "id": "rt-res-lower-same",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 544,
+      "secondsAfterRelease": 28.2
+    },
+    {
+      "recording": 1,
+      "program": "core",
+      "id": "rt-res-lower-differs",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 28.5
+    },
+    {
+      "recording": 1,
+      "program": "wide",
+      "id": "capsharp-lower-mapped",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 33.3
+    },
+    {
+      "recording": 1,
+      "program": "wide",
+      "id": "capsharp-lower-same",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 541,
+      "secondsAfterRelease": 33.7
+    },
+    {
+      "recording": 1,
+      "program": "wide",
+      "id": "comb-upper",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 532,
+      "secondsAfterRelease": 34.1
+    },
+    {
+      "recording": 1,
+      "program": "wide",
+      "id": "comb-upper-composed",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 34.1
+    },
+    {
+      "recording": 1,
+      "program": "wide",
+      "id": "emoji-upper",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 533,
+      "secondsAfterRelease": 34.5
+    },
+    {
+      "recording": 1,
+      "program": "wide",
+      "id": "emoji-upper-unchanged",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 34.5
+    },
+    {
+      "recording": 1,
+      "program": "wide",
+      "id": "emoji-lower-size",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 538,
+      "secondsAfterRelease": 35.0
+    },
+    {
+      "recording": 1,
+      "program": "wide",
+      "id": "fullwidth-upper-mapped",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 35.0
+    },
+    {
+      "recording": 1,
+      "program": "wide",
+      "id": "fullwidth-upper-same",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 542,
+      "secondsAfterRelease": 36.0
+    },
+    {
+      "recording": 1,
+      "program": "wide",
+      "id": "fullwidth-lower-mapped",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 36.1
+    },
+    {
+      "recording": 1,
+      "program": "wide",
+      "id": "ctl-wide-upper-true",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 541,
+      "secondsAfterRelease": 36.6
+    },
+    {
+      "recording": 1,
+      "program": "wide",
+      "id": "ctl-wide-upper-false",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 36.6
+    },
+    {
+      "recording": 2,
+      "program": "core",
+      "id": "ctl-upper-true",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 536,
+      "secondsAfterRelease": 15.2
+    },
+    {
+      "recording": 2,
+      "program": "core",
+      "id": "ctl-upper-false",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 15.2
+    },
+    {
+      "recording": 2,
+      "program": "core",
+      "id": "ctl-lower-true",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 536,
+      "secondsAfterRelease": 15.7
+    },
+    {
+      "recording": 2,
+      "program": "core",
+      "id": "ctl-ascii-other",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 537,
+      "secondsAfterRelease": 16.2
+    },
+    {
+      "recording": 2,
+      "program": "core",
+      "id": "ctl-lower-i",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 533,
+      "secondsAfterRelease": 17.0
+    },
+    {
+      "recording": 2,
+      "program": "core",
+      "id": "ctl-size-nonascii",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 539,
+      "secondsAfterRelease": 17.5
+    },
+    {
+      "recording": 2,
+      "program": "core",
+      "id": "ctl-size-emoji",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 536,
+      "secondsAfterRelease": 17.9
+    },
+    {
+      "recording": 2,
+      "program": "core",
+      "id": "acute-lower-same",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 538,
+      "secondsAfterRelease": 18.4
+    },
+    {
+      "recording": 2,
+      "program": "core",
+      "id": "acute-lower-mapped",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 18.5
+    },
+    {
+      "recording": 2,
+      "program": "core",
+      "id": "acute-upper-mapped",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 18.5
+    },
+    {
+      "recording": 2,
+      "program": "core",
+      "id": "acute-upper-same",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 538,
+      "secondsAfterRelease": 18.9
+    },
+    {
+      "recording": 2,
+      "program": "core",
+      "id": "sharp-upper-full",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 19.0
+    },
+    {
+      "recording": 2,
+      "program": "core",
+      "id": "sharp-upper-same",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 538,
+      "secondsAfterRelease": 19.4
+    },
+    {
+      "recording": 2,
+      "program": "core",
+      "id": "dotted-lower-full",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 19.4
+    },
+    {
+      "recording": 2,
+      "program": "core",
+      "id": "dotted-lower-simple",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 19.5
+    },
+    {
+      "recording": 2,
+      "program": "core",
+      "id": "dotted-lower-same",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 539,
+      "secondsAfterRelease": 20.0
+    },
+    {
+      "recording": 2,
+      "program": "core",
+      "id": "dotless-upper-mapped",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 20.0
+    },
+    {
+      "recording": 2,
+      "program": "core",
+      "id": "dotless-upper-same",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 540,
+      "secondsAfterRelease": 20.9
+    },
+    {
+      "recording": 2,
+      "program": "core",
+      "id": "sigma-final",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 20.9
+    },
+    {
+      "recording": 2,
+      "program": "core",
+      "id": "sigma-plain",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 20.9
+    },
+    {
+      "recording": 2,
+      "program": "core",
+      "id": "sigma-same",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 532,
+      "secondsAfterRelease": 21.9
+    },
+    {
+      "recording": 2,
+      "program": "core",
+      "id": "alpha-lower-mapped",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 21.9
+    },
+    {
+      "recording": 2,
+      "program": "core",
+      "id": "alpha-lower-same",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 538,
+      "secondsAfterRelease": 22.4
+    },
+    {
+      "recording": 2,
+      "program": "core",
+      "id": "rt-lower-same",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 540,
+      "secondsAfterRelease": 22.8
+    },
+    {
+      "recording": 2,
+      "program": "core",
+      "id": "rt-lower-mapped",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 22.9
+    },
+    {
+      "recording": 2,
+      "program": "core",
+      "id": "rt-upper-sharp-full",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 22.9
+    },
+    {
+      "recording": 2,
+      "program": "core",
+      "id": "rt-upper-sharp-same",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 546,
+      "secondsAfterRelease": 23.3
+    },
+    {
+      "recording": 2,
+      "program": "core",
+      "id": "rt-res-lower-same",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 544,
+      "secondsAfterRelease": 23.8
+    },
+    {
+      "recording": 2,
+      "program": "core",
+      "id": "rt-res-lower-differs",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 24.0
+    },
+    {
+      "recording": 2,
+      "program": "wide",
+      "id": "capsharp-lower-mapped",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 39.3
+    },
+    {
+      "recording": 2,
+      "program": "wide",
+      "id": "capsharp-lower-same",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 541,
+      "secondsAfterRelease": 40.1
+    },
+    {
+      "recording": 2,
+      "program": "wide",
+      "id": "comb-upper",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 532,
+      "secondsAfterRelease": 40.5
+    },
+    {
+      "recording": 2,
+      "program": "wide",
+      "id": "comb-upper-composed",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 40.6
+    },
+    {
+      "recording": 2,
+      "program": "wide",
+      "id": "emoji-upper",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 533,
+      "secondsAfterRelease": 41.1
+    },
+    {
+      "recording": 2,
+      "program": "wide",
+      "id": "emoji-upper-unchanged",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 41.1
+    },
+    {
+      "recording": 2,
+      "program": "wide",
+      "id": "emoji-lower-size",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 538,
+      "secondsAfterRelease": 42.0
+    },
+    {
+      "recording": 2,
+      "program": "wide",
+      "id": "fullwidth-upper-mapped",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 42.0
+    },
+    {
+      "recording": 2,
+      "program": "wide",
+      "id": "fullwidth-upper-same",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 542,
+      "secondsAfterRelease": 42.5
+    },
+    {
+      "recording": 2,
+      "program": "wide",
+      "id": "fullwidth-lower-mapped",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 42.5
+    },
+    {
+      "recording": 2,
+      "program": "wide",
+      "id": "ctl-wide-upper-true",
+      "class": "allow",
+      "status": 200,
+      "bodyBytes": 541,
+      "secondsAfterRelease": 42.9
+    },
+    {
+      "recording": 2,
+      "program": "wide",
+      "id": "ctl-wide-upper-false",
+      "class": "deny",
+      "status": 403,
+      "bodyBytes": 73,
+      "secondsAfterRelease": 43.0
+    }
+  ],
+  "wideSwitchPolls": [
+    {
+      "recording": 1,
+      "marker": "new",
+      "poll": "poll1",
+      "status": 403,
+      "secondsAfterRelease": 1.2
+    },
+    {
+      "recording": 1,
+      "marker": "new",
+      "poll": "poll2",
+      "status": 403,
+      "secondsAfterRelease": 7.3
+    },
+    {
+      "recording": 1,
+      "marker": "new",
+      "poll": "poll3",
+      "status": 200,
+      "secondsAfterRelease": 14.2
+    },
+    {
+      "recording": 1,
+      "marker": "old",
+      "poll": "poll3",
+      "status": 200,
+      "secondsAfterRelease": 14.4
+    },
+    {
+      "recording": 1,
+      "marker": "new",
+      "poll": "poll4",
+      "status": 200,
+      "secondsAfterRelease": 20.7
+    },
+    {
+      "recording": 1,
+      "marker": "old",
+      "poll": "poll4",
+      "status": 403,
+      "secondsAfterRelease": 20.7
+    },
+    {
+      "recording": 1,
+      "marker": "new",
+      "poll": "poll5",
+      "status": 200,
+      "secondsAfterRelease": 26.9
+    },
+    {
+      "recording": 1,
+      "marker": "old",
+      "poll": "poll5",
+      "status": 403,
+      "secondsAfterRelease": 27.0
+    },
+    {
+      "recording": 1,
+      "marker": "new",
+      "poll": "poll6",
+      "status": 200,
+      "secondsAfterRelease": 33.2
+    },
+    {
+      "recording": 1,
+      "marker": "old",
+      "poll": "poll6",
+      "status": 403,
+      "secondsAfterRelease": 33.2
+    },
+    {
+      "recording": 2,
+      "marker": "new",
+      "poll": "poll1",
+      "status": 403,
+      "secondsAfterRelease": 1.2
+    },
+    {
+      "recording": 2,
+      "marker": "new",
+      "poll": "poll2",
+      "status": 403,
+      "secondsAfterRelease": 7.2
+    },
+    {
+      "recording": 2,
+      "marker": "new",
+      "poll": "poll3",
+      "status": 403,
+      "secondsAfterRelease": 13.2
+    },
+    {
+      "recording": 2,
+      "marker": "new",
+      "poll": "poll4",
+      "status": 200,
+      "secondsAfterRelease": 19.8
+    },
+    {
+      "recording": 2,
+      "marker": "old",
+      "poll": "poll4",
+      "status": 200,
+      "secondsAfterRelease": 20.0
+    },
+    {
+      "recording": 2,
+      "marker": "new",
+      "poll": "poll5",
+      "status": 200,
+      "secondsAfterRelease": 26.7
+    },
+    {
+      "recording": 2,
+      "marker": "old",
+      "poll": "poll5",
+      "status": 403,
+      "secondsAfterRelease": 26.8
+    },
+    {
+      "recording": 2,
+      "marker": "new",
+      "poll": "poll6",
+      "status": 200,
+      "secondsAfterRelease": 33.0
+    },
+    {
+      "recording": 2,
+      "marker": "old",
+      "poll": "poll6",
+      "status": 403,
+      "secondsAfterRelease": 33.0
+    },
+    {
+      "recording": 2,
+      "marker": "new",
+      "poll": "poll7",
+      "status": 200,
+      "secondsAfterRelease": 39.2
+    },
+    {
+      "recording": 2,
+      "marker": "old",
+      "poll": "poll7",
+      "status": 403,
+      "secondsAfterRelease": 39.3
+    }
+  ]
+}

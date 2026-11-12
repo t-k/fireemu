@@ -6,10 +6,18 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { createTestWorld, withTestWorld } from '../fireemu/testing.mjs';
+import { cloneSupport } from '../fireemu/testing-snapshot.mjs';
 
 const binary = process.env.FIREEMU_TEST_BINARY;
 const runFile = promisify(execFile);
 const native = { skip: !binary, timeout: 30_000 };
+// Tests that observe a generation copy while it is in progress need the file-by-file copy, which can be cancelled
+// mid-file; a tree clone (macOS) finishes at once.
+function copyFileByFile(t) {
+  const saved = { ...cloneSupport };
+  Object.assign(cloneSupport, { file: false, tree: false });
+  t.after(() => Object.assign(cloneSupport, saved));
+}
 const options = { binaryPath: binary, env:{...process.env,NODE_PATH:''}, projectId: 'demo-test-worlds', clockStart: '2026-01-31T23:59:00Z', services: ['auth','firestore'], config: { schemaVersion:1, firestore:{edition:'standard'} } };
 
 async function uiConfig(world) {
@@ -215,10 +223,12 @@ test('snapshot copying preserves executable files and read-only directory modes'
   }finally{await removeSnapshotTree(worldRoot);await chmod(nested,0o700).catch(()=>{});await rm(root,{recursive:true,force:true});}
 });
 
-test('world cleanup removes read-only snapshots after generation cancellation and dispose', native, async t => {
+test('world cleanup removes read-only snapshots after generation cancellation and dispose', { ...native, timeout: 90_000 }, async t => {
+  copyFileByFile(t);
   const root = await mkdtemp(join(tmpdir(), 'fireemu-world-readonly-cleanup-'));
   const source = join(root, 'source'), readonly = join(source, 'readonly');
   await mkdir(readonly, { recursive: true });
+  await writeFile(join(source, 'index.js'), 'module.exports = {};');
   const large = join(readonly, 'large.bin');
   const handle = await open(large, 'w');
   await handle.truncate(256 * 1024 * 1024);
@@ -229,7 +239,7 @@ test('world cleanup removes read-only snapshots after generation cancellation an
   const controller = new AbortController();
   const tempRoot = join(root, 'worlds');
   await mkdir(tempRoot);
-  const pending = createTestWorld({ ...options, functionsSource: source, tempRoot, signal: controller.signal, snapshotTimeoutMs: 30_000 });
+  const pending = createTestWorld({ ...options, services: ['auth', 'firestore', 'functions'], functionsSource: source, tempRoot, signal: controller.signal, snapshotTimeoutMs: 30_000 });
   let worldDirectory;
   const observationDeadline = Date.now() + 20_000;
   while (!worldDirectory && Date.now() < observationDeadline) {
@@ -263,7 +273,8 @@ test('world cleanup removes read-only snapshots after generation cancellation an
   clearTimeout(deadline);
   assert.deepEqual(await (await import('node:fs/promises')).readdir(tempRoot), []);
 
-  const world = await createTestWorld({ ...options, functionsSource: source, tempRoot });
+  const runner = new URL('../../tools/runner-node/index.mjs', import.meta.url).pathname;
+  const world = await createTestWorld({ ...options, services: ['auth', 'firestore', 'functions'], functionsSource: source, tempRoot, env: { ...options.env, FIREEMU_RUNNER_NODE: runner } });
   const owned = world.directory;
   assert.equal((await stat(join(owned, 'baseline', 'functions-0', 'readonly'))).mode & 0o777, 0o555);
   await world.reset();
@@ -342,6 +353,7 @@ test('configuration paths that symlink to regular files remain supported', async
 });
 
 test('reset applies a fresh snapshot budget and removes an aborted generation copy', native, async t => {
+  copyFileByFile(t);
   const controller = new AbortController();
   const world = await createTestWorld({ ...options, snapshotTimeoutMs: 30_000, signal: controller.signal });
   t.after(() => world.dispose());

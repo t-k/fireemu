@@ -1,0 +1,21 @@
+# The critical-path list of the critical mutation run (Monday, Wednesday and Friday).
+#
+# Format: one entry per line. `<path>` selects every mutant of the file. `<path> @ <name> ...` selects
+# only the mutants inside the named functions (as cargo-mutants prints them: `in <name>` or
+# `replace <name> `). `#` starts a comment. tools/ci/critical-selection.py turns this list into the
+# regex that the run passes to `cargo mutants --re`, and checks that every path and function exists.
+#
+# The counts after each entry are `cargo mutants --list` counts for this tree (27.1.0), when the list
+# was written. The owner chooses the set; the run is kept under about an hour on the heavy runner.
+#
+# cargo-mutants applies no regex to struct field deletions (`delete field ... in <function>`), so the run also
+# mutates those in the packages of the list; they are reported, and counted as critical only inside a scoped
+# function. At the time of writing the five packages hold 514 mutants in total (the entries below plus 18 field
+# deletions in the same packages).
+crates/fireemu-core-auth/src/jwt.rs  # 273, token verification
+crates/fireemu-core-auth/src/mfa.rs  # 128, second-factor verification
+crates/fireemu-core-auth/src/totp.rs  # 32, TOTP codes
+crates/fireemu-core-session/src/fault.rs  # 41, fault plan decisions
+crates/fireemu-core-rules/src/eval.rs @ request_path build_request build_request_with_resource  # 11, request.time and request.auth
+crates/fireemu-core-firestore/src/store.rs @ FirestoreState::transaction_conflicted  # 4, transaction conflict check
+crates/fireemu-core-storage/src/store.rs @ Precondition::check StorageState::check  # 7, generation preconditions

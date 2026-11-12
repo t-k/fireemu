@@ -8,7 +8,9 @@
 # its other lines, so a new file of the package is still mutated by that last line.
 # The runners are Linux: a file compiled for macOS only (cfg(target_os = "macos")) cannot be killed there, so it
 # is excluded, and a package that is macOS only (fireemu-fd-acl) is not listed.
-# Regenerate the counts with `cargo mutants --list -p <package> --file <glob>`.
+# The run selects the line's files by name within its package (tools/ci/rotation-selection.py prints the regex).
+# The counts after each line are from before that change and are approximate; the run log prints the exact count.
+# This week's line was listed with `cargo mutants --list -p <package> --re <regex>` at 1658 mutants (2026-11-12).
 fireemu crates/fireemu/src/functions.rs crates/fireemu/src/import_export.rs crates/fireemu/src/session_rsa_cache.rs crates/fireemu/src/ui.rs  # 1600
 fireemu crates/fireemu/src/config.rs crates/fireemu/src/daemon.rs crates/fireemu/src/hub.rs crates/fireemu/src/main.rs crates/fireemu/src/readiness.rs  # 1586
 fireemu !crates/fireemu/src/config.rs !crates/fireemu/src/daemon.rs !crates/fireemu/src/functions.rs !crates/fireemu/src/hub.rs !crates/fireemu/src/import_export.rs !crates/fireemu/src/main.rs !crates/fireemu/src/readiness.rs !crates/fireemu/src/session_rsa_cache.rs !crates/fireemu/src/ui.rs  # 722

@@ -19,8 +19,11 @@ jobs:
         with:
           node-version: 22
       - run: npm ci
+      - run: npx fireemu config lint --deny-ineffective
       - run: npx fireemu exec -- npm test
 ```
+
+The lint step fails the job when the configuration sets a key that Fireemu accepts but does not read. Use `--allow <key>` or `--allow-file <path>` to name keys kept on purpose; see [config lint](../../reference/cli/#config-lint).
 
 Fireemu needs no Java and no download at startup: the npm package installs a native binary for the runner's platform.
 

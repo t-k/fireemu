@@ -87,6 +87,50 @@ export interface TestWorldClock {
   readonly advanceTo: (instant: string) => Promise<ClockState>;
   /** The runtime requires an integer budget from 1 through 10000. */
   readonly runDue: (budget?: number) => Promise<RunDueResult>;
+  /**
+   * Advance the clock, run due virtual timers and wait for idle, in that order. The wait never
+   * delays a later clock call. Rejects when the move fails or the wait times out.
+   */
+  readonly advanceAndSettle: (
+    duration: number | { readonly seconds: number; readonly millis?: number } | { readonly millis: number; readonly seconds?: number },
+    options?: AwaitIdleOptions,
+  ) => Promise<AdvanceAndSettleResult>;
+}
+
+/** Cost of one input snapshot or generation copy. */
+export interface CopyStats {
+  /** Regular files owned by the copy, including generated configuration. */
+  readonly files: number;
+  readonly directories: number;
+  readonly symlinks: number;
+  readonly bytes: number;
+  /** `clone` when copy-on-write was used for every file, `mixed` for some, `copy` for none. */
+  readonly method: 'copy' | 'clone' | 'mixed';
+  readonly elapsedMs: number;
+}
+
+export interface TestWorldSnapshotStats {
+  /** The one-time snapshot of caller inputs. `functions` is `skipped` when no selected service loads Functions. */
+  readonly initial: CopyStats & { readonly functions: 'included' | 'skipped' };
+  /** One entry per started generation, in order. */
+  readonly generations: readonly (CopyStats & { readonly generation: number })[];
+}
+
+export interface AwaitIdleOptions {
+  /** `runnable` (the default) excludes future task schedules and retry backoff; `all` waits for every outstanding task. */
+  readonly scope?: 'all' | 'runnable';
+  /** Daemon-side wait budget, 0 through 600 (default 20). */
+  readonly timeoutSeconds?: number;
+  /** Run due virtual timers after the move. Defaults to true only when Functions runs with `timers: 'virtual'`; the daemon refuses `runDue` otherwise. */
+  readonly runTimers?: boolean;
+}
+
+export interface AdvanceAndSettleResult {
+  readonly clock: ClockState;
+  /** The last `runDue` report, or `undefined` when `runTimers` is false. */
+  readonly timers: RunDueResult | undefined;
+  /** The `awaitIdle` response; the shape follows the daemon's control API. */
+  readonly idle: { readonly idle: boolean; readonly scope?: 'all' | 'runnable'; readonly [key: string]: unknown };
 }
 
 export interface RunOptions {
@@ -113,6 +157,7 @@ export interface TestWorld {
   readonly endpoints: TestWorldEndpoints;
   readonly environment: Environment;
   readonly clock: TestWorldClock;
+  readonly snapshotStats: TestWorldSnapshotStats;
   readonly control: (method: string, path: string, body?: unknown) => Promise<unknown>;
   readonly run: (command: string, args?: readonly string[], options?: RunOptions) => Promise<RunResult>;
   readonly reset: () => Promise<TestWorld>;

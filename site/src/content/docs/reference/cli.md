@@ -15,6 +15,7 @@ This reference lists common fireemu commands and options. Run `npx fireemu --hel
 | [`capabilities`](#capabilities) | Print the capability manifest of the resolved profile as JSON |
 | [`config show`](#config-show) | Print every configuration key with its effective value and source |
 | [`config lint`](#config-lint) | List the settings a configuration sets that are accepted but have no effect; fail on them in CI |
+| [`config schema`](#config-schema) | Print the configuration schema bundled in this binary, or write it to a file |
 | `--version` (also `-V`, `version`) | Print the version and exit |
 | `help [command]` (also `--help`, `-h`) | Print the command list, or the help of one command |
 
@@ -214,3 +215,7 @@ fireemu config lint --deny-ineffective --allow bind --allow 'firestore.textSearc
 - An entry that names no configuration key (a typo, or a table such as `trace` instead of `trace.*`) is a usage error with exit code 2, so a misspelt entry cannot silently allow nothing.
 - `--json` prints `config` (the file checked, or `null`), `ineffective` (each setting with `key`, `note` and `allowed`) and `denied` (the keys that fail under `--deny-ineffective`).
 - Only the canonical configuration (`fireemu.toml` or `fireemu.json`) is checked. When none is found, the command says so and exits 0.
+
+## config schema
+
+`fireemu config schema` prints the JSON Schema that this binary validates configuration with, byte for byte and without the network. `--out <path>` writes it to a file instead (an existing regular file is replaced atomically, so the copy follows an upgrade; a symbolic link is refused, as `init --force` does) and prints nothing. `fireemu init` of a released binary writes the schema URL of its release into the files it generates; use `config schema` when an editor or tool needs the schema of the installed version and cannot fetch that URL.

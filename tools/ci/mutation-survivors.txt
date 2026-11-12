@@ -1,0 +1,20 @@
+# Accepted survivors: one key per line, in the format <file>: <replacement> [fp:<fingerprint>].
+# The fingerprint hashes the source text that the mutant removes (tools/ci/mutants-summary.py), so an accepted
+# key covers that expression only: a changed expression is a new survivor. Keys with fp:none are never accepted.
+# Put the reason in a comment line directly above each key. Produce keys from a critical run's summary.
+#
+# Equivalent: the operands of the two `|` in base64url_encode occupy disjoint bit ranges (b0 << 16, b1 << 8, b2),
+# so `^` gives the same value. Both occurrences are on one line and share the fingerprint.
+crates/fireemu-core-auth/src/jwt.rs: replace | with ^ in base64url_encode [fp:a72fc21fda4ed2aa]
+# Equivalent: in base64url_decode the buffer is shifted left by 6 before `|` joins a 6-bit value, so its low six bits
+# are zero and `^` gives the same value.
+crates/fireemu-core-auth/src/jwt.rs: replace | with ^ in base64url_decode [fp:4a132d92a12e0c14]
+# Equivalent: the operands of the `|` chain in hotp are bytes shifted to disjoint bit ranges (24..30, 16..23,
+# 8..15 and 0..7), so `^` gives the same value. One key per operator, because each `|` has its own source text.
+crates/fireemu-core-auth/src/totp.rs: replace | with ^ in hotp [fp:3c8bc8cee91b8a91]
+crates/fireemu-core-auth/src/totp.rs: replace | with ^ in hotp [fp:b8b2db2db76128d6]
+crates/fireemu-core-auth/src/totp.rs: replace | with ^ in hotp [fp:1c42449dd974d24c]
+# Accepted equivalent-for-testing (owner decision, 2026-11-12): the zeroing of the secret in Drop cannot be observed
+# from a safe test. A test hook inside a type that holds a TOTP secret would be worse than the gap, and the workspace
+# forbids unsafe code, so the cleared bytes cannot be read back. The mutant is accepted for testing only.
+crates/fireemu-core-auth/src/mfa.rs: replace <impl Drop for TotpSecret>::drop with () [fp:e700d2e7d44f8278]

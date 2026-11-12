@@ -4,6 +4,7 @@ import { appState } from "../state";
 import {
   AsyncButton,
   ConfirmButton,
+  CopyField,
   ErrorBanner,
   FetchState,
   Notice,
@@ -33,6 +34,20 @@ import {
   type QuiescenceResult,
   type ServiceResources,
 } from "../lib/resources";
+
+import {
+  retryEvent,
+  duplicateDelivery,
+  delayAttempt,
+  timeoutAttempt,
+  failFirstAttempts,
+  recipeIds,
+  recipeLabels,
+  testingSnippet,
+  controlSnippet,
+  type FaultPlan,
+  type RecipeId,
+} from "../lib/faultRecipes";
 
 const ClockPanel: Component = () => {
   const [seconds, setSeconds] = createSignal("60");
@@ -246,11 +261,54 @@ const EXAMPLE_PLAN = JSON.stringify(
   2,
 );
 
-const FaultPlanPanel: Component = () => {
+export const FaultPlanPanel: Component = () => {
   const session = appState.session;
   const [plan, { refetch }] = createResource(session, (s) => settle(getFaultPlan(s)));
   const [draft, setDraft] = createSignal(EXAMPLE_PLAN);
   const [error, setError] = createSignal<string | null>(null);
+  const [recipe, setRecipe] = createSignal<RecipeId>("retryEvent");
+  const [name, setName] = createSignal("");
+  const [count, setCount] = createSignal("1");
+  const [eventType, setEventType] = createSignal("");
+  const [attempt, setAttempt] = createSignal("1");
+  const [seconds, setSeconds] = createSignal("0");
+  const [operation, setOperation] = createSignal("firestore.commit");
+  const [code, setCode] = createSignal("ABORTED");
+  const number = (value: string) => (value.trim() ? Number(value) : NaN);
+  const fill = () => {
+    const selected = recipe();
+    const result =
+      selected === "retryEvent"
+        ? retryEvent(name(), number(count()))
+        : selected === "duplicateDelivery"
+          ? duplicateDelivery(name(), number(count()), eventType())
+          : selected === "delayAttempt"
+            ? delayAttempt(name(), number(attempt()), number(seconds()))
+            : selected === "timeoutAttempt"
+              ? timeoutAttempt(name(), number(attempt()))
+              : failFirstAttempts(operation(), number(count()), code());
+    result.match((value) => {
+      setError(null);
+      setDraft(JSON.stringify(value, null, 2));
+    }, setError);
+  };
+  const parsedDraft = (): FaultPlan | undefined => {
+    try {
+      const value: unknown = JSON.parse(draft());
+      if (
+        typeof value === "object" &&
+        value !== null &&
+        "seed" in value &&
+        typeof value.seed === "number" &&
+        "rules" in value &&
+        Array.isArray(value.rules)
+      )
+        return value as FaultPlan;
+    } catch {
+      /* An incomplete draft has no snippets. */
+    }
+    return undefined;
+  };
   const install = async () => {
     setError(null);
     let parsed: unknown;
@@ -290,6 +348,112 @@ const FaultPlanPanel: Component = () => {
       }
     >
       <ErrorBanner message={error()} />
+      <div class="mb-3 flex flex-wrap items-end gap-2">
+        <label class="text-sm">
+          <span class="label">{t("runtime.recipe")}</span>
+          <select
+            class="input"
+            data-testid="fault-recipe"
+            value={recipe()}
+            onChange={(e) => setRecipe(e.currentTarget.value as RecipeId)}
+          >
+            <For each={recipeIds}>{(id) => <option value={id}>{t(recipeLabels[id])}</option>}</For>
+          </select>
+        </label>
+        <Show when={recipe() !== "failFirstAttempts"}>
+          <label class="text-sm">
+            <span class="label">{t("runtime.recipeFunction")}</span>
+            <input
+              class="input"
+              data-testid="fault-recipe-function"
+              value={name()}
+              onInput={(e) => setName(e.currentTarget.value)}
+            />
+          </label>
+        </Show>
+        <Show
+          when={
+            recipe() === "retryEvent" ||
+            recipe() === "duplicateDelivery" ||
+            recipe() === "failFirstAttempts"
+          }
+        >
+          <label class="text-sm">
+            <span class="label">
+              {t(recipe() === "duplicateDelivery" ? "runtime.recipeCopies" : "runtime.recipeCount")}
+            </span>
+            <input
+              class="input"
+              type="number"
+              data-testid="fault-recipe-count"
+              value={count()}
+              onInput={(e) => setCount(e.currentTarget.value)}
+            />
+          </label>
+        </Show>
+        <Show when={recipe() === "duplicateDelivery"}>
+          <label class="text-sm">
+            <span class="label">{t("runtime.recipeEventType")}</span>
+            <input
+              class="input"
+              data-testid="fault-recipe-event-type"
+              value={eventType()}
+              onInput={(e) => setEventType(e.currentTarget.value)}
+            />
+          </label>
+        </Show>
+        <Show when={recipe() === "delayAttempt" || recipe() === "timeoutAttempt"}>
+          <label class="text-sm">
+            <span class="label">{t("runtime.recipeAttempt")}</span>
+            <input
+              class="input"
+              type="number"
+              data-testid="fault-recipe-attempt"
+              value={attempt()}
+              onInput={(e) => setAttempt(e.currentTarget.value)}
+            />
+          </label>
+        </Show>
+        <Show when={recipe() === "delayAttempt"}>
+          <label class="text-sm">
+            <span class="label">{t("runtime.recipeSeconds")}</span>
+            <input
+              class="input"
+              type="number"
+              data-testid="fault-recipe-seconds"
+              value={seconds()}
+              onInput={(e) => setSeconds(e.currentTarget.value)}
+            />
+          </label>
+        </Show>
+        <Show when={recipe() === "failFirstAttempts"}>
+          <label class="text-sm">
+            <span class="label">{t("runtime.recipeOperation")}</span>
+            <select
+              class="input"
+              data-testid="fault-recipe-operation"
+              value={operation()}
+              onChange={(e) => setOperation(e.currentTarget.value)}
+            >
+              <option value="firestore.commit">firestore.commit</option>
+              <option value="firestore.read">firestore.read</option>
+              <option value="storage.upload">storage.upload</option>
+            </select>
+          </label>
+          <label class="text-sm">
+            <span class="label">{t("runtime.recipeCode")}</span>
+            <input
+              class="input"
+              data-testid="fault-recipe-code"
+              value={code()}
+              onInput={(e) => setCode(e.currentTarget.value)}
+            />
+          </label>
+        </Show>
+        <button class="btn" type="button" data-testid="fault-recipe-fill" onClick={fill}>
+          {t("runtime.recipeFill")}
+        </button>
+      </div>
       <label class="label" for="fault-plan">
         {t("runtime.faultPlanJson")}
       </label>
@@ -300,6 +464,22 @@ const FaultPlanPanel: Component = () => {
         value={draft()}
         onInput={(e) => setDraft(e.currentTarget.value)}
       />
+      <Show when={parsedDraft()}>
+        {(value) => (
+          <div class="mt-3">
+            <CopyField
+              label={t("runtime.snippetTesting")}
+              value={testingSnippet(value())}
+              testId="fault-snippet-testing"
+            />
+            <CopyField
+              label={t("runtime.snippetControl")}
+              value={controlSnippet(value())}
+              testId="fault-snippet-control"
+            />
+          </div>
+        )}
+      </Show>
       <FetchState
         loading={plan.loading && !plan()}
         error={errorOf(plan())}

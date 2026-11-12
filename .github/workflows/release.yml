@@ -193,7 +193,13 @@ jobs:
         if: matrix.platform.os == 'darwin'
         run: brew install gnu-tar
 
+      # The release-build marker set below makes the binary a release build, so `fireemu init` writes the
+      # schema URL of this release's tag (any other build writes the `main` location: a build
+      # from source between releases reports the last release's version but embeds a newer
+      # schema). The tag is checked to equal the workspace version in the plan job.
       - name: build the daemon
+        env:
+          FIREEMU_RELEASE_BUILD: "1"
         run: cargo build --release --locked -p fireemu --target ${{ matrix.platform.target }}
 
       - name: the UI is embedded in the artifact
@@ -205,6 +211,22 @@ jobs:
             echo "cross-compiled: checked on the host build of the same commit"
           else
             ./target/${{ matrix.platform.target }}/release/fireemu${{ matrix.platform.exe }} doctor
+          fi
+
+      - name: the binary writes the schema URL of its own release tag
+        shell: bash
+        # A build that lost the release-build marker would write the `main` location into every
+        # generated configuration. Cross-compiled artifacts are checked on the host build.
+        run: |
+          if [ "${{ matrix.platform.cross }}" = "true" ]; then
+            echo "cross-compiled: checked on the host build of the same commit"
+          else
+            binary="$PWD/target/${{ matrix.platform.target }}/release/fireemu${{ matrix.platform.exe }}"
+            scratch="$(mktemp -d)"
+            (cd "$scratch" && "$binary" init --yes)
+            workspace=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+            expected="#:schema https://raw.githubusercontent.com/fireemu/fireemu/v${workspace}/spec/config/fireemu.schema.json"
+            test "$(head -n 1 "$scratch/fireemu.toml")" = "$expected"
           fi
 
       - name: assemble the platform package
@@ -267,11 +289,14 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y musl-tools
       - run: rustup target add x86_64-unknown-linux-musl
       - name: first build, in the checkout
+        env:
+          FIREEMU_RELEASE_BUILD: "1"
         run: |
           cargo build --release --locked -p fireemu --target x86_64-unknown-linux-musl
           sha256sum target/x86_64-unknown-linux-musl/release/fireemu | tee first.sha256
       - name: second build, from a copy under another path
         env:
+          FIREEMU_RELEASE_BUILD: "1"
           RUSTFLAGS: --remap-path-prefix=/tmp/fireemu-rebuild=/src --remap-path-prefix=/home/runner/.cargo=/cargo -D warnings
         run: |
           rsync -a --exclude target --exclude .git ./ /tmp/fireemu-rebuild/

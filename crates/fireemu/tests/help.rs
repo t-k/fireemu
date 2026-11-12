@@ -463,7 +463,13 @@ fn doctor_arguments_are_checked_and_an_unknown_one_points_to_the_help() {
 #[test]
 fn configuration_help_describes_show_and_reference() {
     let text = assert_help(&run(&["config", "show", "--help"]), "config show");
-    for flag in ["--config", "--firebase-json", "--json"] {
+    for flag in [
+        "--config",
+        "--firebase-json",
+        "--json",
+        "--out",
+        "config schema",
+    ] {
         assert!(text.contains(flag), "{flag}");
     }
     // The same page documents `config lint`: its synopsis, its flags and what it does.

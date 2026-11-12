@@ -313,7 +313,12 @@ fn bucket_cors_for(
         return None;
     }
     let (bucket, firebase) = crate::storage::cors_bucket(method, path)?;
-    if firebase && !query.split('&').any(|pair| pair == "alt=media") {
+    if firebase
+        && crate::storage::query_params(query)
+            .get("alt")
+            .map(String::as_str)
+            != Some("media")
+    {
         return None;
     }
     state.rules.bucket_cors(&bucket)

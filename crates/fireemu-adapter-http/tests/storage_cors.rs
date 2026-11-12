@@ -310,6 +310,22 @@ async fn an_empty_configuration_is_a_bucket_with_no_cors_at_all() {
 }
 
 #[tokio::test]
+async fn encoded_firebase_media_queries_use_bucket_cors() {
+    let state = configured(TokenAcceptance::Verified, &json!([]));
+    state.rules.set_unlisted_buckets_cors_none(true);
+    let (addr, task) = serve(state).await;
+    for bucket in [CONFIGURED, OPEN] {
+        for query in ["alt=%6Dedia", "%61lt=media", "alt=other&alt=media"] {
+            let path = format!("/v0/b/{bucket}/o/a.txt?{query}");
+            let answer = send(addr, "GET", &path, &[("Origin", ORIGIN)]).await;
+            assert_eq!(answer.status, 200, "{path}");
+            assert!(answer.cors_names().is_empty(), "{path}");
+        }
+    }
+    task.abort();
+}
+
+#[tokio::test]
 async fn a_bucket_without_a_configuration_keeps_the_permissive_answer() {
     let (addr, task) = serve(configured(TokenAcceptance::Verified, &rule())).await;
     for path in reads(OPEN) {

@@ -341,11 +341,10 @@ fn host_without_port(host: &str) -> &str {
 
 /// A request whose query cannot be read (a bad percent escape) fails closed with the raw query.
 fn mismatch_without_signature(request: &SignedRequest<'_>) -> Verdict {
-    if !request
-        .query
-        .to_ascii_lowercase()
-        .contains("x-goog-signature")
-    {
+    if !request.query.split('&').any(|part| {
+        let name = part.split_once('=').map_or(part, |(name, _)| name);
+        percent_decode(name).is_some_and(|name| name.eq_ignore_ascii_case("x-goog-signature"))
+    }) {
         return Verdict::NotV4;
     }
     Verdict::Mismatch {
@@ -1083,6 +1082,8 @@ mod tests {
             format!("{base}&X-Goog-Signature=abc"),
             format!("{base}&X-Goog-Signature=00"),
             format!("{base}&X-Goog-Signature=%ZZ"),
+            "X-Goog-%53ignature=00&junk=%ZZ".to_owned(),
+            "junk=%ZZ&X-Goog-%53ignature=00".to_owned(),
             format!(
                 "{}&X-Goog-Signature=00",
                 base.replace("GOOG4-RSA-SHA256", "AWS4-HMAC-SHA256")
@@ -1106,6 +1107,24 @@ mod tests {
                 },
             );
             assert!(matches!(verdict, Verdict::Mismatch { .. }), "{bad}");
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn malformed_query_never_hides_an_encoded_signature(index in 0usize..16, bad_first in any::<bool>()) {
+            let key = test_key();
+            let keys = keys_for(&key);
+            let headers = headers(&[("host", "h")]);
+            let name = "X-Goog-Signature";
+            let encoded = format!("{}%{:02X}{}", &name[..index], name.as_bytes()[index], &name[index + 1..]);
+            let query = if bad_first {
+                format!("junk=%ZZ&{encoded}=00")
+            } else {
+                format!("{encoded}=00&junk=%ZZ")
+            };
+            let request = SignedRequest { method: "GET", path: "/b/o", query: &query, headers: &headers };
+            prop_assert!(matches!(verify_v4(&keys, &request), Verdict::Mismatch { .. }), "malformed signed query must be rejected");
         }
     }
 

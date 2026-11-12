@@ -2089,6 +2089,22 @@ fn refuse_answers_a_missing_bucket_on_every_object_route_without_creating_it() {
 }
 
 #[test]
+fn upload_id_does_not_bypass_bucket_checks_on_normal_requests() {
+    let s = with_mode(strict(), UndeclaredBuckets::Refuse);
+    seed(&s, DEFAULT_BUCKET, "a.txt", b"hello");
+    for path in [
+        "/upload/storage/v1/b/typo-bucket/o?uploadType=media&name=a.txt&upload_id=anything".to_owned(),
+        format!("/storage/v1/b/{DEFAULT_BUCKET}/o/a.txt/copyTo/b/typo-bucket/o/b.txt?upload_id=anything"),
+        format!("/storage/v1/b/typo-bucket/o/a.txt/rewriteTo/b/{DEFAULT_BUCKET}/o/b.txt?upload_id=anything"),
+    ] {
+        let response = handle(&s, req("POST", &path, &[OWNER], b"hello"));
+        assert_eq!(response.status, 404, "{path}: {}", text(&response));
+        assert_eq!(json_error_message(&response), "The specified bucket does not exist.");
+    }
+    assert!(!has_bucket(&s, "typo-bucket"));
+}
+
+#[test]
 fn refuse_answers_a_missing_bucket_to_a_form_upload_in_the_xml_shape() {
     let s = with_mode(strict(), UndeclaredBuckets::Refuse);
     let policy = signed_policy(&json!([]), "2026-08-29T13:00:00Z");

@@ -1695,7 +1695,7 @@ fn form_decode(s: &str) -> String {
     decode_segment(&with_spaces).unwrap_or(with_spaces)
 }
 
-fn query_params(query: &str) -> BTreeMap<String, String> {
+pub(crate) fn query_params(query: &str) -> BTreeMap<String, String> {
     query
         .split('&')
         .filter(|kv| !kv.is_empty())
@@ -3849,19 +3849,46 @@ fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse 
     // a write to a bucket nothing declared is noted once it succeeded.
     let mut undeclared = None;
     if state.is_strict() {
-        if let Some(refused) = invalid_bucket_refusal(state, &route, &params) {
-            return refused;
-        }
-        match state.rules.undeclared_buckets() {
-            UndeclaredBuckets::Refuse => {
-                if let Some(refused) = missing_bucket_refusal(state, &route, &params) {
-                    return production_framing(dialect, refused);
+        let continuation_bucket = match &route {
+            Route::GcsUpload { bucket } if matches!(req.method.as_str(), "PUT" | "DELETE") => {
+                Some(bucket)
+            }
+            Route::FbBucket { bucket } | Route::FbObject { bucket, .. }
+                if matches!(req.method.as_str(), "POST" | "PUT")
+                    && req
+                        .header("x-goog-upload-command")
+                        .is_some_and(|command| command != "start")
+                    && !params.contains_key("create_token")
+                    && !params.contains_key("delete_token") =>
+            {
+                Some(bucket)
+            }
+            _ => None,
+        };
+        let continuation = continuation_bucket
+            .zip(params.get("upload_id"))
+            .is_some_and(|(bucket, id)| {
+                state.store().is_ok_and(|mut store| {
+                    store
+                        .upload_bucket(&UploadId::from_str_unchecked(id), state.now())
+                        .is_ok_and(|owner| owner.as_str() == bucket)
+                })
+            });
+        if !continuation {
+            if let Some(refused) = invalid_bucket_refusal(state, &route) {
+                return refused;
+            }
+            match state.rules.undeclared_buckets() {
+                UndeclaredBuckets::Refuse => {
+                    if let Some(refused) = missing_bucket_refusal(state, &route) {
+                        return production_framing(dialect, refused);
+                    }
                 }
+                UndeclaredBuckets::Warn => {
+                    undeclared = unknown_bucket_written(state, &route, &req.method);
+                }
+                UndeclaredBuckets::Create => {}
             }
-            UndeclaredBuckets::Warn => {
-                undeclared = unknown_bucket_written(state, &route, &req.method, &params);
-            }
-            UndeclaredBuckets::Create => {}
         }
     }
     // This proof lives only for this request, including a resumable finalization's repeated authentication.
@@ -4070,15 +4097,7 @@ fn xml_error(status: u16, code: &str, message: &str, details: Option<&str>) -> S
 /// object count: uploads, the destination of a copy or rewrite, and form uploads. A resumable
 /// continuation belongs to a session that started with its own check. Strict profile only; the
 /// official emulator creates the bucket silently.
-fn unknown_bucket_written(
-    state: &StorageState,
-    route: &Route,
-    method: &str,
-    params: &BTreeMap<String, String>,
-) -> Option<String> {
-    if params.contains_key("upload_id") {
-        return None;
-    }
+fn unknown_bucket_written(state: &StorageState, route: &Route, method: &str) -> Option<String> {
     let bucket = match route {
         Route::FbBucket { bucket } | Route::FbObject { bucket, .. }
             if matches!(method, "POST" | "PUT") =>
@@ -4139,14 +4158,7 @@ pub(crate) fn cors_bucket(method: &str, path: &str) -> Option<(String, bool)> {
 /// `NoSuchBucket` document (UNRECORDED, documented) and the Firebase dialect's not-found
 /// envelope (UNRECORDED). A copy or rewrite checks both of its buckets. A resumable
 /// continuation belongs to a session whose start checked its bucket.
-fn missing_bucket_refusal(
-    state: &StorageState,
-    route: &Route,
-    params: &BTreeMap<String, String>,
-) -> Option<StorageResponse> {
-    if params.contains_key("upload_id") {
-        return None;
-    }
+fn missing_bucket_refusal(state: &StorageState, route: &Route) -> Option<StorageResponse> {
     let named: Vec<(&String, BucketSurface)> = match route {
         Route::FbBucket { bucket } | Route::FbObject { bucket, .. } => {
             vec![(bucket, BucketSurface::Firebase)]
@@ -4197,14 +4209,7 @@ fn missing_bucket_response(surface: BucketSurface, bucket: &str) -> StorageRespo
 /// 400 and the XML API's `InvalidBucketName` document are Cloud Storage's documented ones; the
 /// Firebase dialect answers its not-found envelope. A resumable continuation belongs to a session
 /// that checked its bucket when it started.
-fn invalid_bucket_refusal(
-    state: &StorageState,
-    route: &Route,
-    params: &BTreeMap<String, String>,
-) -> Option<StorageResponse> {
-    if params.contains_key("upload_id") {
-        return None;
-    }
+fn invalid_bucket_refusal(state: &StorageState, route: &Route) -> Option<StorageResponse> {
     let (bucket, surface) = match route {
         Route::FbBucket { bucket } | Route::FbObject { bucket, .. } => {
             (bucket, BucketSurface::Firebase)

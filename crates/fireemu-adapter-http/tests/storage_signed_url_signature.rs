@@ -481,10 +481,22 @@ fn a_service_account_file_ties_its_key_to_its_client_email() {
 }
 
 #[test]
+fn malformed_query_cannot_hide_an_encoded_signature() {
+    let s = strict_with_key();
+    let mut url = signed_put("up/a.png");
+    let (base, _) = url.query.rsplit_once("&X-Goog-Signature=").unwrap();
+    url.query = format!("{base}&X-Goog-%53ignature=00&junk=%ZZ");
+    let response = handle(&s, put(&url, &SENT, b"png!"));
+    assert_eq!(response.status, 403, "{}", text(&response));
+    assert!(text(&response).contains("SignatureDoesNotMatch"));
+    assert!(!exists(&s, "up/a.png"));
+}
+
+#[test]
 fn expiry_and_missing_signed_headers_keep_their_own_answers() {
     let s = strict_with_key();
     // An expired URL is an ExpiredToken whatever its signature is worth.
-    let expired = sign(
+    let mut expired = sign(
         key(),
         EMAIL,
         "PUT",
@@ -493,6 +505,7 @@ fn expiry_and_missing_signed_headers_keep_their_own_answers() {
         "60",
         &SIGNED,
     );
+    expired.query.push('0');
     let r = handle(&s, put(&expired, &SENT, b"png!"));
     assert_eq!(r.status, 400, "{}", text(&r));
     assert!(text(&r).contains("<Code>ExpiredToken</Code>"));

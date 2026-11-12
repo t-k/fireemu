@@ -172,8 +172,7 @@ impl RestNegativeCache {
     }
 
     /// Whether `request` on `resource`, arriving on `connection` at `now`, is answered from the
-    /// cache with a 404 instead of reaching the backend. A hit does not extend the entry. An entry
-    /// from a clock that has since moved back is dropped.
+    /// cache with a 404 instead of reaching the backend. A hit does not extend the entry.
     pub fn serves(
         &mut self,
         connection: ConnectionId,
@@ -194,7 +193,9 @@ impl RestNegativeCache {
         if self.is_live(armed_at, now) {
             return true;
         }
-        self.armed.remove(&key);
+        if armed_at <= now {
+            self.armed.remove(&key);
+        }
         false
     }
 
@@ -247,13 +248,19 @@ impl RestNegativeCache {
     }
 
     fn remember_success(&mut self, key: Key, started: LogicalInstant) {
+        if self
+            .last_success
+            .get(&key)
+            .is_some_and(|&seen| seen > started)
+        {
+            return;
+        }
         if self.last_success.len() >= MAX_ENTRIES && !self.last_success.contains_key(&key) {
-            if let Some(oldest) = self
-                .last_success
-                .iter()
-                .min_by_key(|(_, &seen)| seen)
-                .map(|(entry, _)| entry.clone())
-            {
+            if let Some((oldest, &seen)) = self.last_success.iter().min_by_key(|(_, &seen)| seen) {
+                if seen >= started {
+                    return;
+                }
+                let oldest = oldest.clone();
                 self.last_success.remove(&oldest);
             }
         }
@@ -264,7 +271,7 @@ impl RestNegativeCache {
         if self
             .armed
             .get(&key)
-            .is_some_and(|&armed_at| self.is_live(armed_at, started))
+            .is_some_and(|&armed_at| armed_at > started || self.is_live(armed_at, started))
         {
             return;
         }
@@ -277,12 +284,13 @@ impl RestNegativeCache {
             return;
         }
         if self.armed.len() >= MAX_ENTRIES && !self.armed.contains_key(&key) {
-            if let Some(oldest) = self
-                .armed
-                .iter()
-                .min_by_key(|(_, &armed_at)| armed_at)
-                .map(|(entry, _)| entry.clone())
+            if let Some((oldest, &armed_at)) =
+                self.armed.iter().min_by_key(|(_, &armed_at)| armed_at)
             {
+                if armed_at >= started {
+                    return;
+                }
+                let oldest = oldest.clone();
                 self.armed.remove(&oldest);
             }
         }
@@ -293,8 +301,10 @@ impl RestNegativeCache {
     fn forget_stale(&mut self, now: LogicalInstant) {
         let ttl = self.rule.ttl;
         let live = |at: &LogicalInstant| {
-            now.checked_duration_since(*at)
-                .is_some_and(|age| age >= LogicalDuration::ZERO && age < ttl)
+            *at > now
+                || now
+                    .checked_duration_since(*at)
+                    .is_some_and(|age| age >= LogicalDuration::ZERO && age < ttl)
         };
         self.armed.retain(|_, at| live(at));
         self.last_success.retain(|_, at| live(at));
@@ -639,7 +649,7 @@ mod tests {
     }
 
     #[test]
-    fn a_clock_that_moved_back_drops_the_entry() {
+    fn an_earlier_probe_does_not_drop_a_newer_entry() {
         let mut cache = RestNegativeCache::default();
         let x = sub("x");
         observe(
@@ -650,7 +660,37 @@ mod tests {
             RestOutcome::NotFound,
         );
         assert!(!serves(&mut cache, &x, RestRequest::Get, 9_000));
-        assert!(!serves(&mut cache, &x, RestRequest::Get, 10_001));
+        assert!(serves(&mut cache, &x, RestRequest::Get, 10_001));
+    }
+
+    #[test]
+    fn delayed_observation_preserves_another_connections_newer_entry() {
+        let mut cache = RestNegativeCache::default();
+        let delayed = sub("delayed");
+        let newer = sub("newer");
+        let second = other_connection();
+        cache.observe(
+            second,
+            &newer,
+            RestRequest::Get,
+            at(5_000),
+            RestOutcome::NotFound,
+        );
+        cache.observe(
+            second,
+            &newer,
+            RestRequest::Other,
+            at(6_000),
+            RestOutcome::Success,
+        );
+        cache.observe(
+            C1,
+            &delayed,
+            RestRequest::Patch,
+            at(0),
+            RestOutcome::NotFound,
+        );
+        assert!(cache.serves(second, &newer, RestRequest::Delete, at(8_000)));
     }
 
     #[test]
@@ -905,6 +945,21 @@ mod tests {
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(512))]
+        #[test]
+        fn delayed_observations_preserve_newer_cross_connection_entries(
+            newer in 1_i64..10_000,
+            delayed in proptest::collection::vec(0_i64..1_000, 1..30),
+        ) {
+            let mut cache = RestNegativeCache::default();
+            let resource = sub("newer");
+            let second = other_connection();
+            cache.observe(second, &resource, RestRequest::Get, at(newer + 1_000), RestOutcome::NotFound);
+            for started in delayed {
+                cache.observe(C1, &sub("delayed"), RestRequest::Patch, at(started), RestOutcome::NotFound);
+            }
+            prop_assert!(cache.serves(second, &resource, RestRequest::Delete, at(newer + 1_001)));
+        }
+
         #[test]
         fn the_cache_agrees_with_a_replayed_reference(steps in proptest::collection::vec(step(), 1..60)) {
             let mut cache = RestNegativeCache::default();

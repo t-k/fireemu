@@ -169,7 +169,7 @@ services
   database   off   not in --only
   appcheck   off   not in --only
   hub        off   --hub-port 0 turns it off
-  ui         off   off (exec starts it only with --ui)
+  ui         off   off (exec starts it only with --ui; --ui-port 0 and emulators.ui.port 0 turn it off)
   logging    start 127.0.0.1:4500 (best effort unless the port was asked for)
 
 environment
@@ -1434,7 +1434,10 @@ mod functions {
         );
         let runner = &plan["functions"][0]["runner"];
         assert_eq!(runner["override"], true, "{plan}");
-        assert_eq!(runner["command"], serde_json::json!(["/bin/echo", "x"]));
+        assert_eq!(
+            runner["command"],
+            serde_json::json!(["/bin/echo", "[redacted]"])
+        );
         assert!(runner["interpreter"].is_null());
         assert!(plan["functions"][0]["error"].is_null(), "{plan}");
     }
@@ -1573,4 +1576,145 @@ mod functions {
         );
         assert_eq!(code, Some(1));
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn runner_override_arguments_are_never_printed() {
+    let dir = project("runner-secrets");
+    write(
+        &dir,
+        "firebase.json",
+        r#"{"functions":{"source":"functions"}}"#,
+    );
+    write(&dir, "functions/package.json", r#"{"name":"fixture"}"#);
+    write(&dir, "fireemu.toml", "schemaVersion = 1\nfirebaseJson = \"firebase.json\"\n[functions]\nrunner = [\"/bin/echo\", \"--token=review-sentinel-secret\", \"second-secret\"]\n");
+    for args in [&["up", "--plan", "--json"][..], &["up", "--plan"][..]] {
+        let output = run(&dir, args, &[]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        let text = format!("{}{}", stdout(&output), stderr(&output));
+        assert!(!text.contains("review-sentinel-secret") && !text.contains("second-secret"));
+        if args.contains(&"--json") {
+            let plan: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(
+                plan["functions"][0]["runner"]["command"],
+                serde_json::json!(["/bin/echo", "[redacted]", "[redacted]"])
+            );
+        }
+    }
+}
+
+#[test]
+fn configured_secrets_are_not_printed_in_plans() {
+    let dir = project("config-secrets");
+    let digest = "cd".repeat(32);
+    let config = format!("schemaVersion = 1\n[pubsub.authentication]\nlocalBearerToken = \"sentinel-bearer-0001\"\n[auth]\napiKeys = [\"sentinel-api-key-0002\"]\n[auth.customTokenSigners.\"signer@demo-app.iam.gserviceaccount.com\"]\nkeys = [{{ kty = \"RSA\", alg = \"RS256\", kid = \"sentinel-signer-0004\", n = \"0lwNtQWMVy0QqgEvrBmoFqwky_dcMx8CgS-o2rTesEV7QbG4cvNigTcDV7b_u0twRkJdonkMPjbUs0b8NKe_0_UOZ5vE_kILFG4TtPdeZWub8xnqhETc7WifXhEfqcB8xFbRyIxU9V0d_epsuNnQ-Nd7NlnFsH-aaq6f1HKp55_BVNxudwmHwT49P6JhNDDh7FWyoYBBBFtQ0St8dky4MFQTd2swZP4pEA8xGp-q-1mxbn0g9gfbq5voYWtOaDW9a2lsC_S_d6DecsrNWn4YYJ7Qc5xcx4pI70a23zftkVBj_I-Eip2hcvNUEsZJA4LlR4BgDLsNWu3ZWQxe08fOew\", e = \"AQAB\" }}]\n[[auth.providers.oidc]]\nname = \"oidc.fixture\"\nenabled = true\nclientId = \"visible-client-id\"\nissuer = \"https://issuer.test\"\nclientSecret = \"sentinel-oidc-secret-0003\"\n[appCheck]\nenabled = true\n[[appCheck.apps]]\nprojectId = \"demo-app\"\nprojectNumber = \"1234567890\"\nappId = \"1:1234567890:web:abc\"\ndebugTokenSha256 = [\"{digest}\"]\n");
+    write(&dir, "fireemu.toml", &config);
+    for args in [&["up", "--plan", "--json"][..], &["up", "--plan"][..]] {
+        let output = run(&dir, args, &[]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        let text = format!("{}{}", stdout(&output), stderr(&output));
+        for secret in [
+            "sentinel-bearer-0001",
+            "sentinel-api-key-0002",
+            "sentinel-oidc-secret-0003",
+            "sentinel-signer-0004",
+            &digest,
+        ] {
+            assert!(!text.contains(secret));
+        }
+    }
+}
+
+#[test]
+fn data_connect_inherited_environment_is_denied_or_allowed() {
+    let dir = project("data-connect-env");
+    let env = [("DATA_CONNECT_EMULATOR_HOST", "127.0.0.1:9399")];
+    let args = [
+        "up",
+        "--plan",
+        "--json",
+        "--only",
+        "firestore",
+        "--deny-inherited-emulator-env",
+    ];
+    let output = run(&dir, &args, &env);
+    assert_eq!(output.status.code(), Some(1));
+    let plan: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        plan["environment"]["denied"],
+        serde_json::json!(["DATA_CONNECT_EMULATOR_HOST"])
+    );
+    let output = run(
+        &dir,
+        &[
+            "up",
+            "--plan",
+            "--json",
+            "--only",
+            "firestore",
+            "--deny-inherited-emulator-env",
+            "--allow-inherited-emulator-env",
+            "DATA_CONNECT_EMULATOR_HOST",
+        ],
+        &env,
+    );
+    assert!(output.status.success());
+    let plan: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        plan["environment"]["inherited"][0]["disposition"],
+        "kept-allowed"
+    );
+}
+
+#[test]
+fn ui_plan_reflects_firebase_json_selection() {
+    let dir = project("ui-config");
+    for (config, enabled, address) in [
+        (r#"{"emulators":{"ui":{"port":0}}}"#, false, None),
+        (
+            r#"{"emulators":{"ui":{"port":4123}}}"#,
+            true,
+            Some("127.0.0.1:4123"),
+        ),
+        (r#"{"emulators":{"ui":{"enabled":false}}}"#, false, None),
+    ] {
+        write(&dir, "firebase.json", config);
+        let plan = json_plan(&dir, &["up", "--plan", "--json"], &[]);
+        let row = service(&plan, "ui");
+        assert_eq!(row["start"], enabled);
+        assert_eq!(row["address"].as_str(), address);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn unbound_logging_listener_is_checked_against_inherited_environment() {
+    let dir = project("logging-inherited");
+    let _listener = std::net::TcpListener::bind("127.0.0.1:4500").ok();
+    let env = [("FIREBASE_LOGGING_EMULATOR_HOST", "127.0.0.1:1")];
+    let common = [
+        "--only",
+        "firestore",
+        "--firestore-port",
+        "0",
+        "--hub-port",
+        "0",
+        "--ui-port",
+        "0",
+        "--",
+        "true",
+    ];
+    let mut denied = vec!["exec", "--deny-inherited-emulator-env"];
+    denied.extend(common);
+    let output = run(&dir, &denied, &env);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("FIREBASE_LOGGING_EMULATOR_HOST"));
+    let mut warned = vec!["exec"];
+    warned.extend(common);
+    let output = run(&dir, &warned, &env);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stderr(&output)
+        .lines()
+        .any(|line| line.contains("warning:") && line.contains("FIREBASE_LOGGING_EMULATOR_HOST")));
 }

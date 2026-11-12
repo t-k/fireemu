@@ -30,7 +30,7 @@ use fireemu_proto_firestore::google::firestore::v1::firestore_server::FirestoreS
 use super::{
     app_check_state, bind_listeners, child_environment, clock_millis, control, control_state,
     exit_code, functions, hub, hub_emulators, import_export, install_auth_credential_entropy,
-    load_rules, load_storage_rules, logical_system_time, print_banner, print_rules_status,
+    load_rules, load_storage_rules, logical_system_time, plan, print_banner, print_rules_status,
     random_secret, reportable_exit_code, runtime_thread_counts, service_admission,
     session_rsa_cache, spawn_child, start_firestore_config_reload_supervisors, stop_child,
     storage_state, ui, wait_child, BoundAddrs, ExecPlan, Exporter, Listeners, Options,
@@ -2040,6 +2040,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         ready_file,
         owner_stdin,
         config_origin,
+        inherited_env,
         ..
     } = options;
     let quiet = verbosity == Verbosity::Quiet;
@@ -2405,6 +2406,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             logging: logging_addr,
             control: http_addr,
         };
+        plan::check_bound_listeners(&inherited_env, &addrs, want_app_check, quiet, &plan::parent_environment())?;
         // Random secrets: the control token browsers must present, and the secret that ties
         // the runner's HTTP server to this daemon's proxy.
         let control_token = random_secret()?;

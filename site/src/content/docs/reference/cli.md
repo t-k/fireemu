@@ -171,7 +171,7 @@ The command exits 1, with the plan still printed, when the run would fail for a 
 - `--deny-inherited-emulator-env` refuses the run before anything starts (exit code 1) when the environment carries an emulator variable for a service the run does not start. The variables of services the run starts are replaced by its own values and are never refused. It applies to `up` too, where the variables belong to the shell that starts it and to a Functions runner under the `emulator` profile.
 - `--allow-inherited-emulator-env <NAME>` keeps one on purpose, for example `PUBSUB_EMULATOR_HOST` when one suite deliberately uses another's Pub/Sub. It silences the warning and the refusal for that variable, can be repeated, and refuses a name that is no emulator variable. [`--plan`](#plan-a-run) lists each inherited variable and what happens to it.
 
-The Hub and the Logging emulator are best effort (a busy default port only disables them), so whether they start is known only at start-up; the check treats them as started.
+The check recognizes every emulator host variable the Firebase and Google Cloud SDKs read, including `DATA_CONNECT_EMULATOR_HOST` and `FIREBASE_DATA_CONNECT_EMULATOR_HOST` for a service Fireemu does not serve, which is never started. The Hub and the Logging emulator are best effort (a busy default port only disables them): the pre-start check treats them as started, and once the listeners are bound the check runs again against the ones that really bound, before any Functions runner or command starts. A `functions.runner` override is shown with its arguments replaced by `[redacted]`, because they can carry credentials.
 
 ## emulators:export
 

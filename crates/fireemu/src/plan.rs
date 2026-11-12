@@ -57,6 +57,8 @@ pub(crate) struct Facts {
     pub firebase: Option<(PathBuf, bool, Value)>,
     /// The command-line options that override the files, as typed.
     pub overrides: Vec<(String, String)>,
+    /// The UI listener selection used by start-up.
+    pub ui: crate::UiSelection,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -134,7 +136,12 @@ fn not_in_only(only_flag: bool) -> Option<String> {
 }
 
 #[allow(clippy::too_many_lines)]
-fn service_rows(cfg: &RuntimeConfig, only: &Selection, starts: &ServiceStarts) -> Vec<ServiceRow> {
+fn service_rows(
+    cfg: &RuntimeConfig,
+    only: &Selection,
+    starts: &ServiceStarts,
+    ui: crate::UiSelection,
+) -> Vec<ServiceRow> {
     let port_note = |address: &str, relocatable: bool| -> Option<&'static str> {
         if port_of(address) == Some(0) {
             Some("a free port is chosen at start")
@@ -241,14 +248,27 @@ fn service_rows(cfg: &RuntimeConfig, only: &Selection, starts: &ServiceStarts) -
             .then_some("best effort: a busy default port only disables discovery"),
         auxiliary: true,
     });
+    let (ui_address, ui_note) = match ui {
+        crate::UiSelection::Disabled => (None, None),
+        crate::UiSelection::Auto => (
+            Some("127.0.0.1:0".to_owned()),
+            Some("a free port is chosen at start"),
+        ),
+        crate::UiSelection::Default => (
+            Some(format!("127.0.0.1:{}", crate::config::DEFAULT_UI_PORT)),
+            Some("best effort unless the port was asked for"),
+        ),
+        crate::UiSelection::Fixed(port) => (
+            Some(format!("127.0.0.1:{port}")),
+            Some("best effort unless the port was asked for"),
+        ),
+    };
     rows.push(ServiceRow {
         name: "ui",
-        start: cfg.ui_enabled,
-        address: cfg.ui_enabled.then(|| cfg.ui_addr.clone()),
-        reason: (!cfg.ui_enabled).then(|| "off (exec starts it only with --ui)".to_owned()),
-        note: cfg
-            .ui_enabled
-            .then_some("best effort unless the port was asked for"),
+        start: ui_address.is_some(),
+        address: ui_address,
+        reason: (ui == crate::UiSelection::Disabled).then(|| "off (exec starts it only with --ui; --ui-port 0 and emulators.ui.port 0 turn it off)".to_owned()),
+        note: ui_note,
         auxiliary: true,
     });
     rows.push(ServiceRow {
@@ -271,34 +291,37 @@ fn service_rows(cfg: &RuntimeConfig, only: &Selection, starts: &ServiceStarts) -
 /// The variables a run exports for its services, with the service each one belongs to. The
 /// service names are the ones the plan prints. A test keeps this table equal to what
 /// `child_environment` writes.
-pub(crate) const EMULATOR_ENV: &[(&str, &str)] = &[
-    ("FIRESTORE_EMULATOR_HOST", "firestore"),
-    ("FIREBASE_FIRESTORE_EMULATOR_ADDRESS", "firestore"),
-    ("FIREBASE_AUTH_EMULATOR_HOST", "auth"),
-    ("FIREBASE_STORAGE_EMULATOR_HOST", "storage"),
-    ("STORAGE_EMULATOR_HOST", "storage"),
-    ("FIREEMU_FUNCTIONS_HOST", "functions"),
-    ("CLOUD_EVENTARC_EMULATOR_HOST", "eventarc"),
-    ("CLOUD_TASKS_EMULATOR_HOST", "tasks"),
-    ("PUBSUB_EMULATOR_HOST", "pubsub"),
-    ("FIREBASE_DATABASE_EMULATOR_HOST", "database"),
-    ("FIREBASE_EMULATOR_HUB", "hub"),
-    ("FIREBASE_LOGGING_EMULATOR_HOST", "logging"),
-    ("FIREEMU_APP_CHECK_EMULATOR_HOST", "appcheck"),
-    ("FIREEMU_APP_CHECK_JWKS_URL", "appcheck"),
+pub(crate) const EMULATOR_ENV: &[(&str, &str, bool)] = &[
+    ("FIRESTORE_EMULATOR_HOST", "firestore", true),
+    ("FIREBASE_FIRESTORE_EMULATOR_ADDRESS", "firestore", true),
+    ("FIREBASE_AUTH_EMULATOR_HOST", "auth", true),
+    ("FIREBASE_STORAGE_EMULATOR_HOST", "storage", true),
+    ("STORAGE_EMULATOR_HOST", "storage", true),
+    ("FIREEMU_FUNCTIONS_HOST", "functions", true),
+    ("CLOUD_EVENTARC_EMULATOR_HOST", "eventarc", true),
+    ("CLOUD_TASKS_EMULATOR_HOST", "tasks", true),
+    ("PUBSUB_EMULATOR_HOST", "pubsub", true),
+    ("FIREBASE_DATABASE_EMULATOR_HOST", "database", true),
+    ("FIREBASE_EMULATOR_HUB", "hub", true),
+    ("FIREBASE_LOGGING_EMULATOR_HOST", "logging", true),
+    ("FIREEMU_APP_CHECK_EMULATOR_HOST", "appcheck", true),
+    ("FIREEMU_APP_CHECK_JWKS_URL", "appcheck", true),
+    ("FIREBASE_DATA_CONNECT_EMULATOR_HOST", "dataconnect", false),
+    ("DATA_CONNECT_EMULATOR_HOST", "dataconnect", false),
+    ("FIREBASE_DATACONNECT_EMULATOR_HOST", "dataconnect", false),
 ];
 
 /// Refuses an `--allow-inherited-emulator-env` name that is no emulator variable: a misspelt
 /// name would otherwise allow nothing and look as if it allowed something.
 pub(crate) fn check_allowed_names(names: &[String]) -> Result<(), String> {
     for name in names {
-        if !EMULATOR_ENV.iter().any(|(known, _)| known == name) {
+        if !EMULATOR_ENV.iter().any(|(known, _, _)| known == name) {
             return Err(format!(
                 "--allow-inherited-emulator-env {}: not an emulator variable; the names are {}",
                 diagnostic_text(name),
                 EMULATOR_ENV
                     .iter()
-                    .map(|(name, _)| *name)
+                    .map(|(name, _, _)| *name)
                     .collect::<Vec<_>>()
                     .join(", ")
             ));
@@ -311,7 +334,7 @@ pub(crate) fn check_allowed_names(names: &[String]) -> Result<(), String> {
 pub(crate) fn parent_environment() -> Vec<(String, String)> {
     EMULATOR_ENV
         .iter()
-        .filter_map(|(name, _)| {
+        .filter_map(|(name, _, _)| {
             std::env::var_os(name)
                 .map(|value| ((*name).to_owned(), value.to_string_lossy().into_owned()))
         })
@@ -377,7 +400,7 @@ pub(crate) fn classify_inherited(
 ) -> Vec<Inherited> {
     EMULATOR_ENV
         .iter()
-        .filter_map(|(name, service)| {
+        .filter_map(|(name, service, _)| {
             let (_, value) = parent.iter().find(|(parent_name, _)| parent_name == name)?;
             let disposition = if started.contains(service) {
                 Disposition::Overridden
@@ -458,7 +481,7 @@ pub(crate) fn guard_inherited_env(
     let Ok(starts) = ServiceStarts::resolve(&options.cfg, &options.only) else {
         return Ok(());
     };
-    let rows = service_rows(&options.cfg, &options.only, &starts);
+    let rows = service_rows(&options.cfg, &options.only, &starts, options.facts.ui);
     let inherited = classify_inherited(
         parent,
         &started_services(&rows),
@@ -473,6 +496,46 @@ pub(crate) fn guard_inherited_env(
             .iter()
             .filter(|entry| entry.disposition == Disposition::KeptServiceNotStarted)
         {
+            eprintln!("warning: {}", stale_warning(entry));
+        }
+    }
+    Ok(())
+}
+
+/// Checks inherited variables against the listeners that actually bound.
+pub(crate) fn check_bound_listeners(
+    policy: &InheritedEnvPolicy,
+    addrs: &crate::BoundAddrs,
+    appcheck: bool,
+    quiet: bool,
+    parent: &[(String, String)],
+) -> Result<(), String> {
+    let started: BTreeSet<&'static str> = [
+        ("firestore", addrs.firestore.is_some()),
+        ("auth", addrs.auth.is_some()),
+        ("storage", addrs.storage.is_some()),
+        ("functions", addrs.functions.is_some()),
+        ("eventarc", addrs.eventarc.is_some()),
+        ("tasks", addrs.tasks.is_some()),
+        ("pubsub", addrs.pubsub.is_some()),
+        ("database", addrs.database.is_some()),
+        ("hub", addrs.hub.is_some()),
+        ("logging", addrs.logging.is_some()),
+        ("appcheck", appcheck),
+    ]
+    .into_iter()
+    .filter_map(|(name, started)| started.then_some(name))
+    .collect();
+    let inherited = classify_inherited(parent, &started, &policy.allow);
+    let refused = denied(&inherited, policy);
+    if !refused.is_empty() {
+        return Err(denial(&refused));
+    }
+    if !quiet {
+        for entry in inherited.iter().filter(|entry| {
+            matches!(entry.service, "hub" | "logging")
+                && entry.disposition == Disposition::KeptServiceNotStarted
+        }) {
             eprintln!("warning: {}", stale_warning(entry));
         }
     }
@@ -700,8 +763,8 @@ fn environment_set(rows: &[ServiceRow]) -> Vec<Value> {
     for row in rows.iter().filter(|row| row.start) {
         let names: Vec<&str> = EMULATOR_ENV
             .iter()
-            .filter(|(_, service)| *service == row.name)
-            .map(|(name, _)| *name)
+            .filter(|(_, service, exported)| *exported && *service == row.name)
+            .map(|(name, _, _)| *name)
             .collect();
         if names.is_empty() {
             continue;
@@ -744,7 +807,7 @@ fn codebase_json(
         "language": plan.language,
         "runner": {
             "override": cfg.functions_runner.is_some(),
-            "command": plan.runner.as_ref().map(|selection| selection.command.clone()),
+            "command": plan.runner.as_ref().map(|selection| selection.command.iter().enumerate().map(|(index, arg)| if cfg.functions_runner.is_some() && index > 0 { "[redacted]".to_owned() } else { arg.clone() }).collect::<Vec<_>>()),
             "interpreter": interpreter,
             "version": version,
         },
@@ -766,7 +829,7 @@ fn build(
     let cfg = &options.cfg;
     let facts = &options.facts;
     let starts = ServiceStarts::resolve(cfg, &options.only).map_err(CliError::refused)?;
-    let rows = service_rows(cfg, &options.only, &starts);
+    let rows = service_rows(cfg, &options.only, &starts, facts.ui);
     let mut warnings = Vec::new();
     let mut errors = Vec::new();
 
@@ -1106,8 +1169,10 @@ mod tests {
     use proptest::prelude::*;
 
     fn services() -> Vec<&'static str> {
-        let mut services: Vec<&'static str> =
-            EMULATOR_ENV.iter().map(|(_, service)| *service).collect();
+        let mut services: Vec<&'static str> = EMULATOR_ENV
+            .iter()
+            .map(|(_, service, _)| *service)
+            .collect();
         services.dedup();
         services
     }
@@ -1169,7 +1234,7 @@ mod tests {
         #[test]
         fn classification_follows_the_rule_for_every_combination(
             present in proptest::collection::vec(any::<bool>(), EMULATOR_ENV.len()),
-            started_picks in proptest::collection::vec(any::<bool>(), 11),
+            started_picks in proptest::collection::vec(any::<bool>(), services().len()),
             allowed_picks in proptest::collection::vec(any::<bool>(), EMULATOR_ENV.len()),
             deny in any::<bool>(),
         ) {
@@ -1177,7 +1242,7 @@ mod tests {
                 .iter()
                 .zip(&present)
                 .filter(|(_, present)| **present)
-                .map(|((name, _), _)| ((*name).to_owned(), format!("host-of-{name}:1")))
+                .map(|((name, _, _), _)| ((*name).to_owned(), format!("host-of-{name}:1")))
                 .collect();
             let started: BTreeSet<&'static str> = services()
                 .into_iter()
@@ -1189,7 +1254,7 @@ mod tests {
                 .iter()
                 .zip(&allowed_picks)
                 .filter(|(_, picked)| **picked)
-                .map(|((name, _), _)| (*name).to_owned())
+                .map(|((name, _, _), _)| (*name).to_owned())
                 .collect();
             let policy = InheritedEnvPolicy { deny, allow: allow.clone() };
             let inherited = classify_inherited(&parent, &started, &allow);
@@ -1198,7 +1263,7 @@ mod tests {
                 .iter()
                 .zip(&present)
                 .filter(|(_, present)| **present)
-                .map(|((name, _), _)| *name)
+                .map(|((name, _, _), _)| *name)
                 .collect();
             prop_assert_eq!(inherited.iter().map(|entry| entry.name).collect::<Vec<_>>(), expected_names);
             for entry in &inherited {
@@ -1225,7 +1290,7 @@ mod tests {
     fn the_allowed_names_are_exactly_the_table() {
         let names: Vec<String> = EMULATOR_ENV
             .iter()
-            .map(|(name, _)| (*name).to_owned())
+            .map(|(name, _, _)| (*name).to_owned())
             .collect();
         assert!(check_allowed_names(&names).is_ok());
         for refused in [
@@ -1287,9 +1352,125 @@ mod tests {
             .collect();
         let table: BTreeSet<String> = EMULATOR_ENV
             .iter()
-            .map(|(name, _)| (*name).to_owned())
+            .filter(|(_, _, exported)| *exported)
+            .map(|(name, _, _)| (*name).to_owned())
             .collect();
         assert_eq!(exported, table);
+    }
+
+    #[test]
+    fn sdk_emulator_variables_are_in_the_table() {
+        const NOT_ENV_VARIABLES: &[(&str, &str)] = &[];
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/node_modules");
+        assert!(root.join("firebase-admin").exists() || root.join("firebase-tools/lib/emulator").exists(), "the pinned conformance install is required (pnpm -C conformance install --frozen-lockfile)");
+        let pattern = regex::Regex::new(
+            r#"["']([A-Z][A-Z0-9_]*_EMULATOR_(?:HOST|ADDRESS)|FIREBASE_EMULATOR_HUB)["']"#,
+        )
+        .unwrap();
+        let mut names = BTreeSet::new();
+        for directory in [
+            "firebase-admin",
+            "firebase-functions",
+            "firebase-tools/lib/emulator",
+            "@firebase/data-connect",
+            "@firebase/database",
+            "@firebase/firestore",
+            "@firebase/storage",
+            "@google-cloud/firestore",
+            "@google-cloud/storage",
+            "@google-cloud/pubsub",
+        ] {
+            let mut pending = vec![(root.join(directory), 0)];
+            while let Some((path, depth)) = pending.pop() {
+                if depth > 8 {
+                    continue;
+                }
+                let Ok(entries) = std::fs::read_dir(path) else {
+                    continue;
+                };
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        if entry.file_name() != "node_modules" {
+                            pending.push((path, depth + 1));
+                        }
+                    } else {
+                        if !path
+                            .extension()
+                            .is_some_and(|ext| matches!(ext.to_str(), Some("js" | "cjs" | "mjs")))
+                        {
+                            continue;
+                        }
+                        if let Ok(content) = std::fs::read_to_string(&path) {
+                            for captures in pattern.captures_iter(&content) {
+                                names.insert(captures[1].to_owned());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(names.contains("DATA_CONNECT_EMULATOR_HOST"));
+        assert!(names.contains("FIRESTORE_EMULATOR_HOST"));
+        for name in &names {
+            assert!(
+                EMULATOR_ENV
+                    .iter()
+                    .any(|(known, _, _)| name.as_str() == *known)
+                    || NOT_ENV_VARIABLES
+                        .iter()
+                        .any(|(exception, _)| name.as_str() == *exception),
+                "unknown emulator variable: {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn bound_listener_policy_tracks_hub_and_logging() {
+        let address = std::net::SocketAddr::from(([127, 0, 0, 1], 1234));
+        for hub in [false, true] {
+            for logging in [false, true] {
+                for deny in [false, true] {
+                    let addrs = crate::BoundAddrs {
+                        firestore: None,
+                        auth: None,
+                        storage: None,
+                        functions: None,
+                        hosting: None,
+                        eventarc: None,
+                        tasks: None,
+                        pubsub: None,
+                        database: None,
+                        hub: hub.then_some(address),
+                        ui: None,
+                        logging: logging.then_some(address),
+                        control: address,
+                    };
+                    let parent = vec![
+                        ("FIREBASE_EMULATOR_HUB".to_owned(), "localhost:1".to_owned()),
+                        (
+                            "FIREBASE_LOGGING_EMULATOR_HOST".to_owned(),
+                            "localhost:1".to_owned(),
+                        ),
+                    ];
+                    let result = check_bound_listeners(
+                        &InheritedEnvPolicy {
+                            deny,
+                            allow: vec![],
+                        },
+                        &addrs,
+                        false,
+                        true,
+                        &parent,
+                    );
+                    assert_eq!(result.is_err(), deny && (!hub || !logging));
+                    if let Err(message) = result {
+                        assert_eq!(message.contains("FIREBASE_EMULATOR_HUB"), !hub);
+                        assert_eq!(message.contains("FIREBASE_LOGGING_EMULATOR_HOST"), !logging);
+                    }
+                }
+            }
+        }
     }
 
     fn sample_selection(picks: &[bool], explicit: bool) -> Selection {
@@ -1362,7 +1543,7 @@ mod tests {
                     prop_assert_eq!(starts.pubsub, listeners.pubsub.is_some());
                     prop_assert_eq!(starts.database, listeners.database.is_some());
                     // The rows the plan prints carry the same flags.
-                    let rows = service_rows(&cfg, &only, &starts);
+                    let rows = service_rows(&cfg, &only, &starts, crate::UiSelection::Default);
                     let row = |name: &str| rows.iter().find(|row| row.name == name).unwrap().start;
                     prop_assert_eq!(row("firestore"), listeners.firestore.is_some());
                     prop_assert_eq!(row("functions"), listeners.functions.is_some());

@@ -1981,17 +1981,12 @@ fn parse_options(
     // The UI listener is configured through its own module when a port was asked for or when
     // exec must apply its official opt-in default. Start otherwise keeps the best-effort
     // default, where a busy 4000 disables the UI instead of failing the run.
-    if raw.ui_port == Some(AuxiliaryPort::Auto) {
-        ui::set_auto_port();
-    } else if cfg.ui_addr_explicit || context == OptionContext::Exec {
-        ui::set_port(if cfg.ui_enabled {
-            cfg.ui_addr
-                .rsplit_once(':')
-                .and_then(|(_, p)| p.parse().ok())
-                .unwrap_or(config::DEFAULT_UI_PORT)
-        } else {
-            0
-        });
+    let ui_selection = select_ui(&cfg, raw.ui_port, context);
+    match ui_selection {
+        UiSelection::Default => {}
+        UiSelection::Disabled => ui::set_port(0),
+        UiSelection::Auto => ui::set_auto_port(),
+        UiSelection::Fixed(port) => ui::set_port(port),
     }
     // `--export-on-exit` without a directory means "where --import read from", exactly as
     // the official CLI resolves it (`commandUtils.ts` `setExportOnExitOptions`). A target
@@ -2010,7 +2005,13 @@ fn parse_options(
         }
     }
     plan::check_allowed_names(&raw.allow_inherited_env).map_err(CliError::usage)?;
-    let facts = plan_facts(project_root, project_source, &sources, overrides);
+    let facts = plan_facts(
+        project_root,
+        project_source,
+        &sources,
+        overrides,
+        ui_selection,
+    );
     Ok((
         Options {
             cfg,
@@ -2032,12 +2033,47 @@ fn parse_options(
     ))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UiSelection {
+    Default,
+    Disabled,
+    Auto,
+    Fixed(u16),
+}
+
+fn select_ui(
+    cfg: &config::RuntimeConfig,
+    port: Option<AuxiliaryPort>,
+    context: OptionContext,
+) -> UiSelection {
+    if port == Some(AuxiliaryPort::Auto) {
+        UiSelection::Auto
+    } else if cfg.ui_addr_explicit || context == OptionContext::Exec {
+        let port = if cfg.ui_enabled {
+            cfg.ui_addr
+                .rsplit_once(':')
+                .and_then(|(_, p)| p.parse().ok())
+                .unwrap_or(config::DEFAULT_UI_PORT)
+        } else {
+            0
+        };
+        if port == 0 {
+            UiSelection::Disabled
+        } else {
+            UiSelection::Fixed(port)
+        }
+    } else {
+        UiSelection::Default
+    }
+}
+
 /// What option resolution decided besides the configuration, for `--plan`.
 fn plan_facts(
     project_root: PathBuf,
     project_source: String,
     sources: &ConfigSources,
     overrides: Vec<(String, String)>,
+    ui: UiSelection,
 ) -> plan::Facts {
     plan::Facts {
         working_directory: std::env::current_dir().ok(),
@@ -2053,6 +2089,7 @@ fn plan_facts(
             )
         }),
         overrides,
+        ui,
     }
 }
 

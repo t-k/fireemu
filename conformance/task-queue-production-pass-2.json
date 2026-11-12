@@ -14,6 +14,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqretry/tasks/tqrun-RUN-retry-ladder",
           "httpRequest": {
@@ -426,6 +435,7 @@
       "timing": {
         "firstMs": 726,
         "gapsMs": [1070, 2038, 4033, 6040, 6033],
+        "lateMs": [394, 29, 32, 28, 33, 27],
         "startsAtMs": [0, 1070, 3108, 7141, 13181, 19214],
         "endsAtMs": [19, 1071, 3108, 7142, 13182, 19215],
         "holdMs": [19, 1, 0, 1, 1, 1]
@@ -436,6 +446,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqretry/tasks/tqrun-RUN-retry-exhaust",
           "httpRequest": {
@@ -848,6 +867,7 @@
       "timing": {
         "firstMs": 803,
         "gapsMs": [2030, 2035, 4033, 6043, 6036],
+        "lateMs": [201, 1023, 30, 28, 37, 31],
         "startsAtMs": [2077, 4107, 6142, 10175, 16218, 22254],
         "endsAtMs": [2078, 4107, 6143, 10176, 16218, 22254],
         "holdMs": [1, 0, 1, 1, 0, 0]
@@ -858,6 +878,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqlimit/tasks/tqrun-RUN-limit-two",
           "httpRequest": {
@@ -1023,6 +1052,7 @@
       "timing": {
         "firstMs": 935,
         "gapsMs": [1062],
+        "lateMs": [141, 37],
         "startsAtMs": [4209, 5271],
         "endsAtMs": [4226, 5271],
         "holdMs": [17, 0]
@@ -1033,6 +1063,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqwindow/tasks/tqrun-RUN-window-six",
           "httpRequest": {
@@ -3808,6 +3847,11 @@
           10045, 10047, 10038, 10057, 10042, 10053, 10047, 10051, 10047, 10043, 10040, 10060, 10051,
           10054, 10047
         ],
+        "lateMs": [
+          126, 34, 37, 29, 34, 29, 32, 52, 31, 34, 32, 38, 2030, 2000, 1993, 6029, 5999, 8038, 8037,
+          8036, 8039, 8034, 8039, 8038, 8081, 8034, 8036, 8040, 8052, 8040, 8040, 8034, 8052, 8037,
+          8047, 8041, 8045, 8039, 8037, 8036, 8056, 8046, 8047, 8038
+        ],
         "startsAtMs": [
           5481, 6539, 8582, 10618, 12657, 14691, 16728, 18786, 20831, 22870, 24907, 26950, 30988,
           34993, 38991, 47026, 55029, 65073, 75114, 85154, 95198, 105237, 115282, 125326, 135412,
@@ -3831,6 +3875,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdead/tasks/tqrun-RUN-dead-15",
           "httpRequest": {
@@ -3995,6 +4048,7 @@
       "timing": {
         "firstMs": 398,
         "gapsMs": [15951],
+        "lateMs": [140, 42],
         "startsAtMs": [7672, 23623],
         "endsAtMs": [27684, 23623],
         "holdMs": [20012, 0]
@@ -4005,6 +4059,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqconc1/tasks/tqrun-RUN-conc1-a",
           "httpRequest": {
@@ -4107,6 +4170,7 @@
       "timing": {
         "firstMs": 698,
         "gapsMs": [],
+        "lateMs": [126],
         "startsAtMs": [9972],
         "endsAtMs": [12986],
         "holdMs": [3014]
@@ -4117,6 +4181,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqconc1/tasks/tqrun-RUN-conc1-b",
           "httpRequest": {
@@ -4219,6 +4292,7 @@
       "timing": {
         "firstMs": 1748,
         "gapsMs": [],
+        "lateMs": [879],
         "startsAtMs": [13022],
         "endsAtMs": [16023],
         "holdMs": [3001]
@@ -4229,6 +4303,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqconc1/tasks/tqrun-RUN-conc1-c",
           "httpRequest": {
@@ -4331,6 +4414,7 @@
       "timing": {
         "firstMs": 1787,
         "gapsMs": [],
+        "lateMs": [1729],
         "startsAtMs": [16061],
         "endsAtMs": [19062],
         "holdMs": [3001]
@@ -4341,6 +4425,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqconc1/tasks/tqrun-RUN-conc1-d",
           "httpRequest": {
@@ -4443,6 +4536,7 @@
       "timing": {
         "firstMs": 3827,
         "gapsMs": [],
+        "lateMs": [3371],
         "startsAtMs": [19101],
         "endsAtMs": [22102],
         "holdMs": [3001]
@@ -4453,6 +4547,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqconc2/tasks/tqrun-RUN-conc2-a",
           "httpRequest": {
@@ -4555,6 +4658,7 @@
       "timing": {
         "firstMs": 978,
         "gapsMs": [],
+        "lateMs": [144],
         "startsAtMs": [17252],
         "endsAtMs": [20263],
         "holdMs": [3011]
@@ -4565,6 +4669,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqconc2/tasks/tqrun-RUN-conc2-b",
           "httpRequest": {
@@ -4667,6 +4780,7 @@
       "timing": {
         "firstMs": 69,
         "gapsMs": [],
+        "lateMs": [37],
         "startsAtMs": [19343],
         "endsAtMs": [22345],
         "holdMs": [3002]
@@ -4677,6 +4791,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqconc2/tasks/tqrun-RUN-conc2-c",
           "httpRequest": {
@@ -4779,6 +4902,7 @@
       "timing": {
         "firstMs": 511,
         "gapsMs": [],
+        "lateMs": [49],
         "startsAtMs": [20785],
         "endsAtMs": [23786],
         "holdMs": [3001]
@@ -4789,6 +4913,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqconc2/tasks/tqrun-RUN-conc2-d",
           "httpRequest": {
@@ -4891,6 +5024,7 @@
       "timing": {
         "firstMs": 1106,
         "gapsMs": [],
+        "lateMs": [269],
         "startsAtMs": [22380],
         "endsAtMs": [25381],
         "holdMs": [3001]
@@ -4901,6 +5035,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqconc2/tasks/tqrun-RUN-conc2-e",
           "httpRequest": {
@@ -5003,6 +5146,7 @@
       "timing": {
         "firstMs": 99,
         "gapsMs": [],
+        "lateMs": [39],
         "startsAtMs": [24373],
         "endsAtMs": [27374],
         "holdMs": [3001]
@@ -5013,6 +5157,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqrate/tasks/tqrun-RUN-rate-a",
           "httpRequest": {
@@ -5115,6 +5268,7 @@
       "timing": {
         "firstMs": 430,
         "gapsMs": [],
+        "lateMs": [149],
         "startsAtMs": [26704],
         "endsAtMs": [26723],
         "holdMs": [19]
@@ -5125,6 +5279,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqrate/tasks/tqrun-RUN-rate-b",
           "httpRequest": {
@@ -5228,6 +5391,7 @@
       "timing": {
         "firstMs": 552,
         "gapsMs": [],
+        "lateMs": [42],
         "startsAtMs": [28826],
         "endsAtMs": [28826],
         "holdMs": [0]
@@ -5238,6 +5402,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqrate/tasks/tqrun-RUN-rate-c",
           "httpRequest": {
@@ -5340,6 +5513,7 @@
       "timing": {
         "firstMs": 801,
         "gapsMs": [],
+        "lateMs": [35],
         "startsAtMs": [31075],
         "endsAtMs": [31076],
         "holdMs": [1]
@@ -5350,6 +5524,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqrate/tasks/tqrun-RUN-rate-d",
           "httpRequest": {
@@ -5452,6 +5635,7 @@
       "timing": {
         "firstMs": 132,
         "gapsMs": [],
+        "lateMs": [52],
         "startsAtMs": [32406],
         "endsAtMs": [32406],
         "holdMs": [0]
@@ -5462,6 +5646,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqrate/tasks/tqrun-RUN-rate-e",
           "httpRequest": {
@@ -5564,6 +5757,7 @@
       "timing": {
         "firstMs": 423,
         "gapsMs": [],
+        "lateMs": [42],
         "startsAtMs": [33697],
         "endsAtMs": [33697],
         "holdMs": [0]
@@ -5574,6 +5768,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqrate/tasks/tqrun-RUN-rate-f",
           "httpRequest": {
@@ -5676,6 +5879,7 @@
       "timing": {
         "firstMs": 754,
         "gapsMs": [],
+        "lateMs": [46],
         "startsAtMs": [35028],
         "endsAtMs": [35028],
         "holdMs": [0]
@@ -5686,6 +5890,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqrate/tasks/tqrun-RUN-rate-g",
           "httpRequest": {
@@ -5788,6 +6001,7 @@
       "timing": {
         "firstMs": 89,
         "gapsMs": [],
+        "lateMs": [44],
         "startsAtMs": [36363],
         "endsAtMs": [36363],
         "holdMs": [0]
@@ -5798,6 +6012,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqrate/tasks/tqrun-RUN-rate-h",
           "httpRequest": {
@@ -5900,6 +6123,7 @@
       "timing": {
         "firstMs": 329,
         "gapsMs": [],
+        "lateMs": [35],
         "startsAtMs": [38603],
         "endsAtMs": [38603],
         "holdMs": [0]
@@ -5910,6 +6134,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/ID(19)",
           "httpRequest": {
@@ -6012,6 +6245,7 @@
       "timing": {
         "firstMs": 820,
         "gapsMs": [],
+        "lateMs": [203],
         "startsAtMs": [40094],
         "endsAtMs": [40105],
         "holdMs": [11]
@@ -6022,6 +6256,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-env-named",
           "httpRequest": {
@@ -6124,6 +6367,7 @@
       "timing": {
         "firstMs": 1012,
         "gapsMs": [],
+        "lateMs": [50],
         "startsAtMs": [41286],
         "endsAtMs": [41286],
         "holdMs": [0]
@@ -6134,6 +6378,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-env-headers",
           "httpRequest": {
@@ -6243,6 +6496,7 @@
       "timing": {
         "firstMs": 359,
         "gapsMs": [],
+        "lateMs": [46],
         "startsAtMs": [42633],
         "endsAtMs": [42634],
         "holdMs": [1]
@@ -6253,6 +6507,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-env-utf8",
           "httpRequest": {
@@ -6355,6 +6618,7 @@
       "timing": {
         "firstMs": 591,
         "gapsMs": [],
+        "lateMs": [45],
         "startsAtMs": [44865],
         "endsAtMs": [44866],
         "holdMs": [1]
@@ -6365,6 +6629,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-env-unordered",
           "httpRequest": {
@@ -6467,6 +6740,7 @@
       "timing": {
         "firstMs": 826,
         "gapsMs": [],
+        "lateMs": [65],
         "startsAtMs": [47100],
         "endsAtMs": [47100],
         "holdMs": [0]
@@ -6477,6 +6751,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-env-minimal",
           "httpRequest": {
@@ -6579,6 +6862,7 @@
       "timing": {
         "firstMs": 930,
         "gapsMs": [],
+        "lateMs": [38],
         "startsAtMs": [49204],
         "endsAtMs": [49205],
         "holdMs": [1]
@@ -6589,6 +6873,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-env-large",
           "httpRequest": {
@@ -6691,6 +6984,7 @@
       "timing": {
         "firstMs": 439,
         "gapsMs": [],
+        "lateMs": [46],
         "startsAtMs": [51713],
         "endsAtMs": [51714],
         "holdMs": [1]
@@ -6701,6 +6995,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "body", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-env-view-full",
           "httpRequest": {
@@ -6807,6 +7110,7 @@
       "timing": {
         "firstMs": 708,
         "gapsMs": [],
+        "lateMs": [34],
         "startsAtMs": [52982],
         "endsAtMs": [52982],
         "holdMs": [0]
@@ -6817,6 +7121,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-sch-past",
           "httpRequest": {
@@ -6919,6 +7232,7 @@
       "timing": {
         "firstMs": 67,
         "gapsMs": [],
+        "lateMs": [46],
         "startsAtMs": [54341],
         "endsAtMs": [54342],
         "holdMs": [1]
@@ -6929,6 +7243,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-sch-now",
           "httpRequest": {
@@ -7031,6 +7354,7 @@
       "timing": {
         "firstMs": 281,
         "gapsMs": [],
+        "lateMs": [39],
         "startsAtMs": [56555],
         "endsAtMs": [56556],
         "holdMs": [1]
@@ -7041,6 +7365,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-sch-20s",
           "httpRequest": {
@@ -7143,6 +7476,7 @@
       "timing": {
         "firstMs": 20480,
         "gapsMs": [],
+        "lateMs": [46],
         "startsAtMs": [77754],
         "endsAtMs": [77754],
         "holdMs": [0]
@@ -7153,6 +7487,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-sch-nanos",
           "httpRequest": {
@@ -7255,6 +7598,7 @@
       "timing": {
         "firstMs": 5805,
         "gapsMs": [],
+        "lateMs": [42],
         "startsAtMs": [64079],
         "endsAtMs": [64079],
         "holdMs": [0]
@@ -7265,6 +7609,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-sch-offset",
           "httpRequest": {
@@ -7367,6 +7720,7 @@
       "timing": {
         "firstMs": 5097,
         "gapsMs": [],
+        "lateMs": [40],
         "startsAtMs": [65371],
         "endsAtMs": [65371],
         "holdMs": [0]
@@ -7377,6 +7731,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-sch-30d-less",
           "httpRequest": {
@@ -7420,6 +7783,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -7430,6 +7794,14 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
@@ -7440,6 +7812,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -7450,6 +7823,14 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
@@ -7460,6 +7841,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -7470,6 +7852,14 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
@@ -7480,6 +7870,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -7490,16 +7881,38 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "fieldViolations"],
+            "/error/details/0/fieldViolations/0": ["field", "description"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Invalid value at 'task.schedule_time' (type.googleapis.com/google.protobuf.Timestamp), Field 'scheduleTime', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset."
+          "message": "Invalid value at 'task.schedule_time' (type.googleapis.com/google.protobuf.Timestamp), Field 'scheduleTime', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset.",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.BadRequest",
+              "fieldViolations": [
+                {
+                  "field": "task.schedule_time",
+                  "description": "Invalid value at 'task.schedule_time' (type.googleapis.com/google.protobuf.Timestamp), Field 'scheduleTime', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset."
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -7510,16 +7923,38 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "fieldViolations"],
+            "/error/details/0/fieldViolations/0": ["field", "description"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Invalid value at 'task.schedule_time' (type.googleapis.com/google.protobuf.Timestamp), Field 'scheduleTime', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset."
+          "message": "Invalid value at 'task.schedule_time' (type.googleapis.com/google.protobuf.Timestamp), Field 'scheduleTime', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset.",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.BadRequest",
+              "fieldViolations": [
+                {
+                  "field": "task.schedule_time",
+                  "description": "Invalid value at 'task.schedule_time' (type.googleapis.com/google.protobuf.Timestamp), Field 'scheduleTime', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset."
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -7530,6 +7965,14 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
@@ -7540,6 +7983,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -7550,6 +7994,14 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
@@ -7560,6 +8012,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -7570,6 +8023,14 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
@@ -7580,6 +8041,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -7590,16 +8052,38 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "fieldViolations"],
+            "/error/details/0/fieldViolations/0": ["field", "description"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Invalid JSON payload received. Unknown name \"fireemuUnknownField\" at 'task': Cannot find field."
+          "message": "Invalid JSON payload received. Unknown name \"fireemuUnknownField\" at 'task': Cannot find field.",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.BadRequest",
+              "fieldViolations": [
+                {
+                  "field": "task",
+                  "description": "Invalid JSON payload received. Unknown name \"fireemuUnknownField\" at 'task': Cannot find field."
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -7610,6 +8094,14 @@
       "sent": true,
       "admission": {
         "status": 404,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status"]
+          }
+        },
         "error": {
           "code": 404,
           "status": "NOT_FOUND",
@@ -7620,6 +8112,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -7630,16 +8123,38 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "links"],
+            "/error/details/0/links/0": ["description", "url"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Task ID \"tqrun-RUN-a b\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters."
+          "message": "Task ID \"tqrun-RUN-a b\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters.",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.Help",
+              "links": [
+                {
+                  "description": "Definition of task ID",
+                  "url": "https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task.FIELDS.name"
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -7650,16 +8165,38 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "links"],
+            "/error/details/0/links/0": ["description", "url"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Task name must be formatted: \"projects/<PROJECT_ID>/locations/<LOCATION_ID>/queues/<QUEUE_ID>/tasks/<TASK_ID>\"."
+          "message": "Task name must be formatted: \"projects/<PROJECT_ID>/locations/<LOCATION_ID>/queues/<QUEUE_ID>/tasks/<TASK_ID>\".",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.Help",
+              "links": [
+                {
+                  "description": "Definition of task name",
+                  "url": "https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task.FIELDS.name"
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -7670,16 +8207,38 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "links"],
+            "/error/details/0/links/0": ["description", "url"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Task name must be formatted: \"projects/<PROJECT_ID>/locations/<LOCATION_ID>/queues/<QUEUE_ID>/tasks/<TASK_ID>\"."
+          "message": "Task name must be formatted: \"projects/<PROJECT_ID>/locations/<LOCATION_ID>/queues/<QUEUE_ID>/tasks/<TASK_ID>\".",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.Help",
+              "links": [
+                {
+                  "description": "Definition of task name",
+                  "url": "https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task.FIELDS.name"
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -7690,16 +8249,38 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "links"],
+            "/error/details/0/links/0": ["description", "url"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Task ID \"tqrun-RUN-id.dot\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters."
+          "message": "Task ID \"tqrun-RUN-id.dot\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters.",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.Help",
+              "links": [
+                {
+                  "description": "Definition of task ID",
+                  "url": "https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task.FIELDS.name"
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -7710,6 +8291,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-id_ok-1",
           "httpRequest": {
@@ -7812,6 +8402,7 @@
       "timing": {
         "firstMs": 756,
         "gapsMs": [],
+        "lateMs": [53],
         "startsAtMs": [88030],
         "endsAtMs": [88030],
         "holdMs": [0]
@@ -7822,6 +8413,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-id-500xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
           "httpRequest": {
@@ -7924,6 +8524,7 @@
       "timing": {
         "firstMs": 159,
         "gapsMs": [],
+        "lateMs": [45],
         "startsAtMs": [89433],
         "endsAtMs": [89433],
         "holdMs": [0]
@@ -7934,16 +8535,38 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "links"],
+            "/error/details/0/links/0": ["description", "url"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Task ID \"tqrun-RUN-id-501xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters."
+          "message": "Task ID \"tqrun-RUN-id-501xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters.",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.Help",
+              "links": [
+                {
+                  "description": "Definition of task ID",
+                  "url": "https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task.FIELDS.name"
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -7954,6 +8577,14 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
@@ -7964,6 +8595,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -7974,6 +8606,14 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
@@ -7984,6 +8624,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -7994,6 +8635,14 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
@@ -8004,6 +8653,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -8014,6 +8664,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-dl-15s",
           "httpRequest": {
@@ -8116,6 +8775,7 @@
       "timing": {
         "firstMs": 757,
         "gapsMs": [],
+        "lateMs": [36],
         "startsAtMs": [97031],
         "endsAtMs": [97032],
         "holdMs": [1]
@@ -8126,6 +8786,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-dl-1800s",
           "httpRequest": {
@@ -8228,6 +8897,7 @@
       "timing": {
         "firstMs": 95,
         "gapsMs": [],
+        "lateMs": [39],
         "startsAtMs": [98369],
         "endsAtMs": [98369],
         "holdMs": [0]
@@ -8238,6 +8908,14 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
@@ -8248,6 +8926,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -8258,6 +8937,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-dl-fraction",
           "httpRequest": {
@@ -8360,6 +9048,7 @@
       "timing": {
         "firstMs": 580,
         "gapsMs": [],
+        "lateMs": [46],
         "startsAtMs": [102854],
         "endsAtMs": [102855],
         "holdMs": [1]
@@ -8370,16 +9059,38 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "fieldViolations"],
+            "/error/details/0/fieldViolations/0": ["field", "description"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Invalid value at 'task.dispatch_deadline' (type.googleapis.com/google.protobuf.Duration), Field 'dispatchDeadline', Illegal duration format; duration must end with 's'"
+          "message": "Invalid value at 'task.dispatch_deadline' (type.googleapis.com/google.protobuf.Duration), Field 'dispatchDeadline', Illegal duration format; duration must end with 's'",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.BadRequest",
+              "fieldViolations": [
+                {
+                  "field": "task.dispatch_deadline",
+                  "description": "Invalid value at 'task.dispatch_deadline' (type.googleapis.com/google.protobuf.Duration), Field 'dispatchDeadline', Illegal duration format; duration must end with 's'"
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -8390,6 +9101,14 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
@@ -8400,6 +9119,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -8410,6 +9130,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-dl-zero",
           "httpRequest": {
@@ -8512,6 +9241,7 @@
       "timing": {
         "firstMs": 277,
         "gapsMs": [],
+        "lateMs": [50],
         "startsAtMs": [108551],
         "endsAtMs": [108552],
         "holdMs": [1]
@@ -8522,6 +9252,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-size-1000k",
           "httpRequest": {
@@ -8624,6 +9363,7 @@
       "timing": {
         "firstMs": 526,
         "gapsMs": [],
+        "lateMs": [70],
         "startsAtMs": [117800],
         "endsAtMs": [117801],
         "holdMs": [1]
@@ -8634,6 +9374,14 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
@@ -8644,6 +9392,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -8654,6 +9403,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/ID(19)",
           "httpRequest": {
@@ -8756,6 +9514,7 @@
       "timing": {
         "firstMs": 463,
         "gapsMs": [],
+        "lateMs": [48],
         "startsAtMs": [128737],
         "endsAtMs": [128737],
         "holdMs": [0]
@@ -8766,6 +9525,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-pw-02xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
           "httpRequest": {
@@ -8809,6 +9577,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -8819,16 +9588,43 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "fieldViolations"],
+            "/error/details/0/fieldViolations/0": ["field", "description"],
+            "/error/details/0/fieldViolations/1": ["field", "description"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Invalid value at 'task.schedule_time' (type.googleapis.com/google.protobuf.Timestamp), Field 'scheduleTime', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset.\nInvalid value at 'task.dispatch_deadline' (type.googleapis.com/google.protobuf.Duration), Field 'dispatchDeadline', Illegal duration format; duration must end with 's'"
+          "message": "Invalid value at 'task.schedule_time' (type.googleapis.com/google.protobuf.Timestamp), Field 'scheduleTime', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset.\nInvalid value at 'task.dispatch_deadline' (type.googleapis.com/google.protobuf.Duration), Field 'dispatchDeadline', Illegal duration format; duration must end with 's'",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.BadRequest",
+              "fieldViolations": [
+                {
+                  "field": "task.schedule_time",
+                  "description": "Invalid value at 'task.schedule_time' (type.googleapis.com/google.protobuf.Timestamp), Field 'scheduleTime', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset."
+                },
+                {
+                  "field": "task.dispatch_deadline",
+                  "description": "Invalid value at 'task.dispatch_deadline' (type.googleapis.com/google.protobuf.Duration), Field 'dispatchDeadline', Illegal duration format; duration must end with 's'"
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -8839,6 +9635,14 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
@@ -8849,6 +9653,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -8859,16 +9664,38 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "links"],
+            "/error/details/0/links/0": ["description", "url"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Task ID \"tqrun-RUN-pw-05 b\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters."
+          "message": "Task ID \"tqrun-RUN-pw-05 b\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters.",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.Help",
+              "links": [
+                {
+                  "description": "Definition of task ID",
+                  "url": "https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task.FIELDS.name"
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -8879,16 +9706,38 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "links"],
+            "/error/details/0/links/0": ["description", "url"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Task ID \"tqrun-RUN-pw-06 b\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters."
+          "message": "Task ID \"tqrun-RUN-pw-06 b\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters.",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.Help",
+              "links": [
+                {
+                  "description": "Definition of task ID",
+                  "url": "https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task.FIELDS.name"
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -8899,16 +9748,38 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "fieldViolations"],
+            "/error/details/0/fieldViolations/0": ["field", "description"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Invalid value at 'task.dispatch_deadline' (type.googleapis.com/google.protobuf.Duration), Field 'dispatchDeadline', Illegal duration format; duration must end with 's'"
+          "message": "Invalid value at 'task.dispatch_deadline' (type.googleapis.com/google.protobuf.Duration), Field 'dispatchDeadline', Illegal duration format; duration must end with 's'",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.BadRequest",
+              "fieldViolations": [
+                {
+                  "field": "task.dispatch_deadline",
+                  "description": "Invalid value at 'task.dispatch_deadline' (type.googleapis.com/google.protobuf.Duration), Field 'dispatchDeadline', Illegal duration format; duration must end with 's'"
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -8919,16 +9790,38 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "links"],
+            "/error/details/0/links/0": ["description", "url"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Task ID \"tqrun-RUN-pw-08xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters."
+          "message": "Task ID \"tqrun-RUN-pw-08xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters.",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.Help",
+              "links": [
+                {
+                  "description": "Definition of task ID",
+                  "url": "https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task.FIELDS.name"
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -8939,6 +9832,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-pw-09",
           "httpRequest": {
@@ -9041,6 +9943,7 @@
       "timing": {
         "firstMs": 715,
         "gapsMs": [],
+        "lateMs": [51],
         "startsAtMs": [143989],
         "endsAtMs": [143989],
         "holdMs": [0]
@@ -9051,16 +9954,38 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "fieldViolations"],
+            "/error/details/0/fieldViolations/0": ["field", "description"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Invalid value at 'task.schedule_time' (type.googleapis.com/google.protobuf.Timestamp), Field 'scheduleTime', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset."
+          "message": "Invalid value at 'task.schedule_time' (type.googleapis.com/google.protobuf.Timestamp), Field 'scheduleTime', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset.",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.BadRequest",
+              "fieldViolations": [
+                {
+                  "field": "task.schedule_time",
+                  "description": "Invalid value at 'task.schedule_time' (type.googleapis.com/google.protobuf.Timestamp), Field 'scheduleTime', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset."
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -9071,16 +9996,38 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "links"],
+            "/error/details/0/links/0": ["description", "url"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Task ID \"tqrun-RUN-pw-11xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters."
+          "message": "Task ID \"tqrun-RUN-pw-11xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters.",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.Help",
+              "links": [
+                {
+                  "description": "Definition of task ID",
+                  "url": "https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task.FIELDS.name"
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -9091,6 +10038,14 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
@@ -9101,6 +10056,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -9111,16 +10067,38 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "fieldViolations"],
+            "/error/details/0/fieldViolations/0": ["field", "description"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Invalid value at 'task.schedule_time' (type.googleapis.com/google.protobuf.Timestamp), Field 'scheduleTime', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset."
+          "message": "Invalid value at 'task.schedule_time' (type.googleapis.com/google.protobuf.Timestamp), Field 'scheduleTime', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset.",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.BadRequest",
+              "fieldViolations": [
+                {
+                  "field": "task.schedule_time",
+                  "description": "Invalid value at 'task.schedule_time' (type.googleapis.com/google.protobuf.Timestamp), Field 'scheduleTime', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset."
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -9131,16 +10109,38 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "links"],
+            "/error/details/0/links/0": ["description", "url"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Task ID \"tqrun-RUN-pw-14xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters."
+          "message": "Task ID \"tqrun-RUN-pw-14xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters.",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.Help",
+              "links": [
+                {
+                  "description": "Definition of task ID",
+                  "url": "https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task.FIELDS.name"
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -9151,16 +10151,38 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "fieldViolations"],
+            "/error/details/0/fieldViolations/0": ["field", "description"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Invalid value at 'task.schedule_time' (type.googleapis.com/google.protobuf.Timestamp), Field 'scheduleTime', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset."
+          "message": "Invalid value at 'task.schedule_time' (type.googleapis.com/google.protobuf.Timestamp), Field 'scheduleTime', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset.",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.BadRequest",
+              "fieldViolations": [
+                {
+                  "field": "task.schedule_time",
+                  "description": "Invalid value at 'task.schedule_time' (type.googleapis.com/google.protobuf.Timestamp), Field 'scheduleTime', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset."
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -9171,16 +10193,38 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "fieldViolations"],
+            "/error/details/0/fieldViolations/0": ["field", "description"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Invalid value at 'task.dispatch_deadline' (type.googleapis.com/google.protobuf.Duration), Field 'dispatchDeadline', Illegal duration format; duration must end with 's'"
+          "message": "Invalid value at 'task.dispatch_deadline' (type.googleapis.com/google.protobuf.Duration), Field 'dispatchDeadline', Illegal duration format; duration must end with 's'",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.BadRequest",
+              "fieldViolations": [
+                {
+                  "field": "task.dispatch_deadline",
+                  "description": "Invalid value at 'task.dispatch_deadline' (type.googleapis.com/google.protobuf.Duration), Field 'dispatchDeadline', Illegal duration format; duration must end with 's'"
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -9191,6 +10235,14 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
@@ -9201,6 +10253,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -9211,6 +10264,14 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
@@ -9221,6 +10282,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -9231,6 +10293,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/ID(19)",
           "httpRequest": {
@@ -9274,6 +10345,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -9284,16 +10356,38 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "fieldViolations"],
+            "/error/details/0/fieldViolations/0": ["field", "description"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Invalid value at 'task.dispatch_deadline' (type.googleapis.com/google.protobuf.Duration), Field 'dispatchDeadline', Illegal duration format; duration must end with 's'"
+          "message": "Invalid value at 'task.dispatch_deadline' (type.googleapis.com/google.protobuf.Duration), Field 'dispatchDeadline', Illegal duration format; duration must end with 's'",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.BadRequest",
+              "fieldViolations": [
+                {
+                  "field": "task.dispatch_deadline",
+                  "description": "Invalid value at 'task.dispatch_deadline' (type.googleapis.com/google.protobuf.Duration), Field 'dispatchDeadline', Illegal duration format; duration must end with 's'"
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -9304,16 +10398,38 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "fieldViolations"],
+            "/error/details/0/fieldViolations/0": ["field", "description"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Invalid value at 'task.schedule_time' (type.googleapis.com/google.protobuf.Timestamp), Field 'scheduleTime', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset."
+          "message": "Invalid value at 'task.schedule_time' (type.googleapis.com/google.protobuf.Timestamp), Field 'scheduleTime', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset.",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.BadRequest",
+              "fieldViolations": [
+                {
+                  "field": "task.schedule_time",
+                  "description": "Invalid value at 'task.schedule_time' (type.googleapis.com/google.protobuf.Timestamp), Field 'scheduleTime', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset."
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -9324,6 +10440,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/ID(20)",
           "httpRequest": {
@@ -9426,6 +10551,7 @@
       "timing": {
         "firstMs": 5243,
         "gapsMs": [],
+        "lateMs": [62],
         "startsAtMs": [172517],
         "endsAtMs": [172517],
         "holdMs": [0]
@@ -9436,16 +10562,38 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "links"],
+            "/error/details/0/links/0": ["description", "url"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Task ID \"tqrun-RUN-pw-23 b\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters."
+          "message": "Task ID \"tqrun-RUN-pw-23 b\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters.",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.Help",
+              "links": [
+                {
+                  "description": "Definition of task ID",
+                  "url": "https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task.FIELDS.name"
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -9456,16 +10604,38 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "links"],
+            "/error/details/0/links/0": ["description", "url"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Task ID \"tqrun-RUN-pw-24xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters."
+          "message": "Task ID \"tqrun-RUN-pw-24xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters.",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.Help",
+              "links": [
+                {
+                  "description": "Definition of task ID",
+                  "url": "https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task.FIELDS.name"
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -9476,16 +10646,38 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "fieldViolations"],
+            "/error/details/0/fieldViolations/0": ["field", "description"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Invalid value at 'task.dispatch_deadline' (type.googleapis.com/google.protobuf.Duration), Field 'dispatchDeadline', Illegal duration format; duration must end with 's'"
+          "message": "Invalid value at 'task.dispatch_deadline' (type.googleapis.com/google.protobuf.Duration), Field 'dispatchDeadline', Illegal duration format; duration must end with 's'",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.BadRequest",
+              "fieldViolations": [
+                {
+                  "field": "task.dispatch_deadline",
+                  "description": "Invalid value at 'task.dispatch_deadline' (type.googleapis.com/google.protobuf.Duration), Field 'dispatchDeadline', Illegal duration format; duration must end with 's'"
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -9496,6 +10688,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-pw-26xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
           "httpRequest": {
@@ -9598,6 +10799,7 @@
       "timing": {
         "firstMs": 4783,
         "gapsMs": [],
+        "lateMs": [38],
         "startsAtMs": [180057],
         "endsAtMs": [180057],
         "holdMs": [0]
@@ -9608,16 +10810,38 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "links"],
+            "/error/details/0/links/0": ["description", "url"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Task ID \"tqrun-RUN-pw-27 b\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters."
+          "message": "Task ID \"tqrun-RUN-pw-27 b\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters.",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.Help",
+              "links": [
+                {
+                  "description": "Definition of task ID",
+                  "url": "https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task.FIELDS.name"
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -9628,6 +10852,14 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
@@ -9638,6 +10870,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -9648,16 +10881,38 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "fieldViolations"],
+            "/error/details/0/fieldViolations/0": ["field", "description"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Invalid value at 'task.dispatch_deadline' (type.googleapis.com/google.protobuf.Duration), Field 'dispatchDeadline', Illegal duration format; duration must end with 's'"
+          "message": "Invalid value at 'task.dispatch_deadline' (type.googleapis.com/google.protobuf.Duration), Field 'dispatchDeadline', Illegal duration format; duration must end with 's'",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.BadRequest",
+              "fieldViolations": [
+                {
+                  "field": "task.dispatch_deadline",
+                  "description": "Invalid value at 'task.dispatch_deadline' (type.googleapis.com/google.protobuf.Duration), Field 'dispatchDeadline', Illegal duration format; duration must end with 's'"
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -9668,16 +10923,38 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "links"],
+            "/error/details/0/links/0": ["description", "url"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Task ID \"tqrun-RUN-pw-30xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters."
+          "message": "Task ID \"tqrun-RUN-pw-30xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters.",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.Help",
+              "links": [
+                {
+                  "description": "Definition of task ID",
+                  "url": "https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task.FIELDS.name"
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -9688,16 +10965,38 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "links"],
+            "/error/details/0/links/0": ["description", "url"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Task ID \"tqrun-RUN-pw-31 b\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters."
+          "message": "Task ID \"tqrun-RUN-pw-31 b\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters.",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.Help",
+              "links": [
+                {
+                  "description": "Definition of task ID",
+                  "url": "https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task.FIELDS.name"
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -9708,6 +11007,14 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
@@ -9718,6 +11025,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -9728,16 +11036,38 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status", "details"],
+            "/error/details/0": ["@type", "fieldViolations"],
+            "/error/details/0/fieldViolations/0": ["field", "description"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
-          "message": "Invalid value at 'task.schedule_time' (type.googleapis.com/google.protobuf.Timestamp), Field 'scheduleTime', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset."
+          "message": "Invalid value at 'task.schedule_time' (type.googleapis.com/google.protobuf.Timestamp), Field 'scheduleTime', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset.",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.BadRequest",
+              "fieldViolations": [
+                {
+                  "field": "task.schedule_time",
+                  "description": "Invalid value at 'task.schedule_time' (type.googleapis.com/google.protobuf.Timestamp), Field 'scheduleTime', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset."
+                }
+              ]
+            }
+          ]
         }
       },
       "deliveries": [],
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -9748,6 +11078,14 @@
       "sent": true,
       "admission": {
         "status": 400,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status"]
+          }
+        },
         "error": {
           "code": 400,
           "status": "INVALID_ARGUMENT",
@@ -9758,6 +11096,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -9768,6 +11107,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/ID(20)",
           "httpRequest": {
@@ -9870,6 +11218,7 @@
       "timing": {
         "firstMs": 91,
         "gapsMs": [],
+        "lateMs": [41],
         "startsAtMs": [189365],
         "endsAtMs": [189365],
         "holdMs": [0]
@@ -9880,6 +11229,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-pw-36",
           "httpRequest": {
@@ -9982,6 +11340,7 @@
       "timing": {
         "firstMs": 519,
         "gapsMs": [],
+        "lateMs": [40],
         "startsAtMs": [190793],
         "endsAtMs": [190793],
         "holdMs": [0]
@@ -9992,6 +11351,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-dup-first",
           "httpRequest": {
@@ -10094,6 +11462,7 @@
       "timing": {
         "firstMs": 709,
         "gapsMs": [],
+        "lateMs": [45],
         "startsAtMs": [192983],
         "endsAtMs": [192983],
         "holdMs": [0]
@@ -10104,6 +11473,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-dup-sched",
           "httpRequest": {
@@ -10147,6 +11525,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -10157,6 +11536,14 @@
       "sent": true,
       "admission": {
         "status": 409,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status"]
+          }
+        },
         "error": {
           "code": 409,
           "status": "ALREADY_EXISTS",
@@ -10167,6 +11554,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -10177,6 +11565,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-dup-sched",
           "httpRequest": {
@@ -10220,6 +11617,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -10230,6 +11628,13 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": []
+          }
+        },
         "body": {},
         "shape": {}
       },
@@ -10237,6 +11642,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -10247,6 +11653,14 @@
       "sent": true,
       "admission": {
         "status": 404,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status"]
+          }
+        },
         "error": {
           "code": 404,
           "status": "NOT_FOUND",
@@ -10257,6 +11671,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -10267,6 +11682,14 @@
       "sent": true,
       "admission": {
         "status": 409,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status"]
+          }
+        },
         "error": {
           "code": 409,
           "status": "ALREADY_EXISTS",
@@ -10277,6 +11700,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -10287,6 +11711,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqconc1/tasks/tqrun-RUN-dup-sched",
           "httpRequest": {
@@ -10389,6 +11822,7 @@
       "timing": {
         "firstMs": 724,
         "gapsMs": [],
+        "lateMs": [70],
         "startsAtMs": [204998],
         "endsAtMs": [204999],
         "holdMs": [1]
@@ -10399,6 +11833,14 @@
       "sent": true,
       "admission": {
         "status": 404,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status"]
+          }
+        },
         "error": {
           "code": 404,
           "status": "NOT_FOUND",
@@ -10409,6 +11851,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -10419,6 +11862,14 @@
       "sent": true,
       "admission": {
         "status": 409,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status"]
+          }
+        },
         "error": {
           "code": 409,
           "status": "ALREADY_EXISTS",
@@ -10429,6 +11880,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -10439,6 +11891,14 @@
       "sent": true,
       "admission": {
         "status": 404,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status"]
+          }
+        },
         "error": {
           "code": 404,
           "status": "NOT_FOUND",
@@ -10449,6 +11909,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -10459,6 +11920,14 @@
       "sent": true,
       "admission": {
         "status": 404,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status"]
+          }
+        },
         "error": {
           "code": 404,
           "status": "NOT_FOUND",
@@ -10469,6 +11938,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -10479,6 +11949,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "rateLimits", "retryConfig", "state"],
+            "/rateLimits": ["maxDispatchesPerSecond", "maxBurstSize", "maxConcurrentDispatches"],
+            "/retryConfig": ["maxAttempts", "minBackoff", "maxBackoff", "maxDoublings"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef",
           "rateLimits": {
@@ -10514,6 +11993,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -10524,6 +12004,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "rateLimits", "retryConfig", "state"],
+            "/rateLimits": ["maxDispatchesPerSecond", "maxBurstSize", "maxConcurrentDispatches"],
+            "/retryConfig": ["maxAttempts", "minBackoff", "maxBackoff", "maxDoublings"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqretry",
           "rateLimits": {
@@ -10559,6 +12048,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -10569,6 +12059,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "rateLimits", "retryConfig", "state"],
+            "/rateLimits": ["maxDispatchesPerSecond", "maxBurstSize", "maxConcurrentDispatches"],
+            "/retryConfig": ["maxAttempts", "minBackoff", "maxBackoff", "maxDoublings"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqlimit",
           "rateLimits": {
@@ -10604,6 +12103,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -10614,6 +12114,21 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "rateLimits", "retryConfig", "state"],
+            "/rateLimits": ["maxDispatchesPerSecond", "maxBurstSize", "maxConcurrentDispatches"],
+            "/retryConfig": [
+              "maxAttempts",
+              "maxRetryDuration",
+              "minBackoff",
+              "maxBackoff",
+              "maxDoublings"
+            ]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqwindow",
           "rateLimits": {
@@ -10651,6 +12166,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -10661,6 +12177,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "rateLimits", "retryConfig", "state"],
+            "/rateLimits": ["maxDispatchesPerSecond", "maxBurstSize", "maxConcurrentDispatches"],
+            "/retryConfig": ["maxAttempts", "minBackoff", "maxBackoff", "maxDoublings"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqconc1",
           "rateLimits": {
@@ -10696,6 +12221,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -10706,6 +12232,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "rateLimits", "retryConfig", "state"],
+            "/rateLimits": ["maxDispatchesPerSecond", "maxBurstSize", "maxConcurrentDispatches"],
+            "/retryConfig": ["maxAttempts", "minBackoff", "maxBackoff", "maxDoublings"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqconc2",
           "rateLimits": {
@@ -10741,6 +12276,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -10751,6 +12287,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "rateLimits", "retryConfig", "state"],
+            "/rateLimits": ["maxDispatchesPerSecond", "maxBurstSize", "maxConcurrentDispatches"],
+            "/retryConfig": ["maxAttempts", "minBackoff", "maxBackoff", "maxDoublings"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqrate",
           "rateLimits": {
@@ -10786,6 +12331,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -10796,6 +12342,15 @@
       "sent": true,
       "admission": {
         "status": 200,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "rateLimits", "retryConfig", "state"],
+            "/rateLimits": ["maxDispatchesPerSecond", "maxBurstSize", "maxConcurrentDispatches"],
+            "/retryConfig": ["maxAttempts", "minBackoff", "maxBackoff", "maxDoublings"]
+          }
+        },
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdead",
           "rateLimits": {
@@ -10831,6 +12386,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []
@@ -10841,6 +12397,14 @@
       "sent": true,
       "admission": {
         "status": 404,
+        "layout": {
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status"]
+          }
+        },
         "error": {
           "code": 404,
           "status": "NOT_FOUND",
@@ -10851,6 +12415,7 @@
       "timing": {
         "firstMs": null,
         "gapsMs": [],
+        "lateMs": [],
         "startsAtMs": [],
         "endsAtMs": [],
         "holdMs": []

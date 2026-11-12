@@ -1,4 +1,5 @@
 {
+  "kind": "task-queue-comparison-v1",
   "schemaVersion": 1,
   "left": {
     "alias": "pass-1",
@@ -16,22 +17,17 @@
     {
       "id": "volatile-edge-header",
       "what": "x-client-data is added to some deliveries by the front end and not to others (names set of one delivery, 16 or 17 names)",
-      "rows": 0
+      "rows": 3
     },
     {
       "id": "eta-digits",
       "what": "X-CloudTasks-TaskETA is a Unix time with three to seven fractional digits (a float printed without trailing zeros)",
-      "rows": 0
+      "rows": 50
     },
     {
       "id": "numeric-id-length",
       "what": "a generated task id is a decimal number of 19 or 20 digits",
-      "rows": 0
-    },
-    {
-      "id": "attempt-count-jitter",
-      "what": "the number of attempts of a queue whose retry window does not bound them differs by at most {\"window-six\":100}",
-      "rows": 0
+      "rows": 5
     }
   ],
   "knownDifferences": [
@@ -66,15 +62,6 @@
       "rows": 11
     },
     {
-      "id": "KD-OIDC-TOKEN",
-      "cases": "*",
-      "part": "deliveries",
-      "ruling": 3,
-      "what": "Production delivers an OIDC Authorization header (a Bearer with three segments) and the task's own Authorization header is replaced by it; fireemu has no issuer to mint one, so no Authorization arrives and the SDK's auth context is absent (hasAuth).",
-      "paths": [],
-      "rows": 50
-    },
-    {
       "id": "KD-PLATFORM-HEADERS",
       "cases": "*",
       "part": "deliveries",
@@ -84,12 +71,15 @@
       "rows": 50
     },
     {
-      "id": "KD-SCHEDULE-CLOCK-SKEW",
-      "cases": ["pw-22", "pw-26"],
-      "part": "timing",
-      "ruling": 3,
-      "what": "A task scheduled a few seconds ahead of the client's clock is delivered after the delay between the server's create time and that scheduleTime, which holds the skew between the client's clock and Cloud Tasks' (production's two runs differ by 0.7 s and 1.1 s on these cases for a 5 s schedule); locally both clocks are one. The allowance covers only a first delivery that is outside the tolerance, and adds to the tolerance no more than the spread production showed between its two runs of the same case. Exact timing is outside the scope (ruling 3).",
-      "paths": ["/.*/"],
+      "id": "KD-OBSERVATION-WINDOW",
+      "cases": ["window-six"],
+      "part": "deliveries",
+      "ruling": 16,
+      "what": "A queue that retries a hundred times is observed for as long as the run lasts (45 and 44 attempts in the two recordings, about 24 locally), so the deliveries of the two sides are compared up to the shorter side, which must hold at least 18 attempts: the first eleven gaps follow the declared schedule and the gaps from the twelfth on are 4, 8 and 10 s in production and in strict under productionExact. Which gaps follow after the last one observed, and how the growth depends on the declared maxBackoff, are not recorded.",
+      "paths": [],
+      "window": {
+        "minAttempts": 18
+      },
       "rows": 1
     },
     {
@@ -132,9 +122,8 @@
       "MATCH": 72
     },
     "timing": {
-      "WITHIN": 103,
-      "NOT_COMPARED": 18,
-      "KNOWN_DIFFERENCE": 1
+      "WITHIN": 105,
+      "NOT_COMPARED": 17
     }
   },
   "rows": [
@@ -148,7 +137,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -165,7 +154,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -182,7 +171,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -199,11 +188,18 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-OBSERVATION-WINDOW", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
-        "verdict": "NOT_COMPARED"
+        "verdict": "WITHIN"
+      },
+      "observationWindow": {
+        "attempts": {
+          "left": 45,
+          "right": 20
+        },
+        "compared": 20
       }
     },
     {
@@ -216,7 +212,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -233,7 +229,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -250,7 +246,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -267,7 +263,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -284,7 +280,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -301,7 +297,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -318,7 +314,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -335,7 +331,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -352,7 +348,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -369,7 +365,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -386,7 +382,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -403,7 +399,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -420,7 +416,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -437,7 +433,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -454,7 +450,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -471,7 +467,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -488,7 +484,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -505,7 +501,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -522,7 +518,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -539,7 +535,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -556,7 +552,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -573,7 +569,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -590,7 +586,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -607,7 +603,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -624,7 +620,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -641,7 +637,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -658,7 +654,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -675,7 +671,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -692,7 +688,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -709,7 +705,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -726,7 +722,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -969,7 +965,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -986,7 +982,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -1063,7 +1059,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -1080,7 +1076,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -1112,7 +1108,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -1159,7 +1155,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -1176,7 +1172,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -1208,7 +1204,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -1331,7 +1327,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -1529,7 +1525,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -1591,22 +1587,12 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
-        "verdict": "KNOWN_DIFFERENCE",
-        "why": "first",
-        "a": 3712,
-        "b": 5444,
-        "allowance": {
-          "differenceMs": 1732,
-          "toleranceMs": 1500,
-          "excessMs": 232,
-          "productionSpreadMs": 1071
-        }
-      },
-      "timingKnownDifference": "KD-SCHEDULE-CLOCK-SKEW"
+        "verdict": "WITHIN"
+      }
     },
     {
       "case": "pw-27",
@@ -1738,7 +1724,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -1755,7 +1741,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -1772,7 +1758,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -1881,7 +1867,7 @@
         },
         "deliveries": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-LOCAL-PATH", "KD-OIDC-TOKEN", "KD-PLATFORM-HEADERS"]
+          "knownDifferences": ["KD-LOCAL-PATH", "KD-PLATFORM-HEADERS"]
         }
       },
       "timing": {
@@ -2094,5 +2080,5 @@
       }
     }
   ],
-  "digest": "ec6e953aaf333cdd8b554106278e104da84d5e518dd36b31eb66521e4e591df8"
+  "digest": "0ba47978dcea63c55492bbf830daead846381c5c053bf6ee377d3e7a70443266"
 }

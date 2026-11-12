@@ -12,7 +12,7 @@
     ],
     "runtime": "nodejs22"
   },
-  "authority": "owner ledger 2417 (closure parent approved), 2459 (start); coordinator rulings of 2026-11-11",
+  "authority": "owner ledger 2417 (closure parent approved), 2459 (start); coordinator rulings of 2026-11-11 (1 to 11) and 2026-11-12 (12 to 21: per-key development defaults, the retry defaults and gaps, the identity token, the answer layout, the emulator profile unchanged)",
   "scopeDecisions": [
     {
       "id": "TQ-SCOPE",
@@ -36,8 +36,8 @@
     },
     {
       "id": "TQ-TIMING",
-      "decision": "A time-dependent condition is compared by bounds that two recordings support (a lower bound, an upper bound, an order, a count), never by exact milliseconds, and the judge states the tolerance it used.",
-      "status": "PROPOSED"
+      "decision": "A time-dependent condition is compared by bounds that two recordings support (a lower bound, an upper bound, an order, a count), never by exact equality. The first delivery is compared by how late it started after the time the task was due (the ETA header), which removes the service's rounding of the create time to whole seconds and the latency of the create call; each retry gap is compared within 1.5 s up to the shorter side of a queue observed for as long as the run lasted. A timing known difference must carry a bound (ruling 21).",
+      "status": "ANSWERED"
     }
   ],
   "conditions": [
@@ -58,12 +58,12 @@
         {
           "alias": "pass-1",
           "fixturePath": "conformance/task-queue-production-pass-1.json",
-          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+          "fixtureSha256": "9741ceb6a713a90a671a6f0253f91ec2f841450c315f6f5488f34efd63e38409"
         },
         {
           "alias": "pass-2",
           "fixturePath": "conformance/task-queue-production-pass-2.json",
-          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+          "fixtureSha256": "385b47fe438c15e370dbca30f28ef69aaa66311d39c81d3e94fc9a8366850273"
         }
       ],
       "observedPasses": 2,
@@ -103,7 +103,6 @@
       "knownDifferences": [
         "KD-LOCAL-PATH",
         "KD-LOCAL-URL",
-        "KD-OIDC-TOKEN",
         "KD-PLATFORM-HEADERS"
       ],
       "profiles": {
@@ -166,12 +165,12 @@
         {
           "alias": "pass-1",
           "fixturePath": "conformance/task-queue-production-pass-1.json",
-          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+          "fixtureSha256": "9741ceb6a713a90a671a6f0253f91ec2f841450c315f6f5488f34efd63e38409"
         },
         {
           "alias": "pass-2",
           "fixturePath": "conformance/task-queue-production-pass-2.json",
-          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+          "fixtureSha256": "385b47fe438c15e370dbca30f28ef69aaa66311d39c81d3e94fc9a8366850273"
         }
       ],
       "observedPasses": 2,
@@ -211,10 +210,8 @@
       "knownDifferences": [
         "KD-LOCAL-PATH",
         "KD-LOCAL-URL",
-        "KD-OIDC-TOKEN",
         "KD-PLATFORM-HEADERS",
-        "KD-QUEUE-READS",
-        "KD-SCHEDULE-CLOCK-SKEW"
+        "KD-QUEUE-READS"
       ],
       "profiles": {
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
@@ -280,12 +277,12 @@
         {
           "alias": "pass-1",
           "fixturePath": "conformance/task-queue-production-pass-1.json",
-          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+          "fixtureSha256": "9741ceb6a713a90a671a6f0253f91ec2f841450c315f6f5488f34efd63e38409"
         },
         {
           "alias": "pass-2",
           "fixturePath": "conformance/task-queue-production-pass-2.json",
-          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+          "fixtureSha256": "385b47fe438c15e370dbca30f28ef69aaa66311d39c81d3e94fc9a8366850273"
         }
       ],
       "observedPasses": 2,
@@ -325,9 +322,7 @@
       "knownDifferences": [
         "KD-LOCAL-PATH",
         "KD-LOCAL-URL",
-        "KD-OIDC-TOKEN",
-        "KD-PLATFORM-HEADERS",
-        "KD-SCHEDULE-CLOCK-SKEW"
+        "KD-PLATFORM-HEADERS"
       ],
       "profiles": {
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
@@ -354,12 +349,12 @@
         {
           "alias": "pass-1",
           "fixturePath": "conformance/task-queue-production-pass-1.json",
-          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+          "fixtureSha256": "9741ceb6a713a90a671a6f0253f91ec2f841450c315f6f5488f34efd63e38409"
         },
         {
           "alias": "pass-2",
           "fixturePath": "conformance/task-queue-production-pass-2.json",
-          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+          "fixtureSha256": "385b47fe438c15e370dbca30f28ef69aaa66311d39c81d3e94fc9a8366850273"
         }
       ],
       "observedPasses": 2,
@@ -399,7 +394,6 @@
       "knownDifferences": [
         "KD-LOCAL-PATH",
         "KD-LOCAL-URL",
-        "KD-OIDC-TOKEN",
         "KD-PLATFORM-HEADERS",
         "KD-QUEUE-READS"
       ],
@@ -426,12 +420,12 @@
         {
           "alias": "pass-1",
           "fixturePath": "conformance/task-queue-production-pass-1.json",
-          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+          "fixtureSha256": "9741ceb6a713a90a671a6f0253f91ec2f841450c315f6f5488f34efd63e38409"
         },
         {
           "alias": "pass-2",
           "fixturePath": "conformance/task-queue-production-pass-2.json",
-          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+          "fixtureSha256": "385b47fe438c15e370dbca30f28ef69aaa66311d39c81d3e94fc9a8366850273"
         }
       ],
       "observedPasses": 2,
@@ -471,7 +465,6 @@
       "knownDifferences": [
         "KD-LOCAL-PATH",
         "KD-LOCAL-URL",
-        "KD-OIDC-TOKEN",
         "KD-PLATFORM-HEADERS",
         "KD-QUEUE-READS"
       ],
@@ -494,12 +487,12 @@
         {
           "alias": "pass-1",
           "fixturePath": "conformance/task-queue-production-pass-1.json",
-          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+          "fixtureSha256": "9741ceb6a713a90a671a6f0253f91ec2f841450c315f6f5488f34efd63e38409"
         },
         {
           "alias": "pass-2",
           "fixturePath": "conformance/task-queue-production-pass-2.json",
-          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+          "fixtureSha256": "385b47fe438c15e370dbca30f28ef69aaa66311d39c81d3e94fc9a8366850273"
         }
       ],
       "reason": "The end of the reuse window was not observed: the window is documented as about one hour and strict under productionExact refuses a name for 3600 seconds after it finished or was deleted. A stage 2 packet of about 70 minutes would record the expiry; stage 1 leaves the refusal inside the window recorded, so the packet is recommended against unless the coordinator wants the length measured (ruling 4)."
@@ -565,12 +558,12 @@
         {
           "alias": "pass-1",
           "fixturePath": "conformance/task-queue-production-pass-1.json",
-          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+          "fixtureSha256": "9741ceb6a713a90a671a6f0253f91ec2f841450c315f6f5488f34efd63e38409"
         },
         {
           "alias": "pass-2",
           "fixturePath": "conformance/task-queue-production-pass-2.json",
-          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+          "fixtureSha256": "385b47fe438c15e370dbca30f28ef69aaa66311d39c81d3e94fc9a8366850273"
         }
       ],
       "observedPasses": 2,
@@ -610,9 +603,7 @@
       "knownDifferences": [
         "KD-LOCAL-PATH",
         "KD-LOCAL-URL",
-        "KD-OIDC-TOKEN",
-        "KD-PLATFORM-HEADERS",
-        "KD-SCHEDULE-CLOCK-SKEW"
+        "KD-PLATFORM-HEADERS"
       ],
       "profiles": {
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
@@ -635,12 +626,12 @@
         {
           "alias": "pass-1",
           "fixturePath": "conformance/task-queue-production-pass-1.json",
-          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+          "fixtureSha256": "9741ceb6a713a90a671a6f0253f91ec2f841450c315f6f5488f34efd63e38409"
         },
         {
           "alias": "pass-2",
           "fixturePath": "conformance/task-queue-production-pass-2.json",
-          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+          "fixtureSha256": "385b47fe438c15e370dbca30f28ef69aaa66311d39c81d3e94fc9a8366850273"
         }
       ],
       "observedPasses": 2,
@@ -680,7 +671,6 @@
       "knownDifferences": [
         "KD-LOCAL-PATH",
         "KD-LOCAL-URL",
-        "KD-OIDC-TOKEN",
         "KD-PLATFORM-HEADERS"
       ],
       "profiles": {
@@ -747,12 +737,12 @@
         {
           "alias": "pass-1",
           "fixturePath": "conformance/task-queue-production-pass-1.json",
-          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+          "fixtureSha256": "9741ceb6a713a90a671a6f0253f91ec2f841450c315f6f5488f34efd63e38409"
         },
         {
           "alias": "pass-2",
           "fixturePath": "conformance/task-queue-production-pass-2.json",
-          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+          "fixtureSha256": "385b47fe438c15e370dbca30f28ef69aaa66311d39c81d3e94fc9a8366850273"
         }
       ],
       "observedPasses": 2,
@@ -792,9 +782,7 @@
       "knownDifferences": [
         "KD-LOCAL-PATH",
         "KD-LOCAL-URL",
-        "KD-OIDC-TOKEN",
-        "KD-PLATFORM-HEADERS",
-        "KD-SCHEDULE-CLOCK-SKEW"
+        "KD-PLATFORM-HEADERS"
       ],
       "profiles": {
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
@@ -819,12 +807,12 @@
         {
           "alias": "pass-1",
           "fixturePath": "conformance/task-queue-production-pass-1.json",
-          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+          "fixtureSha256": "9741ceb6a713a90a671a6f0253f91ec2f841450c315f6f5488f34efd63e38409"
         },
         {
           "alias": "pass-2",
           "fixturePath": "conformance/task-queue-production-pass-2.json",
-          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+          "fixtureSha256": "385b47fe438c15e370dbca30f28ef69aaa66311d39c81d3e94fc9a8366850273"
         }
       ],
       "observedPasses": 2,
@@ -864,7 +852,6 @@
       "knownDifferences": [
         "KD-LOCAL-PATH",
         "KD-LOCAL-URL",
-        "KD-OIDC-TOKEN",
         "KD-PLATFORM-HEADERS"
       ],
       "profiles": {
@@ -890,12 +877,12 @@
         {
           "alias": "pass-1",
           "fixturePath": "conformance/task-queue-production-pass-1.json",
-          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+          "fixtureSha256": "9741ceb6a713a90a671a6f0253f91ec2f841450c315f6f5488f34efd63e38409"
         },
         {
           "alias": "pass-2",
           "fixturePath": "conformance/task-queue-production-pass-2.json",
-          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+          "fixtureSha256": "385b47fe438c15e370dbca30f28ef69aaa66311d39c81d3e94fc9a8366850273"
         }
       ],
       "observedPasses": 2,
@@ -935,7 +922,6 @@
       "knownDifferences": [
         "KD-LOCAL-PATH",
         "KD-LOCAL-URL",
-        "KD-OIDC-TOKEN",
         "KD-PLATFORM-HEADERS"
       ],
       "profiles": {
@@ -962,12 +948,12 @@
         {
           "alias": "pass-1",
           "fixturePath": "conformance/task-queue-production-pass-1.json",
-          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+          "fixtureSha256": "9741ceb6a713a90a671a6f0253f91ec2f841450c315f6f5488f34efd63e38409"
         },
         {
           "alias": "pass-2",
           "fixturePath": "conformance/task-queue-production-pass-2.json",
-          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+          "fixtureSha256": "385b47fe438c15e370dbca30f28ef69aaa66311d39c81d3e94fc9a8366850273"
         }
       ],
       "observedPasses": 2,
@@ -1007,7 +993,6 @@
       "knownDifferences": [
         "KD-LOCAL-PATH",
         "KD-LOCAL-URL",
-        "KD-OIDC-TOKEN",
         "KD-PLATFORM-HEADERS"
       ],
       "profiles": {
@@ -1030,12 +1015,12 @@
         {
           "alias": "pass-1",
           "fixturePath": "conformance/task-queue-production-pass-1.json",
-          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+          "fixtureSha256": "9741ceb6a713a90a671a6f0253f91ec2f841450c315f6f5488f34efd63e38409"
         },
         {
           "alias": "pass-2",
           "fixturePath": "conformance/task-queue-production-pass-2.json",
-          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+          "fixtureSha256": "385b47fe438c15e370dbca30f28ef69aaa66311d39c81d3e94fc9a8366850273"
         }
       ],
       "observedPasses": 2,
@@ -1075,7 +1060,6 @@
       "knownDifferences": [
         "KD-LOCAL-PATH",
         "KD-LOCAL-URL",
-        "KD-OIDC-TOKEN",
         "KD-PLATFORM-HEADERS"
       ],
       "profiles": {
@@ -1105,12 +1089,12 @@
         {
           "alias": "pass-1",
           "fixturePath": "conformance/task-queue-production-pass-1.json",
-          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+          "fixtureSha256": "9741ceb6a713a90a671a6f0253f91ec2f841450c315f6f5488f34efd63e38409"
         },
         {
           "alias": "pass-2",
           "fixturePath": "conformance/task-queue-production-pass-2.json",
-          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+          "fixtureSha256": "385b47fe438c15e370dbca30f28ef69aaa66311d39c81d3e94fc9a8366850273"
         }
       ],
       "reason": "The queue settings are read back with getQueue, which is the Cloud Tasks queue management API: neither fireemu nor the official emulator serves it (coordinator ruling 3). The settings read from production are recorded in both recordings (the queue-* cases) and their effects are compared by retry-backoff-schedule, retry-limits and max-concurrent-dispatches."
@@ -1131,12 +1115,12 @@
         {
           "alias": "pass-1",
           "fixturePath": "conformance/task-queue-production-pass-1.json",
-          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+          "fixtureSha256": "9741ceb6a713a90a671a6f0253f91ec2f841450c315f6f5488f34efd63e38409"
         },
         {
           "alias": "pass-2",
           "fixturePath": "conformance/task-queue-production-pass-2.json",
-          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+          "fixtureSha256": "385b47fe438c15e370dbca30f28ef69aaa66311d39c81d3e94fc9a8366850273"
         }
       ],
       "observedPasses": 2,
@@ -1176,7 +1160,6 @@
       "knownDifferences": [
         "KD-LOCAL-PATH",
         "KD-LOCAL-URL",
-        "KD-OIDC-TOKEN",
         "KD-PLATFORM-HEADERS"
       ],
       "profiles": {
@@ -1200,12 +1183,12 @@
         {
           "alias": "pass-1",
           "fixturePath": "conformance/task-queue-production-pass-1.json",
-          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+          "fixtureSha256": "9741ceb6a713a90a671a6f0253f91ec2f841450c315f6f5488f34efd63e38409"
         },
         {
           "alias": "pass-2",
           "fixturePath": "conformance/task-queue-production-pass-2.json",
-          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+          "fixtureSha256": "385b47fe438c15e370dbca30f28ef69aaa66311d39c81d3e94fc9a8366850273"
         }
       ],
       "observedPasses": 2,
@@ -1245,7 +1228,6 @@
       "knownDifferences": [
         "KD-LOCAL-PATH",
         "KD-LOCAL-URL",
-        "KD-OIDC-TOKEN",
         "KD-PLATFORM-HEADERS"
       ],
       "profiles": {
@@ -1270,12 +1252,12 @@
         {
           "alias": "pass-1",
           "fixturePath": "conformance/task-queue-production-pass-1.json",
-          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+          "fixtureSha256": "9741ceb6a713a90a671a6f0253f91ec2f841450c315f6f5488f34efd63e38409"
         },
         {
           "alias": "pass-2",
           "fixturePath": "conformance/task-queue-production-pass-2.json",
-          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+          "fixtureSha256": "385b47fe438c15e370dbca30f28ef69aaa66311d39c81d3e94fc9a8366850273"
         }
       ],
       "observedPasses": 2,
@@ -1285,8 +1267,8 @@
           "rows": 3,
           "counts": {
             "MATCH": 0,
-            "MATCH_LAYOUT": 3,
-            "KNOWN_DIFFERENCE": 0,
+            "MATCH_LAYOUT": 2,
+            "KNOWN_DIFFERENCE": 1,
             "MISMATCH": 0,
             "UNKNOWN": 0
           }
@@ -1315,7 +1297,7 @@
       "knownDifferences": [
         "KD-LOCAL-PATH",
         "KD-LOCAL-URL",
-        "KD-OIDC-TOKEN",
+        "KD-OBSERVATION-WINDOW",
         "KD-PLATFORM-HEADERS"
       ],
       "profiles": {
@@ -1346,12 +1328,12 @@
         {
           "alias": "pass-1",
           "fixturePath": "conformance/task-queue-production-pass-1.json",
-          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+          "fixtureSha256": "9741ceb6a713a90a671a6f0253f91ec2f841450c315f6f5488f34efd63e38409"
         },
         {
           "alias": "pass-2",
           "fixturePath": "conformance/task-queue-production-pass-2.json",
-          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+          "fixtureSha256": "385b47fe438c15e370dbca30f28ef69aaa66311d39c81d3e94fc9a8366850273"
         }
       ],
       "observedPasses": 2,
@@ -1391,7 +1373,6 @@
       "knownDifferences": [
         "KD-LOCAL-PATH",
         "KD-LOCAL-URL",
-        "KD-OIDC-TOKEN",
         "KD-PLATFORM-HEADERS"
       ],
       "profiles": {
@@ -1421,12 +1402,12 @@
         {
           "alias": "pass-1",
           "fixturePath": "conformance/task-queue-production-pass-1.json",
-          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+          "fixtureSha256": "9741ceb6a713a90a671a6f0253f91ec2f841450c315f6f5488f34efd63e38409"
         },
         {
           "alias": "pass-2",
           "fixturePath": "conformance/task-queue-production-pass-2.json",
-          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+          "fixtureSha256": "385b47fe438c15e370dbca30f28ef69aaa66311d39c81d3e94fc9a8366850273"
         }
       ],
       "reason": "The program sent the eight tasks of the rate queue about 1.4 seconds apart in both production runs, so the limit never held a task back and no spacing or burst was observed; the local limiter spaces them one second apart. Rate and burst are not claimed (the rate cases carry no timing claim)."
@@ -1451,12 +1432,12 @@
         {
           "alias": "pass-1",
           "fixturePath": "conformance/task-queue-production-pass-1.json",
-          "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9"
+          "fixtureSha256": "9741ceb6a713a90a671a6f0253f91ec2f841450c315f6f5488f34efd63e38409"
         },
         {
           "alias": "pass-2",
           "fixturePath": "conformance/task-queue-production-pass-2.json",
-          "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb"
+          "fixtureSha256": "385b47fe438c15e370dbca30f28ef69aaa66311d39c81d3e94fc9a8366850273"
         }
       ],
       "observedPasses": 2,
@@ -1508,8 +1489,85 @@
       "recipeIds": [
         "task-queue/local-controls"
       ],
-      "status": "PLANNED",
-      "productionEvidence": []
+      "status": "VERIFIED",
+      "productionEvidence": [],
+      "localEvidence": [
+        {
+          "control": "virtual clock",
+          "file": "crates/fireemu-adapter-functions/tests/runtime.rs",
+          "test": "virtual_task_exact_retry_expiry_retires_rate_wait_and_long_backoff"
+        },
+        {
+          "control": "virtual clock",
+          "file": "crates/fireemu-adapter-functions/tests/task_strict_admission.rs",
+          "test": "a_finished_name_is_held_for_exactly_the_window_on_the_virtual_clock"
+        },
+        {
+          "control": "virtual clock",
+          "file": "crates/fireemu-adapter-functions/tests/task_strict_admission.rs",
+          "test": "the_retry_gaps_of_a_failing_task_follow_production_after_a_dozen_failures_in_strict"
+        },
+        {
+          "control": "Run now",
+          "file": "crates/fireemu-adapter-functions/tests/task_schedule_time.rs",
+          "test": "run_now_releases_a_waiting_task_and_only_the_named_one"
+        },
+        {
+          "control": "Run now",
+          "file": "crates/fireemu-adapter-functions/src/task_scheduler.rs",
+          "test": "run_now_releases_a_task_before_its_schedule_time_and_only_that_task"
+        },
+        {
+          "control": "queue statistics",
+          "file": "crates/fireemu-adapter-functions/src/task_scheduler.rs",
+          "test": "queue_statistics_report_pending_work_and_rate_limits"
+        },
+        {
+          "control": "queue statistics",
+          "file": "crates/fireemu-adapter-functions/src/task_scheduler.rs",
+          "test": "queue_statistics_history_is_bounded_when_queue_stats_is_never_read"
+        },
+        {
+          "control": "await-idle scope",
+          "file": "crates/fireemu-adapter-functions/tests/task_schedule_time.rs",
+          "test": "runnable_idle_retains_future_tasks_without_dispatch_or_schedule_mutation"
+        },
+        {
+          "control": "memory limits",
+          "file": "crates/fireemu-adapter-functions/src/task_scheduler.rs",
+          "test": "completed_name_history_is_bounded_by_bytes_as_well_as_count"
+        },
+        {
+          "control": "memory limits",
+          "file": "crates/fireemu-adapter-functions/src/task_scheduler.rs",
+          "test": "the_history_of_finished_names_holds_exactly_the_count_and_the_bytes_it_is_bounded_by"
+        },
+        {
+          "control": "memory limits",
+          "file": "crates/fireemu-adapter-functions/tests/task_strict_admission.rs",
+          "test": "the_task_size_counts_the_decoded_body_and_the_headers_against_one_mebibyte"
+        },
+        {
+          "control": "Host guard",
+          "file": "crates/fireemu-adapter-functions/tests/app_check_callable.rs",
+          "test": "the_functions_and_support_listeners_refuse_a_rebound_host"
+        },
+        {
+          "control": "bearer refusal",
+          "file": "crates/fireemu-adapter-functions/tests/strict_task_bearer.rs",
+          "test": "a_task_to_a_callable_in_code_needs_a_bearer_a_callable_request_would_accept"
+        },
+        {
+          "control": "name lifecycle",
+          "file": "crates/fireemu-adapter-functions/src/task_scheduler.rs",
+          "test": "a_name_is_free_live_or_finished_and_a_finished_one_is_released_by_the_reuse_rule"
+        },
+        {
+          "control": "listener",
+          "file": "crates/fireemu-adapter-functions/tests/task_strict_admission.rs",
+          "test": "the_strict_listener_deletes_with_json_and_refuses_other_methods"
+        }
+      ]
     },
     {
       "conditionId": "TASK-QUEUE-FUNCTIONS/final-artifact-regression",
@@ -1518,8 +1576,23 @@
       "recipeIds": [
         "task-queue/final-artifact-regression"
       ],
-      "status": "PLANNED",
-      "productionEvidence": []
+      "status": "VERIFIED",
+      "productionEvidence": [],
+      "regressionEvidence": {
+        "run": "R38",
+        "runner": "conformance/src/release-strict-regression.mjs",
+        "replay": "conformance/src/task-queue-production/release-replay.mjs",
+        "judge": "conformance/src/task-queue-production/release-judge.mjs",
+        "tests": [
+          "conformance/src/task-queue-production/release-judge.test.mjs",
+          "conformance/src/release-strict-regression.test.mjs",
+          "conformance/src/task-queue-production/strict-replay.test.mjs"
+        ],
+        "workflow": ".github/workflows/conformance.yml",
+        "workflowStep": "strict replay of the task queue recordings",
+        "releaseWorkflow": ".github/workflows/release.yml",
+        "releaseDependencies": "npm ci --prefix conformance/task-queue-functions/functions"
+      }
     },
     {
       "conditionId": "TASK-QUEUE-FUNCTIONS/closure-review",
@@ -1591,7 +1664,7 @@
       "run": "47574c",
       "envelope": "TASK-QUEUE-20261111-01",
       "fixturePath": "conformance/task-queue-production-pass-1.json",
-      "fixtureSha256": "125d4c332cfe431f318c100ca5385b08f6970d4cbf4f6b6607f817e27fefc8e9",
+      "fixtureSha256": "9741ceb6a713a90a671a6f0253f91ec2f841450c315f6f5488f34efd63e38409",
       "corpusSha256": "899fd699884992c7f96f8437d749237f16bbeafcc75ee5d41683373a741579e9",
       "recorderRequests": 230,
       "observationComplete": true,
@@ -1602,7 +1675,7 @@
       "run": "b01fa6",
       "envelope": "TASK-QUEUE-20261111-02",
       "fixturePath": "conformance/task-queue-production-pass-2.json",
-      "fixtureSha256": "9424f5567e1c4a86516d44609097f5c8b7e576153ad2958f0dedb09ddce59cdb",
+      "fixtureSha256": "385b47fe438c15e370dbca30f28ef69aaa66311d39c81d3e94fc9a8366850273",
       "corpusSha256": "899fd699884992c7f96f8437d749237f16bbeafcc75ee5d41683373a741579e9",
       "recorderRequests": 230,
       "observationComplete": true,
@@ -1614,29 +1687,37 @@
     "The in-memory Cloud Tasks of the recorder's tests is a model of documented rules, not an observation; no judge accepts a shape from it.",
     "A queue id cannot be created again for days after a delete (400 'existed too recently', measured 2026-11-07), so each attempt of a recording needs new function ids and a failed attempt costs a deploy.",
     "The reuse window of a task id is refused for 3600 seconds under strict productionExact (`functions.taskNameReuse` `production`, documented as about one hour); its expiry was not observed. The default profile frees a finished name at once, and an explicit key wins over productionExact.",
-    "Production's default queue retry config comes from a recording: the default queue of a function that declared no retry options read back (getQueue, both runs) with maxAttempts 100, minBackoff 0.100 s, maxBackoff 3600 s and maxDoublings 16 and no maxRetryDuration, the Cloud Tasks documentation's defaults. `functions.taskRetryDefaults` `production` (selected by productionExact) fills maxAttempts 100 for a field the function does not declare; the default profile keeps the official emulator's 3 attempts, and a declared value is always kept."
+    "Production's default queue retry config comes from a recording: the default queue of a function that declared no retry options read back (getQueue, both runs) with maxAttempts 100, minBackoff 0.100 s, maxBackoff 3600 s and maxDoublings 16 and no maxRetryDuration, the Cloud Tasks documentation's defaults. `functions.taskRetryDefaults` `production` (selected by productionExact) fills maxAttempts 100 for a field the function does not declare; the default profile keeps the official emulator's 3 attempts, and a declared value is always kept.",
+    "Production's retry gaps grew past the declared maxBackoff in both runs (queue tqwindow, maxBackoff 2 s, 100 attempts: 1 s, then ten gaps of 2 s, then 4 s three times, 8 s twice and 10 s from the seventeenth gap on). `functions.taskRetryBackoff` `production` (selected by productionExact) follows that schedule as a floor under the declared gap, and the comparison claims every gap of the shorter side. Not recorded: how the growth depends on the declared maxBackoff (no other queue of the program failed twelve times), whether it depends on the elapsed time, and the gaps after the observation ended; the length of the observation differs between runs, which is the observation-window known difference (ruling 16).",
+    "Strict delivers an `Authorization: Bearer` identity token of three segments to a task that named an `oidcToken`, so that `request.auth` is present in an `onTaskDispatched` handler as in production. The emulator issues it unsigned (`alg: none`, an empty third segment) with Google's claim names: only the scheme, the segment count and the presence of `request.auth` are production's, not the signature or the values (ruling 17).",
+    "The answers of createTask, deleteTask and the refusals are printed as production printed them (two-space JSON in proto field order with a newline at the end, `<`, `>` and `&` escaped, `application/json; charset=UTF-8`), including the `details` of an argument error; the order of the members of `headers` varied between production's runs and is not compared. The byte length is not compared because the task's URL differs (ruling 18).",
+    "A strict createTask whose body is not JSON is refused with 400, which production does not do (a task body is any bytes); the daemon needs a JSON body to deliver to an `onTaskDispatched` function. A refusal of that kind is not a recorded production answer.",
+    "The emulator profile is unchanged by this closure: it keeps the official emulator's answers, plain-text refusals, header shape, 100 KiB request limit, forever-kept names and retry defaults (ruling 20)."
   ],
   "outOfScope": [
     "Production deployment parity of task queue functions beyond the queue settings.",
     "No condition is promoted from official-emulator behaviour or documentation alone."
   ],
-  "followUps": [],
+  "followUps": [
+    "Rate and burst: a burst-send probe of a queue limited to one dispatch per second (ruling 14), tracked in docs.local/issues/open/task-queue-rate-burst-probe.md.",
+    "Recorder follow-ups S1 to S6 of the presend review and the CLI write parser fix, to be made before any further packet (ruling 15), tracked in docs.local/issues/open/task-queue-recorder-follow-ups.md."
+  ],
   "comparisons": {
     "runVsRun": {
       "path": "conformance/task-queue-production-run-comparison.json",
-      "sha256": "f9983431af553685626105c983e0861ccb58c2b1d1ae623a32d504483d5566af",
+      "sha256": "24c9080f866caa75c31e38e72f35aedb360eae99f28d2ac8f73613cf0d4b2c89",
       "rows": 122,
       "summary": {
         "MATCH": 90,
-        "MATCH_LAYOUT": 32,
-        "KNOWN_DIFFERENCE": 0,
+        "MATCH_LAYOUT": 31,
+        "KNOWN_DIFFERENCE": 1,
         "MISMATCH": 0,
         "UNKNOWN": 0
       }
     },
     "strictVsPass1": {
       "path": "conformance/task-queue-production-strict-vs-pass-1.json",
-      "sha256": "1dc521b38d90b0a810af992e3cd42ba27e96d238a29a39aa83ef547e82af9253",
+      "sha256": "0676487a2d98c37cb06f62038542f7527b198831b800fbe200ca9cb5d0dfc9bf",
       "rows": 122,
       "summary": {
         "MATCH": 57,
@@ -1648,7 +1729,7 @@
     },
     "strictVsPass2": {
       "path": "conformance/task-queue-production-strict-vs-pass-2.json",
-      "sha256": "884f0371c8a7f3fa65ae4d773ed651b138213cff07b62b04e7c1a113110e9b3d",
+      "sha256": "8a50fc974ad4680f4477e1d89ee24c364fcfae8773fc0ea42c9ee7dbf8f2a04c",
       "rows": 122,
       "summary": {
         "MATCH": 57,
@@ -1660,19 +1741,71 @@
     },
     "localStrictReplay": {
       "path": "conformance/task-queue-production-local-strict.json",
-      "sha256": "bf88fb8a5ce465702b095b01e9b6579827c08f4c063038325881b970fc5b5d38"
+      "sha256": "a8189faebb9514d049a7b30e14fe59b08045880f06ecc180ef663e6d0b0b6302",
+      "binarySha256": "edf1396254676143143341be5029d014332799f074061d150335a85a2a01ce60"
     }
   },
   "knownDifferences": {
     "path": "conformance/src/task-queue-production/known-differences.mjs",
-    "sha256": "3b3a97d374ebd72e4084f255526787cb812ccd7bb16bec3b10837314f6cd744e",
+    "sha256": "fd2b17eaf5dd442aaec8664487d937f58e50216b122a93469bb72c0476609a41",
     "entries": [
       "KD-LOCAL-URL",
       "KD-QUEUE-READS",
-      "KD-OIDC-TOKEN",
       "KD-PLATFORM-HEADERS",
-      "KD-SCHEDULE-CLOCK-SKEW",
+      "KD-OBSERVATION-WINDOW",
       "KD-LOCAL-PATH"
     ]
+  },
+  "integratedRegression": {
+    "status": "OFFLINE_PASS",
+    "suite": "conformance/src/task-queue-production/strict-replay.test.mjs",
+    "matrix": "conformance/TASK-QUEUE-MATRIX.md",
+    "scope": "the 122-step program served by the strict profile under productionExact against the two production recordings (comparisons)",
+    "comparisons": [
+      {
+        "path": "conformance/task-queue-production-run-comparison.json",
+        "sha256": "24c9080f866caa75c31e38e72f35aedb360eae99f28d2ac8f73613cf0d4b2c89",
+        "rows": 122,
+        "summary": {
+          "MATCH": 90,
+          "MATCH_LAYOUT": 31,
+          "KNOWN_DIFFERENCE": 1,
+          "MISMATCH": 0,
+          "UNKNOWN": 0
+        }
+      },
+      {
+        "path": "conformance/task-queue-production-strict-vs-pass-1.json",
+        "sha256": "0676487a2d98c37cb06f62038542f7527b198831b800fbe200ca9cb5d0dfc9bf",
+        "rows": 122,
+        "summary": {
+          "MATCH": 57,
+          "MATCH_LAYOUT": 0,
+          "KNOWN_DIFFERENCE": 65,
+          "MISMATCH": 0,
+          "UNKNOWN": 0
+        }
+      },
+      {
+        "path": "conformance/task-queue-production-strict-vs-pass-2.json",
+        "sha256": "8a50fc974ad4680f4477e1d89ee24c364fcfae8773fc0ea42c9ee7dbf8f2a04c",
+        "rows": 122,
+        "summary": {
+          "MATCH": 57,
+          "MATCH_LAYOUT": 0,
+          "KNOWN_DIFFERENCE": 65,
+          "MISMATCH": 0,
+          "UNKNOWN": 0
+        }
+      }
+    ],
+    "productionRequests": 0,
+    "result": "COMPARED_ON_RECORDED_CORPUS_WITH_KNOWN_DIFFERENCES",
+    "strictReplay": {
+      "test": "conformance/src/task-queue-production/strict-replay.test.mjs",
+      "command": "FIREEMU_BIN=<fireemu> node --test conformance/src/task-queue-production/strict-replay.test.mjs",
+      "requires": "the structure verdicts of every row equal the committed ones, with productionExact set (local.mjs does)"
+    },
+    "releaseBindingNote": "Run R38 of conformance/src/release-strict-regression.mjs reproduces the three comparisons on the packed binary (strict profile, productionExact, loopback only), judged by conformance/src/task-queue-production/release-judge.mjs: the same cases with the same structure and parts, no mismatch, no unknown, no timing outside twice the committed tolerance, both concurrency properties MATCH, and the comparison of the two recordings equal to the committed one. The conformance workflow runs the same replay on a fresh build (conformance.yml, step \"strict replay of the task queue recordings\")."
   }
 }

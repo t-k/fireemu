@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 use std::io::{IsTerminal as _, Write};
 use std::path::{Path, PathBuf};
 
-use crate::config::CANONICAL_SCHEMA_URL;
+use crate::config::installed_schema_url;
 use crate::CliError;
 
 static NEXT_TEMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -97,7 +97,7 @@ pub fn run(args: &[String]) -> Result<PathBuf, CliError> {
         let _ = crate::read_firebase_json(&source)?;
     }
     let mut document = serde_json::json!({
-        "$schema": CANONICAL_SCHEMA_URL,
+        "$schema": installed_schema_url(),
         "schemaVersion": 1,
         "profile": options.profile.unwrap_or(Profile::Strict).as_str(),
         "firestore": { "edition": "standard", "apiMode": "native" }
@@ -109,7 +109,8 @@ pub fn run(args: &[String]) -> Result<PathBuf, CliError> {
         document["firebaseJson"] = firebase_json.into();
     }
     let mut output_document = format!(
-        "#:schema {CANONICAL_SCHEMA_URL}\nschemaVersion = 1\nprofile = {}\n",
+        "#:schema {}\nschemaVersion = 1\nprofile = {}\n",
+        installed_schema_url(),
         document["profile"]
     );
     // Keep the required version and profile first without changing TOML table scope.
@@ -170,7 +171,7 @@ fn reference_document(is_toml: bool) -> String {
         }
     }
     let mut output = if is_toml {
-        format!("#:schema {CANONICAL_SCHEMA_URL}\n# This reference file is not loaded by fireemu. Edit fireemu.toml to configure it.\n# Copying a key into fireemu.toml makes it explicit and stops productionExact from switching that key. Commented examples are not active defaults.\n")
+        format!("#:schema {}\n# This reference file is not loaded by fireemu. Edit fireemu.toml to configure it.\n# Copying a key into fireemu.toml makes it explicit and stops productionExact from switching that key. Commented examples are not active defaults.\n", installed_schema_url())
     } else {
         String::from("// This reference file is not loaded by fireemu. Edit fireemu.json to configure it.\n// Do not create fireemu.toml beside fireemu.json.\n// Copying a key into fireemu.json makes it explicit and stops productionExact from switching that key. Commented examples are not active defaults.\n{\n")
     };
@@ -256,10 +257,15 @@ fn reference_document(is_toml: bool) -> String {
             }
             sections.push((path, commented, false));
         } else {
-            let value = schema
-                .get("default")
-                .or_else(|| schema.get("examples").and_then(|v| v.get(0)))
-                .or_else(|| schema.get("const"));
+            let installed = serde_json::Value::String(installed_schema_url());
+            let value = if path == "$schema" {
+                Some(&installed)
+            } else {
+                schema
+                    .get("default")
+                    .or_else(|| schema.get("examples").and_then(|v| v.get(0)))
+                    .or_else(|| schema.get("const"))
+            };
             let key = if path == "$schema" {
                 "\"$schema\""
             } else {
@@ -524,7 +530,42 @@ fn write_config(path: &Path, bytes: &[u8], force: bool) -> Result<(), CliError> 
     })
 }
 
-fn replace_config(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
+/// The file operations of [`replace_config_with`]; tests substitute one that fails.
+struct WriterOps {
+    write: fn(&mut std::fs::File, &[u8]) -> std::io::Result<()>,
+    sync: fn(&std::fs::File) -> std::io::Result<()>,
+    replace: fn(&Path, &Path) -> std::io::Result<()>,
+}
+
+const REAL_OPS: WriterOps = WriterOps {
+    write: |file, bytes| file.write_all(bytes),
+    sync: std::fs::File::sync_all,
+    // `rename` replaces an existing destination atomically on Unix (rename(2)) and on Windows
+    // (MoveFileExW with MOVEFILE_REPLACE_EXISTING), so the destination is never absent and no
+    // backup copy is needed.
+    replace: |temporary, destination| std::fs::rename(temporary, destination),
+};
+
+/// Replaces `path` atomically (a sibling temporary file renamed over it), keeping the
+/// permissions of an existing regular file. A symbolic link, even a dangling one, and anything
+/// that is not a regular file is refused. The temporary file is removed on failure, but only if
+/// this call created it. `fireemu config schema --out` shares this writer.
+pub(crate) fn replace_config(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
+    let sequence = NEXT_TEMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let name = path
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or("fireemu.toml");
+    let temporary = path.with_file_name(format!(".{name}.{}.{}.tmp", std::process::id(), sequence));
+    replace_config_with(path, bytes, &temporary, &REAL_OPS)
+}
+
+fn replace_config_with(
+    path: &Path,
+    bytes: &[u8],
+    temporary: &Path,
+    ops: &WriterOps,
+) -> Result<(), CliError> {
     let existing_permissions = match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             return Err(CliError::refused(format!(
@@ -547,105 +588,206 @@ fn replace_config(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
             )))
         }
     };
-    let existing = existing_permissions.is_some();
-    let sequence = NEXT_TEMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let name = path
-        .file_name()
-        .and_then(std::ffi::OsStr::to_str)
-        .unwrap_or("fireemu.toml");
-    let temporary = path.with_file_name(format!(".{name}.{}.{}.tmp", std::process::id(), sequence));
+    // `create_new` fails if the name exists, and then the file is not ours: it is left alone.
+    let mut temporary_file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(temporary)
+        .map_err(|e| {
+            CliError::refused(format!(
+                "cannot create {}: {e}",
+                crate::diagnostic_path(temporary)
+            ))
+        })?;
     let write_result = (|| -> Result<(), CliError> {
-        let mut temporary_file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-            .map_err(|e| {
-                CliError::refused(format!(
-                    "cannot create {}: {e}",
-                    crate::diagnostic_path(&temporary)
-                ))
-            })?;
-        temporary_file.write_all(bytes).map_err(|e| {
+        (ops.write)(&mut temporary_file, bytes).map_err(|e| {
             CliError::refused(format!(
                 "cannot write {}: {e}",
-                crate::diagnostic_path(&temporary)
+                crate::diagnostic_path(temporary)
             ))
         })?;
         if let Some(permissions) = existing_permissions {
             temporary_file.set_permissions(permissions).map_err(|e| {
                 CliError::refused(format!(
                     "cannot preserve permissions on {}: {e}",
-                    crate::diagnostic_path(&temporary)
+                    crate::diagnostic_path(temporary)
                 ))
             })?;
         }
-        temporary_file.sync_all().map_err(|e| {
+        (ops.sync)(&temporary_file).map_err(|e| {
             CliError::refused(format!(
                 "cannot sync {}: {e}",
-                crate::diagnostic_path(&temporary)
+                crate::diagnostic_path(temporary)
             ))
         })?;
-        drop(temporary_file);
-        replace_path(&temporary, path, existing)
+        Ok(())
     })();
-    if write_result.is_err() {
-        let _ = std::fs::remove_file(&temporary);
+    // Close the handle before the rename and before any removal (Windows refuses both while
+    // the file is open).
+    drop(temporary_file);
+    let result = write_result.and_then(|()| {
+        (ops.replace)(temporary, path).map_err(|e| {
+            CliError::refused(format!(
+                "cannot replace {} with {}: {e}",
+                crate::diagnostic_path(path),
+                crate::diagnostic_path(temporary)
+            ))
+        })
+    });
+    if result.is_err() {
+        let _ = std::fs::remove_file(temporary);
     }
-    write_result
+    result
 }
 
 const fn destination_is_missing(kind: std::io::ErrorKind) -> bool {
     matches!(kind, std::io::ErrorKind::NotFound)
 }
 
-#[cfg(not(windows))]
-fn replace_path(temporary: &Path, destination: &Path, _existing: bool) -> Result<(), CliError> {
-    std::fs::rename(temporary, destination).map_err(|e| {
-        CliError::refused(format!(
-            "cannot replace {} with {}: {e}",
-            crate::diagnostic_path(destination),
-            crate::diagnostic_path(temporary)
-        ))
-    })
-}
+#[cfg(test)]
+mod writer_tests {
+    use super::{replace_config, replace_config_with, WriterOps, REAL_OPS};
+    use std::io::{Error, Write as _};
+    use std::path::{Path, PathBuf};
 
-#[cfg(windows)]
-fn replace_path(temporary: &Path, destination: &Path, existing: bool) -> Result<(), CliError> {
-    if !existing {
-        return std::fs::rename(temporary, destination).map_err(|e| {
-            CliError::refused(format!(
-                "cannot install {} as {}: {e}",
-                crate::diagnostic_path(temporary),
-                crate::diagnostic_path(destination)
-            ))
-        });
+    /// A directory removed with everything in it when dropped, also after a failed assertion.
+    struct Dir(PathBuf);
+
+    impl Dir {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir()
+                .join(format!("fireemu-init-writer-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+
+        fn names(&self) -> Vec<String> {
+            let mut names: Vec<String> = std::fs::read_dir(&self.0)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        }
     }
-    let backup = temporary.with_extension("bak");
-    std::fs::rename(destination, &backup).map_err(|e| {
-        CliError::refused(format!(
-            "cannot prepare {} for replacement: {e}",
-            crate::diagnostic_path(destination)
-        ))
-    })?;
-    match std::fs::rename(temporary, destination) {
-        Ok(()) => std::fs::remove_file(&backup).map_err(|error| {
-            CliError::refused(format!(
-                "replaced {}, but cannot remove the old configuration at {}: {error}",
-                crate::diagnostic_path(destination),
-                crate::diagnostic_path(&backup)
-            ))
-        }),
-        Err(replace_error) => match std::fs::rename(&backup, destination) {
-            Ok(()) => Err(CliError::refused(format!(
-                "cannot replace {}: {replace_error}; the original was restored",
-                crate::diagnostic_path(destination)
-            ))),
-            Err(restore_error) => Err(CliError::refused(format!(
-                "cannot replace {}: {replace_error}; cannot restore it: {restore_error}; the original remains at {}",
-                crate::diagnostic_path(destination),
-                crate::diagnostic_path(&backup)
-            ))),
+
+    impl Drop for Dir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn io_error() -> Error {
+        Error::other("injected")
+    }
+
+    /// Writes half of the bytes and then fails, as a full disk would.
+    const PARTIAL_WRITE: WriterOps = WriterOps {
+        write: |file, bytes| {
+            file.write_all(&bytes[..bytes.len() / 2])?;
+            Err(io_error())
         },
+        ..REAL_OPS
+    };
+    const FAILING_SYNC: WriterOps = WriterOps {
+        sync: |_| Err(io_error()),
+        ..REAL_OPS
+    };
+    const FAILING_REPLACE: WriterOps = WriterOps {
+        replace: |_, _| Err(io_error()),
+        ..REAL_OPS
+    };
+
+    fn temporary(dir: &Dir) -> PathBuf {
+        dir.0.join(".target.tmp")
+    }
+
+    #[test]
+    fn a_failure_at_any_step_leaves_the_destination_and_no_temporary_file() {
+        for (label, ops, expected) in [
+            ("write", &PARTIAL_WRITE, "cannot write"),
+            ("sync", &FAILING_SYNC, "cannot sync"),
+            ("replace", &FAILING_REPLACE, "cannot replace"),
+        ] {
+            let dir = Dir::new(&format!("failure-{label}"));
+            let destination = dir.0.join("target");
+            std::fs::write(&destination, b"original").unwrap();
+            let error = replace_config_with(&destination, b"new content", &temporary(&dir), ops)
+                .unwrap_err();
+            assert!(
+                error.message.contains(expected),
+                "{label}: {}",
+                error.message
+            );
+            assert_eq!(std::fs::read(&destination).unwrap(), b"original", "{label}");
+            assert_eq!(
+                dir.names(),
+                ["target"],
+                "{label}: no temporary file is left"
+            );
+        }
+    }
+
+    #[test]
+    fn a_failure_with_no_existing_destination_creates_none() {
+        for (label, ops) in [
+            ("write", &PARTIAL_WRITE),
+            ("sync", &FAILING_SYNC),
+            ("replace", &FAILING_REPLACE),
+        ] {
+            let dir = Dir::new(&format!("absent-{label}"));
+            let destination = dir.0.join("target");
+            replace_config_with(&destination, b"new content", &temporary(&dir), ops).unwrap_err();
+            assert!(dir.names().is_empty(), "{label}: {:?}", dir.names());
+        }
+    }
+
+    /// A file that already has the temporary name is not ours: it is neither written nor removed.
+    #[test]
+    fn an_existing_file_with_the_temporary_name_is_left_alone() {
+        let dir = Dir::new("collision");
+        let destination = dir.0.join("target");
+        std::fs::write(&destination, b"original").unwrap();
+        std::fs::write(temporary(&dir), b"someone else's").unwrap();
+        for ops in [&REAL_OPS, &PARTIAL_WRITE, &FAILING_SYNC, &FAILING_REPLACE] {
+            let error = replace_config_with(&destination, b"new content", &temporary(&dir), ops)
+                .unwrap_err();
+            assert!(error.message.contains("cannot create"), "{}", error.message);
+            assert_eq!(std::fs::read(temporary(&dir)).unwrap(), b"someone else's");
+            assert_eq!(std::fs::read(&destination).unwrap(), b"original");
+        }
+    }
+
+    #[test]
+    fn success_replaces_the_destination_and_keeps_its_permissions() {
+        let dir = Dir::new("success");
+        let destination = dir.0.join("target");
+        std::fs::write(&destination, b"original").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o640)).unwrap();
+        }
+        replace_config(&destination, b"new content")
+            .map_err(|e| e.message)
+            .unwrap();
+        assert_eq!(std::fs::read(&destination).unwrap(), b"new content");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(&destination)
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o640);
+        }
+        assert_eq!(dir.names(), ["target"]);
+        // A destination that does not exist yet is created.
+        let fresh = dir.0.join("fresh");
+        replace_config(&fresh, b"x").map_err(|e| e.message).unwrap();
+        assert_eq!(std::fs::read(&fresh).unwrap(), b"x");
+        let _: &Path = &fresh;
     }
 }
 
@@ -653,12 +795,12 @@ fn replace_path(temporary: &Path, destination: &Path, existing: bool) -> Result<
 mod tests {
 
     #[test]
-    fn references_show_the_repository_schema_location() {
+    fn references_show_the_schema_location_of_the_installed_version() {
         for is_toml in [false, true] {
             let reference = super::reference_document(is_toml);
             let (_, section) = reference.split_once("$schema:\n").unwrap();
             let assignment = section.lines().nth(1).unwrap();
-            assert!(assignment.contains(crate::config::CANONICAL_SCHEMA_URL));
+            assert!(assignment.contains(&crate::config::installed_schema_url()));
             assert!(!assignment.contains("fireemu.dev"));
         }
     }

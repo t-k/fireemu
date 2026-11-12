@@ -16,7 +16,7 @@ Keep Fireemu-specific settings in `fireemu.toml` rather than in `firebase.json`.
 <TabItem label="TOML">
 
 ```toml
-#:schema https://raw.githubusercontent.com/fireemu/fireemu/main/spec/config/fireemu.schema.json
+#:schema https://raw.githubusercontent.com/fireemu/fireemu/v0.49.0/spec/config/fireemu.schema.json
 # Configuration schema version: 1.
 schemaVersion = 1
 # Compatibility profile: "strict" or "emulator".
@@ -88,11 +88,11 @@ Two common setups run into this rule:
 - Combine `--reference` with `--profile` or `--firebase-json` when initializing. With an existing `fireemu.toml` or `fireemu.json` and neither of those options, only the reference is written.
 - Existing output files require `--force` to replace.
 
-Generated schema annotations refer to the schema hosted in the GitHub repository. Older configurations containing `https://fireemu.dev/spec/config/fireemu.schema.json` still load, but replace that annotation with `https://raw.githubusercontent.com/fireemu/fireemu/main/spec/config/fireemu.schema.json` for editor validation. Fireemu validates against its bundled schema and does not fetch the annotation URL.
+In a released binary, generated schema annotations refer to the schema file of that release, in the GitHub repository (`https://raw.githubusercontent.com/fireemu/fireemu/v<version>/spec/config/fireemu.schema.json`), so an editor checks the file against the keys that installed version accepts. A binary built from source, including a build between releases (which embeds a newer schema than its version's tag), writes the `main` location instead. A `$schema` or `#:schema` naming any release tag, `main`, or the old `https://fireemu.dev/spec/config/fireemu.schema.json` location still loads; replace an old annotation with the tag of the version you run for editor validation. Fireemu validates against its bundled schema and does not fetch the annotation URL. `fireemu config schema --out <path>` writes that bundled schema to a file, for an editor or tool that cannot reach GitHub.
 
 ## TOML values and JSON null
 
-TOML files use the same JSON Schema, validation and defaults as JSON files. Start a file with `#:schema https://raw.githubusercontent.com/fireemu/fireemu/main/spec/config/fireemu.schema.json` to select the schema in Taplo or Even Better TOML. Quote timestamp values: TOML datetimes are refused with the key name because the schema has no datetime type.
+TOML files use the same JSON Schema, validation and defaults as JSON files. Start a file with `#:schema https://raw.githubusercontent.com/fireemu/fireemu/v0.49.0/spec/config/fireemu.schema.json` (the tag of the version you run) to select the schema in Taplo or Even Better TOML. Quote timestamp values: TOML datetimes are refused with the key name because the schema has no datetime type.
 
 TOML has no `null`. For every nullable setting below, omit the key in its containing table; for nullable array items, omit the item. Keep the containing table or array when its presence is intentional. Empty arrays and empty tables retain their existing meaning.
 

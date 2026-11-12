@@ -4,6 +4,7 @@
 #
 #   tools/ci/heavy-run.sh --job mutants --ref work/my-branch --out /tmp/heavy \
 #       [--package fireemu-core-auth] [--base main] [--shards 8]
+#   tools/ci/heavy-run.sh --job <nightly|weekly|critical> --ref <ref> --out /tmp/heavy
 #   tools/ci/heavy-run.sh --job nextest --ref <sha> --out /tmp/heavy
 #   tools/ci/heavy-run.sh --job linux-measure --ref <ref> --script tools/bench/run.sh --out /tmp/heavy
 #
@@ -55,8 +56,8 @@ ref_ok() {
 
 # The same rules the workflow applies; refusing here only saves a round trip.
 case "$job" in
-  mutants | nextest | linux-measure) ;;
-  *) fail "--job must be mutants, nextest or linux-measure" ;;
+  mutants | nextest | linux-measure | nightly | weekly | critical) ;;
+  *) fail "--job must be mutants, nextest, linux-measure, nightly, weekly or critical" ;;
 esac
 ref_ok "$ref" || fail "--ref must be a branch name or a full commit SHA"
 ref_ok "$base" || fail "--base must be a branch name or a full commit SHA"
@@ -114,7 +115,7 @@ show() { LC_ALL=C tr -cd '\11\12\40-\176' | cut -c1-400 | head -n "${1:-200}"; }
 
 mkdir -p "$out"
 case "$job" in
-  mutants)
+  mutants | nightly | weekly | critical)
     gh run download "$run_id" --dir "$out" --name mutants-summary || echo "heavy-run: no summary artifact" >&2
     gh run download "$run_id" --dir "$out/shards" --pattern 'mutants-shard-*' || echo "heavy-run: no shard artifacts" >&2
     ;;

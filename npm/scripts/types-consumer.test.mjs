@@ -80,6 +80,21 @@ if (due.codebases[0]) {
   // @ts-expect-error nanoseconds are decimal strings
   const numericNanos: number = due.codebases[0].timers.instantNanos;
 }
+const settled = await world.clock.advanceAndSettle({ seconds: 1 }, { scope: 'all', timeoutSeconds: 5, runTimers: false });
+const settledInstant: string = settled.clock.clock;
+const settledIdle: boolean = settled.idle.idle;
+const settledTimers = settled.timers?.codebases;
+await world.clock.advanceAndSettle(10);
+// @ts-expect-error the idle scope is a closed set
+await world.clock.advanceAndSettle(10, { scope: 'future' });
+const stats = world.snapshotStats;
+const initialFiles: number = stats.initial.files;
+const initialFunctions: 'included' | 'skipped' = stats.initial.functions;
+const firstGeneration: number = stats.generations[0]!.generation;
+const method: 'copy' | 'clone' | 'mixed' = stats.generations[0]!.method;
+const elapsed: number = stats.initial.elapsedMs;
+// @ts-expect-error statistics are readonly
+stats.initial.files = 1;
 const client = createControlClient({ origin: 'http://localhost:9000', token: 'capability' });
 createControlClient({ apiBaseUrl: 'http://localhost:9000/v1/', token: 'capability', env, requestTimeoutMs: 10 });
 createControlClient({ env });

@@ -1293,7 +1293,8 @@ test("the FUNCTIONS-HTTP stand-in accepts only the listed successor of the recor
   }
 });
 
-const RECORDED_STRICT = "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f";
+const RECORDED_STRICT = "2f354fbcd16be3c6e30190d5f590d32a6dc41039672f06473424da8ee51053f8";
+const OLD_STRICT = "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f";
 const sha256Text = (text) => createHash("sha256").update(text).digest("hex");
 const recorderBytes = (output) => `${JSON.stringify(output, null, 2)}\n`;
 
@@ -1308,8 +1309,34 @@ test("the FUNCTIONS-HTTP recorder's request snapshot lists the recorded kinds fi
   assert.deepEqual(names.slice(0, kinds.length), kinds);
 });
 
-test("a FUNCTIONS-HTTP recording with added unspent request kinds stands in for the recorded one", () => {
+test("the recorded request kinds of the current strict digest are the recorder's whole snapshot, and hash to the key", () => {
   const kinds = FUNCTIONS_HTTP_RECORDED_REQUEST_KINDS[RECORDED_STRICT];
+  assert.deepEqual(kinds, Object.keys(createBudget().snapshot()), "every kind the recording has");
+  assert.equal(kinds.length, 8);
+  // The older digest listed the first six (the recorder gained token and upload later).
+  const older = Object.values(FUNCTIONS_HTTP_RECORDED_REQUEST_KINDS).filter(
+    (list) => list.length === 6,
+  );
+  assert.equal(older.length, 1);
+  assert.deepEqual(older[0], kinds.slice(0, 6));
+  // With the real local recording (private, not committed): the recording cut to the listed kinds
+  // is the recorded bytes. Set FUNCTIONS_HTTP_LOCAL_RECORDING to a check-local output to run it.
+  const file = process.env.FUNCTIONS_HTTP_LOCAL_RECORDING;
+  if (file) {
+    const text = readFileSync(file, "utf8");
+    assert.equal(sha256Text(text), RECORDED_STRICT, "the file is the recorded strict recording");
+    assert.equal(functionsHttpRecordedKindsSha256(JSON.parse(text), kinds), RECORDED_STRICT);
+    // The six-kind cut is not the recorded bytes: the kinds must list all eight.
+    assert.notEqual(
+      functionsHttpRecordedKindsSha256(JSON.parse(text), kinds.slice(0, 6)),
+      RECORDED_STRICT,
+    );
+  }
+});
+
+test("a FUNCTIONS-HTTP recording with added unspent request kinds stands in for the recorded one", () => {
+  // The six-kind entry (the first recording, from before the recorder gained token and upload).
+  const kinds = FUNCTIONS_HTTP_RECORDED_REQUEST_KINDS[OLD_STRICT];
   const recordings = passingFunctions().output.recordings;
   const spent = Object.fromEntries(kinds.map((name, index) => [name, index + 1]));
   const recorded = { recordings, requests: spent };

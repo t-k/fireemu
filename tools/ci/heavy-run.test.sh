@@ -78,6 +78,17 @@ else
   bad "a mutants run dispatches with every input, watches, downloads and prints the summary"
 fi
 
+# Each scheduled mode can also be dispatched and downloads the mutation results.
+for job in nightly weekly critical; do
+  : > "$GH_LOG"
+  if "$here/heavy-run.sh" --job "$job" --ref work/x --out "$work/out-$job" > "$work/stdout" 2>&1 &&
+    grep -q " -f job=$job " "$GH_LOG" && grep -q "run download 222 --dir $work/out-$job --name mutants-summary" "$GH_LOG"; then
+    ok "$job dispatches and downloads the summary"
+  else
+    bad "$job dispatches and downloads the summary"
+  fi
+done
+
 # A failed run still downloads, and the exit status is the watch's.
 : > "$GH_LOG"
 GH_WATCH_STATUS=1 "$here/heavy-run.sh" --job nextest --ref 0123456789abcdef0123456789abcdef01234567 \

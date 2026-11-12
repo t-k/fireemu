@@ -1460,8 +1460,17 @@ fn init_force_refuses_a_symlink_destination_without_touching_its_target() {
         .is_symlink());
 }
 
-fn config_schema_url() -> &'static str {
-    "https://raw.githubusercontent.com/fireemu/fireemu/main/spec/config/fireemu.schema.json"
+/// What `init` writes: the release tag in a release build (`FIREEMU_RELEASE_BUILD=1` at compile
+/// time), `main` in any other build.
+fn config_schema_url() -> String {
+    let reference = if option_env!("FIREEMU_RELEASE_BUILD") == Some("1") {
+        format!("v{}", env!("CARGO_PKG_VERSION"))
+    } else {
+        "main".to_owned()
+    };
+    format!(
+        "https://raw.githubusercontent.com/fireemu/fireemu/{reference}/spec/config/fireemu.schema.json"
+    )
 }
 
 #[test]

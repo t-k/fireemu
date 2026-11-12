@@ -76,6 +76,14 @@ class HeavyVerificationContractTest < Minitest::Test
     assert_violation(REAL.sub("[[ $INPUT_PACKAGE =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$ ]]", "[[ $INPUT_PACKAGE =~ ^[A-Za-z0-9_-]{1,64}$ ]]"), "dispatched package name")
   end
 
+  def test_nightly_history_requires_paging_and_refuses_failures
+    assert_violation(REAL.sub('&page=$page', ''), "nightly history must use paging")
+    assert_violation(REAL.sub('per_page=100', 'per_page=50'), "nightly history must use paging")
+    assert_violation(REAL.gsub('cannot read the run history', 'history unavailable'), "nightly history must fail when unreadable")
+    assert_violation(REAL.sub(') || fail "cannot read the run history; the base is not moved"', ') || listing=""'), "nightly history curl must not swallow failures")
+    assert_violation(REAL.sub(') || fail "cannot read the run history; the base is not moved"', ') || true'), "nightly history curl must not swallow failures")
+  end
+
   def test_a_summary_merge_that_never_fails_on_a_miss_is_refused
     assert_violation(REAL.sub("extra+=(--fail-on-new-critical)", "extra+=()"), "--fail-on-new-critical")
     assert_violation(REAL.sub("if [[ $FAIL_ON_NEW_CRITICAL == true ]]; then", "if [[ $FAIL_ON_NEW_CRITICAL == never ]]; then"), "--fail-on-new-critical")

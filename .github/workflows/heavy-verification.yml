@@ -197,18 +197,25 @@ jobs:
               # Only a successful scheduled nightly moves the base; failed, cancelled and skipped
               # runs leave it unchanged. Fall back to 24 hours ago when no usable base is found.
               job=mutants fail_on_new_critical=true
-              last=""
-              listing=$(curl --silent --show-error --fail --max-time 30 --header 'Accept: application/vnd.github+json' \
-                "https://api.github.com/repos/$REPOSITORY/actions/workflows/heavy-verification.yml/runs?event=schedule&status=completed&branch=$DEFAULT_BRANCH&per_page=50") || listing=""
-              if [[ -n $listing ]]; then
+              last="" history_complete=false
+              for page in {1..10}; do
+                listing=$(curl --silent --show-error --fail --max-time 30 --header 'Accept: application/vnd.github+json' \
+                  "https://api.github.com/repos/$REPOSITORY/actions/workflows/heavy-verification.yml/runs?event=schedule&status=completed&branch=$DEFAULT_BRANCH&per_page=100&page=$page") || fail "cannot read the run history; the base is not moved"
                 last=$(python3 -c '
           import json, re, sys
-          for run in json.load(sys.stdin).get("workflow_runs", []):
+          runs = json.load(sys.stdin)["workflow_runs"]
+          if not isinstance(runs, list):
+              raise ValueError("workflow_runs is not a list")
+          for run in runs:
               if run.get("display_title") == "heavy-verification scheduled nightly" and run.get("conclusion") == "success" and re.fullmatch(r"[0-9a-f]{40}", run.get("head_sha") or ""):
                   print(run["head_sha"])
                   break
-          ' <<< "$listing") || last=""
-              fi
+          ' <<< "$listing") || fail "cannot read the run history; the base is not moved"
+                [[ -z $last ]] || break
+                count=$(python3 -c 'import json, sys; print(len(json.load(sys.stdin)["workflow_runs"]))' <<< "$listing") || fail "cannot read the run history; the base is not moved"
+                if (( count < 100 )); then history_complete=true; break; fi
+              done
+              [[ -n $last || $history_complete == true ]] || fail "cannot read the run history; the base is not moved"
               if [[ -n $last ]] && git -C "$RUNNER_TEMP/repo.git" cat-file -e "$last^{commit}" 2> /dev/null &&
                 git -C "$RUNNER_TEMP/repo.git" merge-base --is-ancestor "$last" "$ref_sha"; then
                 base_sha=$last

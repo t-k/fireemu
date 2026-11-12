@@ -215,6 +215,10 @@ def violations(source, toolchain_channel: nil)
     nightly = script[/^  nightly\)\n(.*?)^    ;;/m, 1].to_s
     weekly = script[/^  weekly\)\n(.*?)^    ;;/m, 1].to_s
     critical = script[/^  critical\)\n(.*?)^    ;;/m, 1].to_s
+    errors << "nightly history must use paging with per_page=100" unless nightly.include?("&page=") && nightly.include?("per_page=100")
+    errors << "nightly history must fail when unreadable" unless nightly.include?("cannot read the run history")
+    curl_lines = nightly.gsub(/\\\n\s*/, " ").lines.select { |line| line.include?("curl ") }
+    errors << "nightly history curl must not swallow failures" if nightly.match?(/\|\|\s*listing=""/) || curl_lines.any? { |line| line.match?(/\|\|\s*true\b/) }
     errors << "nightly must enable fail_on_new_critical" unless nightly.include?("job=mutants fail_on_new_critical=true") && script.include?("skip=false fail_on_new_critical=false")
     errors << "weekly must report only" if weekly.include?("fail_on_new_critical=true")
     errors << "critical selection must read the helper and the list from the ref" unless critical.include?('show "$ref_sha:tools/ci/critical-selection.py"') && critical.include?('show "$ref_sha:tools/ci/mutation-critical.txt"') && critical.include?('--regex "$RUNNER_TEMP/mutation-critical.txt"') && critical.include?('job=mutants base_sha="" package="" fail_on_new_critical=true')

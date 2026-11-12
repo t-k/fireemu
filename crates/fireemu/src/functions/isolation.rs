@@ -14,7 +14,9 @@
 
 use std::sync::Arc;
 
-use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
+use fireemu_adapter_functions::runner::{
+    remove_local_secrets, Runner, SpawnSpec, LOCAL_SECRET_NAMES_VARIABLE,
+};
 use fireemu_adapter_functions::runtime::CodebaseSpec;
 use fireemu_core_functions::manifest::{
     FunctionGeneration, FunctionManifest, FunctionSpec, Trigger,
@@ -71,23 +73,28 @@ pub(super) fn function_spawn_spec(base: &SpawnSpec, function: &FunctionSpec) -> 
         .unwrap_or_default();
     let identity = identity_environment(function);
     let declared = &function.platform_options.secrets;
+    let secret_names: Vec<String> = secrets.keys().chain(declared.iter()).cloned().collect();
     let mut env: Vec<(String, String)> = base
         .env
         .iter()
         .filter(|(name, _)| {
             name != LOCAL_SECRETS_VARIABLE
+                && name != LOCAL_SECRET_NAMES_VARIABLE
                 && !identity.iter().any(|(fixed, _)| fixed == name)
-                && !declared.contains(name)
-                && !secrets.contains_key(name)
         })
         .cloned()
         .collect();
+    remove_local_secrets(&mut env, &secret_names);
     env.extend(identity);
     for name in declared {
         if let Some(value) = secrets.get(name).and_then(serde_json::Value::as_str) {
             env.push((name.clone(), value.to_owned()));
         }
     }
+    env.push((
+        LOCAL_SECRET_NAMES_VARIABLE.to_owned(),
+        serde_json::to_string(&secret_names).expect("secret names serialize"),
+    ));
     let mut command = base.command.clone();
     command.push("--function".to_owned());
     command.push(function.name.clone());
@@ -386,6 +393,10 @@ mod tests {
             ("UNRELATED".to_owned(), "retained".to_owned()),
         ]);
         let alpha = function_spawn_spec(&codebase, &all[0]);
+        let excluded: Vec<String> =
+            serde_json::from_str(env_of(&alpha, LOCAL_SECRET_NAMES_VARIABLE)[0]).unwrap();
+        assert!(excluded.contains(&"BETA_KEY".to_owned()));
+        assert!(excluded.contains(&"MISSING_KEY".to_owned()));
         assert_eq!(env_of(&alpha, "ALPHA_KEY"), vec!["local-alpha"]);
         assert!(env_of(&alpha, "BETA_KEY").is_empty());
         assert!(env_of(&alpha, "MISSING_KEY").is_empty());

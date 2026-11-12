@@ -101,7 +101,7 @@ The [compatibility contract](spec/compatibility/contract.json) records scope and
 `npx fireemu init` creates a minimal `fireemu.toml`:
 
 ```toml
-#:schema https://raw.githubusercontent.com/fireemu/fireemu/main/spec/config/fireemu.schema.json
+#:schema https://raw.githubusercontent.com/fireemu/fireemu/v0.49.0/spec/config/fireemu.schema.json
 schemaVersion = 1
 profile = "strict"
 
@@ -110,7 +110,7 @@ edition = "standard"
 apiMode = "native"
 ```
 
-Keep Fireemu-specific settings in `fireemu.toml` and point it at your existing `firebase.json` (`npx fireemu init --firebase-json firebase.json`), whose rules, indexes, Functions codebases and ports are read on every start. `npx fireemu config show` prints every key with its effective value and source, and `npx fireemu config lint --deny-ineffective` fails when the configuration sets a key that is accepted but has no effect.
+Keep Fireemu-specific settings in `fireemu.toml` and point it at your existing `firebase.json` (`npx fireemu init --firebase-json firebase.json`), whose rules, indexes, Functions codebases and ports are read on every start. `npx fireemu config show` prints every key with its effective value and source, and `npx fireemu config lint --deny-ineffective` fails when the configuration sets a key that is accepted but has no effect. In a released binary the `#:schema` line names the schema of that release (`v0.49.0` above), so the editor checks against what the installed version accepts (a build from source writes the `main` location); `npx fireemu config schema --out fireemu.schema.json` writes the exact schema of the installed binary without the network.
 
 - [Configuration files](https://fireemu.github.io/fireemu/guides/configuration/): which files are loaded and the ownership checks on discovered files
 - [Configuration schema](https://fireemu.github.io/fireemu/reference/configuration/): every section, and the [JSON Schema](spec/config/fireemu.schema.json)

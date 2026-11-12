@@ -33,6 +33,9 @@ exports.auditWrites = onDocumentWritten("audit/{docId}", async (event) => {
     {
       writes: FieldValue.increment(1),
       last: { docId: event.params.docId, before, after, type: event.type },
+      // The delete is recorded under its own member: events of one document may be handled
+      // concurrently, so `last` is whichever finished last.
+      ...(after === null ? { deleted: { docId: event.params.docId, before, after } } : {}),
     },
     { merge: true },
   );
@@ -167,7 +170,9 @@ exports.onThingDone = onCustomEventPublished("com.example.thing.done", async (ev
     source: event.source,
     subject: event.subject ?? null,
     specversion: event.specversion,
-    datacontenttype: event.datacontenttype,
+    // `?? null`: the strict profile delivers none, as production does, and Firestore refuses an
+    // undefined value.
+    datacontenttype: event.datacontenttype ?? null,
     hasTime: typeof event.time === "string" && event.time.length > 0,
     data: event.data,
   });

@@ -4,6 +4,7 @@ require "json"
 require "yaml"
 require "rbconfig"
 require_relative "actions-security-contract"
+require_relative "release-marker-contract"
 
 ROOT = File.expand_path("..", __dir__)
 ActionsSecurityContract.check!(ROOT)
@@ -131,6 +132,24 @@ assert(sdk["permissions"] == { "contents" => "read" }, "SDK discovery permission
 sdk_runs = sdk.dig("jobs", "real-sdk-discovery", "steps").map { |step| step["run"] }.compact.join("\n")
 assert(sdk_runs.include?("npm ci --prefix tools/sdk-smoke --ignore-scripts"), "SDK environment regressions require installed real dependencies")
 assert(sdk_runs.include?("cargo test -p fireemu --test functions_environment -- --include-ignored"), "the SDK job must execute every environment regression including opt-in cases")
+# The Functions smoke (tools/sdk-smoke/functions.mjs) must run in both profiles, each with its own
+# FIREEMU_SMOKE_PROFILE and the config of that profile, and fail the job on any failed check.
+sdk_steps = sdk.dig("jobs", "real-sdk-discovery", "steps")
+smoke_build = sdk_steps.index { |step| step["run"].to_s.strip == "cargo build -p fireemu" }
+{ "strict" => "fireemu.smoke.json", "emulator" => "fireemu.smoke-emulator.json" }.each do |profile, config|
+  index = sdk_steps.index { |step| step.dig("env", "FIREEMU_SMOKE_PROFILE") == profile }
+  assert(index, "the SDK job must run the Functions smoke under the #{profile} profile")
+  step = sdk_steps[index]
+  command = step["run"].to_s.gsub(/\s+/, " ")
+  assert(smoke_build && smoke_build < index, "the Functions smoke must run after the fireemu binary is built")
+  assert(step["working-directory"] == "tools/sdk-smoke", "the Functions smoke must run in tools/sdk-smoke")
+  assert(!step.key?("continue-on-error"), "the Functions smoke must not hide a failed check")
+  assert(command.include?("--config #{config}") && command.include?("--functions functions-project") && command.end_with?("-- node functions.mjs"),
+    "the #{profile} Functions smoke must run functions.mjs with #{config} and the functions-project codebase")
+end
+assert(sdk_runs.include?("node --test tools/sdk-smoke/functions-expect.test.mjs"), "the SDK job must run the Functions smoke expectation tests")
+assert(File.read(File.join(ROOT, "tools", "sdk-smoke", "fireemu.smoke.json")).match?(/"profile":\s*"strict"/), "fireemu.smoke.json must stay the strict-profile config")
+assert(File.read(File.join(ROOT, "tools", "sdk-smoke", "fireemu.smoke-emulator.json")).match?(/"profile":\s*"emulator"/), "fireemu.smoke-emulator.json must stay the emulator-profile config")
 
 release = load_workflow("release.yml")
 release_source = File.read(File.join(ROOT, ".github", "workflows", "release.yml"))
@@ -161,6 +180,9 @@ end
   assert(cached.empty?, "release #{job} must not restore a cache")
 end
 release_build = release.dig("jobs", "build")
+# Only the binary the release workflow publishes may carry FIREEMU_RELEASE_BUILD=1 (see the module).
+ReleaseMarkerContract.check!(ROOT)
+raise "Release marker regression fixtures failed" unless system(RbConfig.ruby, File.join(__dir__, "release-marker-contract.test.rb"))
 release_build_runs = release_build.fetch("steps").map { |step| step["run"] }.compact.join("\n")
 assert(!release_build_runs.include?("cargo nextest"), "release platform builds must not duplicate the workspace test suite")
 assert(release.dig("jobs", "publish", "needs").include?("test"), "release publish must depend on the dedicated test job")
@@ -335,6 +357,9 @@ package_runs = jobs.fetch("package").fetch("steps").map { |step| step["run"] }.c
 types_consumer_command = "node --test npm/scripts/types-consumer.test.mjs"
 assert(package_runs.include?(types_consumer_command), "package CI must type-check actual packed public subpaths")
 assert(package_runs.index("pnpm -C ui install --frozen-lockfile") < package_runs.index(types_consumer_command), "type consumers must use the installed pinned UI TypeScript compiler")
+types_exports_command = "node --test npm/scripts/types-exports.test.mjs"
+assert(package_runs.include?(types_exports_command), "package CI must check that the declared exports match the runtime exports")
+assert(package_runs.index("pnpm -C ui install --frozen-lockfile") < package_runs.index(types_exports_command), "the export parity test must use the installed pinned UI TypeScript compiler")
 release_source = File.read(File.join(ROOT, ".github", "workflows", "release.yml"))
 assert(!release_source.include?("NPM_TOKEN"), "release publish must authenticate through Trusted Publishing")
 assert(!release_source.include?("NODE_AUTH_TOKEN"), "release publish must not inject a registry token")

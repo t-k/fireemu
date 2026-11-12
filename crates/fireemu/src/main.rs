@@ -416,7 +416,7 @@ fn test_world_config_command(args: &[String]) -> Result<(), CliError> {
     Ok(())
 }
 
-const CONFIG_USAGE: &str = "usage: fireemu config show [--config <path>] [--firebase-json <path>] [--json]\n       fireemu config lint [--config <path>] [--firebase-json <path>] [--json] [--deny-ineffective] [--allow <key>]... [--allow-file <path>]";
+const CONFIG_USAGE: &str = "usage: fireemu config show [--config <path>] [--firebase-json <path>] [--json]\n       fireemu config lint [--config <path>] [--firebase-json <path>] [--json] [--deny-ineffective] [--allow <key>]... [--allow-file <path>]\n       fireemu config schema [--out <path>]";
 
 /// What `config lint` reads from the command line besides the shared file flags.
 #[derive(Default)]
@@ -451,8 +451,44 @@ fn read_allow_file(path: &str) -> Result<Vec<String>, CliError> {
         .collect())
 }
 
+/// `fireemu config schema [--out <path>]`: the JSON Schema this binary validates configuration
+/// with, byte for byte, on stdout or in a file. Generated configuration files point at the
+/// schema of their release tag; this prints the same bytes without the network.
+fn config_schema_command(args: &[String]) -> Result<(), CliError> {
+    let mut out: Option<&str> = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--out" if out.is_none() => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| CliError::usage("--out needs a value"))?;
+                out = Some(value);
+                index += 2;
+            }
+            other => {
+                return Err(CliError::usage(format!(
+                    "unknown argument {}\n{CONFIG_USAGE}",
+                    diagnostic_text(other)
+                )))
+            }
+        }
+    }
+    match out {
+        Some(path) => init::replace_config(Path::new(path), config::CONFIG_SCHEMA_JSON.as_bytes()),
+        None => std::io::Write::write_all(
+            &mut std::io::stdout().lock(),
+            config::CONFIG_SCHEMA_JSON.as_bytes(),
+        )
+        .map_err(|e| CliError::refused(format!("cannot write the schema: {e}"))),
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 fn config_command(args: &[String]) -> Result<(), CliError> {
+    if args.first().map(String::as_str) == Some("schema") {
+        return config_schema_command(&args[1..]);
+    }
     let lint = match args.first().map(String::as_str) {
         Some("show") => false,
         Some("lint") => true,

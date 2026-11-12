@@ -1931,10 +1931,7 @@ impl Default for RuntimeConfig {
 /// Streaming each member preserves order without changing `serde_json`'s map representation.
 pub fn config_schema() -> Vec<(String, Value)> {
     let mut entries = Vec::new();
-    let mut pending = vec![(
-        String::new(),
-        include_str!("../../../spec/config/fireemu.schema.json"),
-    )];
+    let mut pending = vec![(String::new(), CONFIG_SCHEMA_JSON)];
     while let Some((path, text)) = pending.pop() {
         let schema: Value = serde_json::from_str(text).expect("embedded configuration schema");
         if schema.get("properties").is_some() {
@@ -4378,9 +4375,83 @@ pub(crate) const KNOWN_TOP_LEVEL: &[&str] = &[
     "daemon",
 ];
 
-pub const CANONICAL_SCHEMA_URL: &str =
-    "https://raw.githubusercontent.com/fireemu/fireemu/main/spec/config/fireemu.schema.json";
+const SCHEMA_URL_PREFIX: &str = "https://raw.githubusercontent.com/fireemu/fireemu/";
+const SCHEMA_URL_SUFFIX: &str = "/spec/config/fireemu.schema.json";
 const LEGACY_SCHEMA_URL: &str = "https://fireemu.dev/spec/config/fireemu.schema.json";
+
+/// A plain `major.minor.patch` release number: three dot-separated decimal numbers without
+/// leading zeros. Release tags (`v<version>`) have exactly this shape.
+fn is_release_number(text: &str) -> bool {
+    let mut parts = text.split('.');
+    let numbers = [parts.next(), parts.next(), parts.next()];
+    parts.next().is_none()
+        && numbers.iter().all(|part| {
+            part.is_some_and(|part| {
+                !part.is_empty()
+                    && part.bytes().all(|byte| byte.is_ascii_digit())
+                    && (part == "0" || !part.starts_with('0'))
+            })
+        })
+}
+
+/// The location of the schema file at the release tag of `version`. A version that is not a
+/// plain release number (a pre-release build) has no tag and falls back to the `main`
+/// location, which the loader also accepts.
+pub fn schema_url_for_version(version: &str) -> String {
+    if is_release_number(version) {
+        format!("{SCHEMA_URL_PREFIX}v{version}{SCHEMA_URL_SUFFIX}")
+    } else {
+        main_schema_url()
+    }
+}
+
+/// The location of the schema file on the `main` branch.
+fn main_schema_url() -> String {
+    format!("{SCHEMA_URL_PREFIX}main{SCHEMA_URL_SUFFIX}")
+}
+
+/// The schema URL for a build: the release tag's file for a binary built by the release
+/// workflow (`release_build` is `Some("1")`), the `main` location for any other build. The
+/// workspace version alone cannot tell them apart: a build from source between releases
+/// reports the last release's version but embeds the newer schema of `main`. The release
+/// workflow requires the tag to equal the workspace version, so a release binary's tag schema
+/// is the schema it embeds.
+pub fn schema_url_for_build(version: &str, release_build: Option<&str>) -> String {
+    if release_build == Some("1") {
+        schema_url_for_version(version)
+    } else {
+        main_schema_url()
+    }
+}
+
+/// The schema URL that generated configuration files carry (see [`schema_url_for_build`]).
+/// `FIREEMU_RELEASE_BUILD=1` is set at compile time by `.github/workflows/release.yml` only.
+/// `fireemu config schema` prints the schema this binary validates with, whatever the build.
+pub fn installed_schema_url() -> String {
+    schema_url_for_build(
+        env!("CARGO_PKG_VERSION"),
+        option_env!("FIREEMU_RELEASE_BUILD"),
+    )
+}
+
+/// Whether `url` is a location `$schema` may name: the schema at `main`, at any release tag, or
+/// at the original `fireemu.dev` location. The `$schema` pattern in
+/// `spec/config/fireemu.schema.json` states the same set; a test keeps the two together.
+pub fn is_accepted_schema_url(url: &str) -> bool {
+    if url == LEGACY_SCHEMA_URL {
+        return true;
+    }
+    let Some(reference) = url
+        .strip_prefix(SCHEMA_URL_PREFIX)
+        .and_then(|rest| rest.strip_suffix(SCHEMA_URL_SUFFIX))
+    else {
+        return false;
+    };
+    reference == "main" || reference.strip_prefix('v').is_some_and(is_release_number)
+}
+
+/// The embedded configuration schema, exactly as `fireemu config schema` prints it.
+pub const CONFIG_SCHEMA_JSON: &str = include_str!("../../../spec/config/fireemu.schema.json");
 
 /// The Firebase project configuration composed by a canonical fireemu configuration.
 /// Its path is resolved by the CLI because that layer knows which file contained this JSON.
@@ -5589,12 +5660,10 @@ impl RuntimeConfig {
             }
         }
         if let Some(schema) = obj.get("$schema") {
-            if !matches!(
-                schema.as_str(),
-                Some(CANONICAL_SCHEMA_URL | LEGACY_SCHEMA_URL)
-            ) {
+            if !schema.as_str().is_some_and(is_accepted_schema_url) {
                 return Err(ConfigError(format!(
-                    "$schema must be {CANONICAL_SCHEMA_URL:?}"
+                    "$schema must be the schema location of a release such as {:?}",
+                    installed_schema_url()
                 )));
             }
         }
@@ -13300,6 +13369,190 @@ mod secret_redaction_tests {
                     || *key == "appCheck.apps",
                 "{key} is not a schema key"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod schema_url_tests {
+    use super::{
+        installed_schema_url, is_accepted_schema_url, schema_url_for_build, schema_url_for_version,
+        CONFIG_SCHEMA_JSON,
+    };
+    use proptest::prelude::*;
+
+    /// The pattern the embedded schema states for `$schema`, compiled once.
+    fn schema_pattern() -> regex::Regex {
+        let schema: serde_json::Value = serde_json::from_str(CONFIG_SCHEMA_JSON).unwrap();
+        let pattern = schema["properties"]["$schema"]["pattern"]
+            .as_str()
+            .expect("the $schema property carries a pattern");
+        regex::Regex::new(pattern).unwrap()
+    }
+
+    #[test]
+    fn the_embedded_schema_is_the_file_in_the_repository() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../spec/config/fireemu.schema.json");
+        assert_eq!(std::fs::read_to_string(path).unwrap(), CONFIG_SCHEMA_JSON);
+    }
+
+    #[test]
+    fn a_release_version_has_a_tagged_location_and_other_versions_use_main() {
+        let tagged = |version: &str| {
+            format!(
+                "https://raw.githubusercontent.com/fireemu/fireemu/v{version}/spec/config/fireemu.schema.json"
+            )
+        };
+        for version in ["0.0.0", "0.49.0", "1.2.3", "10.20.30"] {
+            assert_eq!(schema_url_for_version(version), tagged(version));
+        }
+        let main = "https://raw.githubusercontent.com/fireemu/fireemu/main/spec/config/fireemu.schema.json";
+        for version in [
+            "",
+            "1",
+            "1.2",
+            "1.2.3.4",
+            "1.2.3-rc.1",
+            "1.2.3+build",
+            "01.2.3",
+            "1.02.3",
+            "1.2.03",
+            "v1.2.3",
+            "a.b.c",
+            "1..3",
+            " 1.2.3",
+            "1.2.3 ",
+            "-1.2.3",
+            "+1.2.3",
+        ] {
+            assert_eq!(schema_url_for_version(version), main, "{version:?}");
+        }
+    }
+
+    #[test]
+    fn the_binary_pins_a_location_it_accepts() {
+        assert!(is_accepted_schema_url(&installed_schema_url()));
+        assert_eq!(
+            installed_schema_url(),
+            schema_url_for_build(
+                env!("CARGO_PKG_VERSION"),
+                option_env!("FIREEMU_RELEASE_BUILD")
+            )
+        );
+    }
+
+    #[test]
+    fn only_a_release_build_pins_its_release_tag() {
+        let main = "https://raw.githubusercontent.com/fireemu/fireemu/main/spec/config/fireemu.schema.json";
+        let tag = "https://raw.githubusercontent.com/fireemu/fireemu/v0.49.0/spec/config/fireemu.schema.json";
+        assert_eq!(schema_url_for_build("0.49.0", Some("1")), tag);
+        // A build from source reports the last release's version but embeds main's schema.
+        assert_eq!(schema_url_for_build("0.49.0", None), main);
+        for marker in ["", "0", "true", "yes", "1 ", " 1", "01"] {
+            assert_eq!(
+                schema_url_for_build("0.49.0", Some(marker)),
+                main,
+                "{marker:?}"
+            );
+        }
+        // A release build with a version that has no tag cannot name one.
+        assert_eq!(schema_url_for_build("0.50.0-rc.1", Some("1")), main);
+    }
+
+    #[test]
+    fn near_misses_of_the_accepted_locations_are_refused() {
+        let good = "https://raw.githubusercontent.com/fireemu/fireemu/v1.2.3/spec/config/fireemu.schema.json";
+        assert!(is_accepted_schema_url(good));
+        for bad in [
+            "",
+            "https://raw.githubusercontent.com/fireemu/fireemu/v1.2.3/spec/config/fireemu.schema.jsonx",
+            "https://raw.githubusercontent.com/fireemu/fireemu/v1.2.3/spec/config/fireemu.schema.json/",
+            "http://raw.githubusercontent.com/fireemu/fireemu/v1.2.3/spec/config/fireemu.schema.json",
+            "https://raw.githubusercontent.com/fireemu/fireemu/V1.2.3/spec/config/fireemu.schema.json",
+            "https://raw.githubusercontent.com/fireemu/fireemu/1.2.3/spec/config/fireemu.schema.json",
+            "https://raw.githubusercontent.com/fireemu/fireemu/v1.2/spec/config/fireemu.schema.json",
+            "https://raw.githubusercontent.com/fireemu/fireemu/v1.2.3-rc.1/spec/config/fireemu.schema.json",
+            "https://raw.githubusercontent.com/fireemu/fireemu/v/spec/config/fireemu.schema.json",
+            "https://raw.githubusercontent.com/fireemu/fireemu/Main/spec/config/fireemu.schema.json",
+            "https://raw.githubusercontent.com/fireemu/fireemu/mainv1.2.3/spec/config/fireemu.schema.json",
+            "https://raw.githubusercontent.com/other/fireemu/v1.2.3/spec/config/fireemu.schema.json",
+            "https://raw.githubusercontent.com/fireemu/other/v1.2.3/spec/config/fireemu.schema.json",
+            "https://raw.githubusercontent.com/fireemu/fireemu/v1.2.3/spec/config/fireemu.schema.json\n",
+            "https://fireemu.dev/spec/config/fireemu.schema.json/",
+            "https://fireemu.dev/spec/config/other.schema.json",
+        ] {
+            assert!(!is_accepted_schema_url(bad), "{bad:?}");
+        }
+        assert!(is_accepted_schema_url(
+            "https://fireemu.dev/spec/config/fireemu.schema.json"
+        ));
+    }
+
+    /// A string close to the accepted locations: pieces of them, glued and mutated.
+    fn near_location() -> impl Strategy<Value = String> {
+        let reference = prop_oneof![
+            Just("main".to_owned()),
+            Just("v1.2.3".to_owned()),
+            Just("v0.0.0".to_owned()),
+            Just("v01.2.3".to_owned()),
+            Just("v1.2".to_owned()),
+            Just("v1.2.3.4".to_owned()),
+            Just("v1.2.3-rc.1".to_owned()),
+            Just("1.2.3".to_owned()),
+            Just("Main".to_owned()),
+            Just("develop".to_owned()),
+            "[v0-9.a-z-]{0,12}",
+        ];
+        let prefix = prop_oneof![
+            Just("https://raw.githubusercontent.com/fireemu/fireemu/"),
+            Just("http://raw.githubusercontent.com/fireemu/fireemu/"),
+            Just("https://raw.githubusercontent.com/other/fireemu/"),
+            Just("https://raw.githubusercontent.com/fireemu/fireemu//"),
+        ];
+        let suffix = prop_oneof![
+            Just("/spec/config/fireemu.schema.json"),
+            Just("/spec/config/fireemu.schema.json/"),
+            Just("/spec/config/fireemu.schema.json "),
+            Just("/spec/config/fireemu.schema.jsonx"),
+            Just("/spec/config/other.schema.json"),
+            Just("/spec/fireemu.schema.json"),
+        ];
+        prop_oneof![
+            (prefix, reference, suffix).prop_map(|(p, r, s)| format!("{p}{r}{s}")),
+            Just("https://fireemu.dev/spec/config/fireemu.schema.json".to_owned()),
+            "\\PC{0,60}",
+        ]
+    }
+
+    proptest! {
+        /// The Rust predicate and the `$schema` pattern in the embedded schema state the same
+        /// set, so an editor and the loader accept the same locations.
+        #[test]
+        fn the_predicate_and_the_schema_pattern_agree(url in near_location()) {
+            prop_assert_eq!(is_accepted_schema_url(&url), schema_pattern().is_match(&url), "{:?}", url);
+        }
+
+        /// A build that is not marked as a release build never names a tag, whatever its version.
+        #[test]
+        fn an_unmarked_build_always_names_main(version in "\\PC{0,20}", marker in proptest::option::of("\\PC{0,3}")) {
+            prop_assume!(marker.as_deref() != Some("1"));
+            let url = schema_url_for_build(&version, marker.as_deref());
+            prop_assert!(url.contains("/main/"), "{:?}", url);
+            prop_assert!(is_accepted_schema_url(&url));
+        }
+
+        /// Whatever the running version looks like, the location written into a generated
+        /// file is one the loader and the schema accept.
+        #[test]
+        fn a_generated_location_is_always_accepted(version in prop_oneof![
+            "[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}",
+            "[0-9a-z.+-]{0,16}",
+            "\\PC{0,20}",
+        ]) {
+            let url = schema_url_for_version(&version);
+            prop_assert!(is_accepted_schema_url(&url), "{:?}", url);
+            prop_assert!(schema_pattern().is_match(&url), "{:?}", url);
         }
     }
 }

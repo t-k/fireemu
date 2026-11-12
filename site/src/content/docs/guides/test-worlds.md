@@ -32,6 +32,23 @@ Separate worlds isolate their clocks, Rules, Functions and service state. The `f
 - `world.reset()` starts the world again from its creation snapshot.
 - `world.dispose()` stops the world and removes its files. `withTestWorld` disposes it for you, also when the callback throws.
 
+## TypeScript
+
+`fireemu/testing` and `fireemu/control` ship type declarations for strict `NodeNext` and bundler module resolution; import the subpaths directly, with no separate types package.
+
+```ts
+import { withTestWorld, type TestWorldOptions } from 'fireemu/testing';
+import { createControlClient } from 'fireemu/control';
+
+const options = { services: ['auth', 'firestore'] as const } satisfies TestWorldOptions;
+const projectId: string = await withTestWorld(options, (world) => world.projectId);
+
+const client = createControlClient({ origin: 'http://127.0.0.1:9000', token: 'your-control-token' });
+const response: unknown = await client.request('GET', 'sessions/default');
+```
+
+A misspelled service name, an unsupported clock mode or an unknown option is a compile error. World and client properties are readonly, `uiUrl` is `string | undefined`, and each service endpoint is optional because only the selected services start. Generic control requests resolve to `unknown`: narrow the response before reading fields. The types do not prove runtime limits (for example, `runDue` needs an integer budget from 1 through 10000); the helper checks those when it runs. See the [test worlds guide](https://github.com/fireemu/fireemu/blob/main/docs/test-worlds.md#typescript-consumers) for the details.
+
 ## Inspect a world in the UI
 
 To inspect the same world in the debug UI, pass `ui: true` to `createTestWorld()` and open `world.uiUrl`. The UI is disabled by default. Each enabled world receives its own loopback port and shares its live Firestore, Auth, Storage and Functions state. Keep the world alive while inspecting it; `dispose()` also stops its UI. After `reset()`, read `world.uiUrl` again and reopen the page. See [test worlds](https://github.com/fireemu/fireemu/blob/main/docs/test-worlds.md#inspect-a-world-in-the-ui) for an interactive example.

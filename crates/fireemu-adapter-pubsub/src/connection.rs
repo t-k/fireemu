@@ -91,3 +91,69 @@ impl AsyncWrite for TrackedStream {
         self.inner.is_write_vectored()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn pair() -> (TcpStream, TcpStream) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let client = TcpStream::connect(address).await.unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+        (client, server)
+    }
+
+    #[tokio::test]
+    async fn the_tracked_stream_passes_reads_writes_and_the_shutdown_through() {
+        let (mut client, server) = pair().await;
+        let mut tracked = TrackedStream::new(server, ConnectionId::new(7), None);
+        assert!(tracked.is_write_vectored());
+        // `write_all` goes through `poll_write`, `read_exact` through `poll_read`.
+        tracked.write_all(b"hello").await.unwrap();
+        tracked.flush().await.unwrap();
+        let mut buffer = [0_u8; 5];
+        client.read_exact(&mut buffer).await.unwrap();
+        assert_eq!(&buffer, b"hello");
+        client.write_all(b"world").await.unwrap();
+        tracked.read_exact(&mut buffer).await.unwrap();
+        assert_eq!(&buffer, b"world");
+        // A vectored write reaches the peer whole.
+        let written = tracked
+            .write_vectored(&[std::io::IoSlice::new(b"ab"), std::io::IoSlice::new(b"cd")])
+            .await
+            .unwrap();
+        assert_eq!(written, 4);
+        let mut four = [0_u8; 4];
+        client.read_exact(&mut four).await.unwrap();
+        assert_eq!(&four, b"abcd");
+        // The shutdown reaches the peer: it reads the end of the stream.
+        tracked.shutdown().await.unwrap();
+        assert_eq!(client.read(&mut buffer).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn the_connection_id_is_what_the_request_will_carry_and_a_drop_forgets_the_connection() {
+        let (_client, server) = pair().await;
+        let cache = Arc::new(Mutex::new(RestNegativeCache::default()));
+        let id = ConnectionId::new(9);
+        let tracked = TrackedStream::new(server, id, Some(cache.clone()));
+        assert_eq!(tracked.connect_info().0, id);
+        let resource = fireemu_core_pubsub::rest_negative_cache::RestResource::parse_path(
+            "/v1/projects/p/subscriptions/s",
+        )
+        .unwrap();
+        let now = fireemu_core_types::time::LogicalInstant::UNIX_EPOCH;
+        cache.lock().unwrap().observe(
+            id,
+            &resource,
+            fireemu_core_pubsub::rest_negative_cache::RestRequest::Get,
+            now,
+            fireemu_core_pubsub::rest_negative_cache::RestOutcome::NotFound,
+        );
+        assert_eq!(cache.lock().unwrap().len(), 1);
+        drop(tracked);
+        assert_eq!(cache.lock().unwrap().len(), 0);
+    }
+}

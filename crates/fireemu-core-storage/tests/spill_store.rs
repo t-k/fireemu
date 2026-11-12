@@ -190,6 +190,228 @@ proptest::proptest! {
     }
 }
 
+fn compare_results<T: std::fmt::Debug + PartialEq>(
+    a: &Result<T, StorageError>,
+    b: &Result<T, StorageError>,
+) {
+    assert_eq!(a, b);
+    if let (Err(a), Err(b)) = (a, b) {
+        assert_eq!(a.to_string(), b.to_string());
+    }
+}
+
+fn version_bodies(
+    store: &StorageState,
+    buckets: &[BucketName; 2],
+) -> Vec<(
+    fireemu_core_storage::store::ObjectMetadata,
+    Option<LogicalInstant>,
+    Vec<u8>,
+)> {
+    buckets
+        .iter()
+        .flat_map(|bucket| store.list_versions(bucket, ""))
+        .map(|entry| {
+            (
+                entry.object.clone(),
+                entry.time_deleted,
+                store.body_bytes(entry.object).unwrap().to_vec(),
+            )
+        })
+        .collect()
+}
+
+fn compare_spill_state(
+    memory: &StorageState,
+    spilled: &StorageState,
+    buckets: &[BucketName; 2],
+    windows: (usize, usize),
+) {
+    assert_eq!(memory.all_objects(), spilled.all_objects());
+    assert_eq!(memory.retained_blob_bytes(), spilled.retained_blob_bytes());
+    assert_eq!(
+        memory.retained_upload_bytes(),
+        spilled.retained_upload_bytes()
+    );
+    for (a, b) in memory.all_objects().iter().zip(spilled.all_objects()) {
+        let left = memory.body_bytes(a).unwrap();
+        let right = spilled.body_bytes(b).unwrap();
+        assert_eq!(left, right);
+        let start = windows.0.min(left.len());
+        let end = windows.1.min(left.len());
+        let (start, end) = (start.min(end), start.max(end));
+        for (start, end) in [(start, end), (0, 0), (0, left.len())] {
+            assert_eq!(&left[start..end], &right[start..end]);
+        }
+    }
+    for bucket in buckets {
+        let left = memory.list_versions(bucket, "");
+        let right = spilled.list_versions(bucket, "");
+        assert_eq!(left, right);
+        for entry in left {
+            let object = entry.object;
+            assert_eq!(
+                memory.generation(bucket, &object.name, object.generation),
+                spilled.generation(bucket, &object.name, object.generation)
+            );
+            assert_eq!(
+                memory.body_bytes(object).unwrap(),
+                spilled.body_bytes(object).unwrap()
+            );
+        }
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config { cases: 64, failure_persistence: None, ..proptest::test_runner::Config::default() })]
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn spill_surface_matches_memory(
+        threshold in 0u64..=3000,
+        versioned in 0usize..2,
+        windows in (0usize..=3000, 0usize..=3000),
+        ops in proptest::collection::vec((0u8..10, 0usize..2, 0usize..4, 0u8..5, proptest::collection::vec(proptest::prelude::any::<u8>(), 0..=3000)), 0..=30)
+    ) {
+        use fireemu_core_storage::store::{ImportedObject, ObjectDigests, UploadOptions};
+        use std::collections::BTreeSet;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let root = std::env::temp_dir().join(format!("spill-surface-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        let process = ProcessSpill::create(&root).unwrap();
+        let mut memory = StorageState::new(1);
+        let mut spilled = StorageState::new(1);
+        spilled.set_spill(Some((process.spill_dir(), threshold)));
+        let buckets = [BucketName::try_new("first.appspot.com").unwrap(), BucketName::try_new("second.appspot.com").unwrap()];
+        let names = ["one", "two", "three", "four"].map(|name| ObjectName::try_new(name).unwrap());
+        let now = LogicalInstant::UNIX_EPOCH;
+        memory.set_versioning(&buckets[versioned], true);
+        spilled.set_versioning(&buckets[versioned], true);
+        let mut snapshots = Vec::new();
+        let mut upload = None;
+        let seeded = [
+            (0, versioned, 0, 0, vec![0; usize::try_from(threshold.saturating_sub(1)).unwrap()]),
+            (0, versioned, 1, 0, vec![1; usize::try_from(threshold).unwrap()]),
+        ];
+        for (op, b, n, choice, bytes) in seeded.into_iter().chain(ops) {
+            let bucket = &buckets[b];
+            let name = &names[n];
+            let current = memory.get(bucket, name);
+            let generation = current.map_or(1, |m| m.generation);
+            let metageneration = current.map_or(1, |m| m.metageneration);
+            let pre = match choice {
+                1 => Precondition { if_generation_match: Some(generation), ..Precondition::default() },
+                2 => Precondition { if_generation_match: Some(generation + 1), ..Precondition::default() },
+                3 => Precondition { if_metageneration_match: Some(metageneration), ..Precondition::default() },
+                4 => Precondition { if_metageneration_match: Some(metageneration + 1), ..Precondition::default() },
+                _ => Precondition::default(),
+            };
+            match op {
+                0 | 1 => {
+                    let a = memory.put(bucket, name, bytes.clone(), NewMetadata::default(), pre, now);
+                    let b = spilled.put(bucket, name, bytes, NewMetadata::default(), pre, now);
+                    compare_results(&a, &b);
+                }
+                2 => {
+                    let a = memory.delete(bucket, name, pre, now);
+                    let b = spilled.delete(bucket, name, pre, now);
+                    compare_results(&a, &b);
+                }
+                3 => {
+                    let frozen = version_bodies(&memory, &buckets);
+                    snapshots.push((memory.clone(), spilled.clone(), frozen));
+                }
+                4 => { if !snapshots.is_empty() { snapshots.remove(n % snapshots.len()); } }
+                5 => {
+                    let mut imported_memory = StorageState::new(1);
+                    let mut imported_spilled = StorageState::new(1);
+                    imported_spilled.set_spill(Some((process.spill_dir(), threshold)));
+                    for object in memory.all_objects() {
+                        let imported = ImportedObject {
+                            bucket: object.bucket.clone(), name: object.name.clone(), generation: object.generation,
+                            metageneration: object.metageneration, content_type: object.content_type.clone(),
+                            content_disposition: object.content_disposition.clone(), content_encoding: object.content_encoding.clone(),
+                            content_language: object.content_language.clone(), cache_control: object.cache_control.clone(),
+                            custom: object.custom.clone(), custom_defined: object.custom_defined, time_created: object.time_created,
+                            updated: object.updated, download_tokens: object.download_tokens.clone(), md5: Some(object.md5),
+                            crc32c: Some(object.crc32c), size: Some(object.size),
+                        };
+                        let body = memory.body_bytes(object).unwrap().to_vec();
+                        let a = imported_memory.insert_imported(imported.clone(), body.clone()).unwrap();
+                        let b = imported_spilled.insert_imported(imported, body).unwrap();
+                        assert_eq!(a, b);
+                        let mut restored = a;
+                        restored.blob = object.blob;
+                        assert_eq!(&restored, object);
+                    }
+                    compare_spill_state(&imported_memory, &imported_spilled, &buckets, windows);
+                    for (original, restored) in memory.all_objects().iter().zip(imported_memory.all_objects()) {
+                        assert_eq!(memory.body_bytes(original).unwrap(), imported_memory.body_bytes(restored).unwrap());
+                    }
+                }
+                6 => {
+                    snapshots.clear();
+                    upload = None;
+                    memory.clear();
+                    spilled.clear();
+                    assert!(memory.all_objects().is_empty());
+                    assert_eq!(spill_files(process.path()).len(), 0);
+                    memory.set_versioning(&buckets[versioned], true);
+                    spilled.set_versioning(&buckets[versioned], true);
+                    compare_spill_state(&memory, &spilled, &buckets, windows);
+                    let a = memory.put(bucket, name, bytes.clone(), NewMetadata::default(), Precondition::default(), now);
+                    let b = spilled.put(bucket, name, bytes, NewMetadata::default(), Precondition::default(), now);
+                    compare_results(&a, &b);
+                    assert!(a.is_ok());
+                }
+                7 => {
+                    let total = match choice { 0 => None, 1 | 3 => Some(bytes.len() as u64 + 1), _ => Some(bytes.len() as u64) };
+                    let mut digest = ObjectDigests::new(&bytes).md5();
+                    digest[0] ^= 1;
+                    let options = UploadOptions { total, expected_md5: (choice >= 3).then_some(digest), ..UploadOptions::default() };
+                    let a = memory.begin_upload_with(bucket, name, NewMetadata::default(), Precondition::default(), options.clone(), now);
+                    let b = spilled.begin_upload_with(bucket, name, NewMetadata::default(), Precondition::default(), options, now);
+                    compare_results(&a, &b);
+                    upload = a.ok().map(|id| (id, bytes, 0usize));
+                }
+                8 => {
+                    if let Some((id, body, offset)) = &mut upload {
+                        let (start, end) = if choice % 2 == 0 && *offset > 0 { (0, *offset) } else { (*offset, if *offset == 0 { body.len().div_ceil(2) } else { body.len() }) };
+                        let a = memory.append_upload(id, start as u64, &body[start..end], now);
+                        let b = spilled.append_upload(id, start as u64, &body[start..end], now);
+                        compare_results(&a, &b);
+                        if a.is_ok() { *offset = (*offset).max(end); }
+                    }
+                }
+                _ => {
+                    if let Some((id, _, _)) = upload.take() {
+                        let a = memory.finalize_upload(&id, now);
+                        let b = spilled.finalize_upload(&id, now);
+                        compare_results(&a, &b);
+                    }
+                }
+            }
+            compare_spill_state(&memory, &spilled, &buckets, windows);
+            let mut blobs = BTreeSet::new();
+            for (object, _, _) in version_bodies(&spilled, &buckets) {
+                if object.size >= threshold { blobs.insert(object.blob); }
+            }
+            for (a, b, frozen) in &snapshots {
+                assert_eq!(&version_bodies(a, &buckets), frozen);
+                assert_eq!(&version_bodies(b, &buckets), frozen);
+                compare_spill_state(a, b, &buckets, windows);
+                for (object, _, _) in version_bodies(b, &buckets) {
+                    if object.size >= threshold { blobs.insert(object.blob); }
+                }
+            }
+            assert_eq!(spill_files(process.path()).len(), blobs.len());
+        }
+        drop(snapshots);
+        drop(spilled);
+        drop(process);
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
 #[test]
 fn spilled_read_failure_and_generation_delete() {
     let root = std::env::temp_dir().join(format!("spill-store-read-{}", std::process::id()));

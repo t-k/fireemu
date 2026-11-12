@@ -461,3 +461,16 @@ test("property: closure evidence follows the latest create attempt", () => {
     }
   }
 });
+
+test("a create attempt takes back the admission of a retry: the LIST that admitted it came before the attempt", () => {
+  const ledger = createLedger();
+  create(ledger, "ok");
+  del(ledger, "notfound");
+  ledger.read(N, "present", "list");
+  assert.deepEqual(ledger.deletable(), [N]);
+  create(ledger, "conflict");
+  assert.equal(ledger.status(N), "delete-404-present");
+  assert.deepEqual(ledger.deletable(), [], "another LIST is needed");
+  ledger.read(N, "present", "list");
+  assert.deepEqual(ledger.deletable(), [N]);
+});

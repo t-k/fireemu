@@ -211,7 +211,13 @@ impl Bundle {
                 items.truncate(max);
             }
         }
-        fn clean(v: &mut Value, count: &mut u64, max: usize, cuts: &mut Vec<Truncation>) {
+        fn clean(
+            v: &mut Value,
+            count: &mut u64,
+            max: usize,
+            cuts: &mut Vec<Truncation>,
+            dynamic: bool,
+        ) {
             match v {
                 Value::String(s) => {
                     let (new, n) = redact::scrub(s);
@@ -233,7 +239,7 @@ impl Bundle {
                 }
                 Value::Array(a) => {
                     for x in a {
-                        clean(x, count, max, cuts);
+                        clean(x, count, max, cuts, dynamic);
                     }
                 }
                 Value::Object(o) => {
@@ -245,10 +251,22 @@ impl Bundle {
                             v = Value::String("[redacted]".into());
                             *count += 1;
                         }
-                        let (k, n) = redact::scrub(&k);
-                        *count += n;
-                        clean(&mut v, count, max, cuts);
-                        o.insert(k, v);
+                        let child_dynamic = dynamic
+                            || matches!(
+                                k.as_str(),
+                                "events"
+                                    | "attempts"
+                                    | "retries"
+                                    | "indexes"
+                                    | "tasks"
+                                    | "resources"
+                            );
+                        let mut key = Value::String(k);
+                        if dynamic {
+                            clean(&mut key, count, max, cuts, true);
+                        }
+                        clean(&mut v, count, max, cuts, child_dynamic);
+                        o.insert(key.as_str().expect("object key").to_owned(), v);
                     }
                 }
                 _ => {}
@@ -301,13 +319,25 @@ impl Bundle {
             .remove("truncations")
             .expect("truncations");
         let mut cuts = Vec::new();
-        clean(&mut v, &mut count, limits.max_string_bytes, &mut cuts);
+        clean(
+            &mut v,
+            &mut count,
+            limits.max_string_bytes,
+            &mut cuts,
+            false,
+        );
         for pair in config.as_array_mut().expect("config array") {
             let pair = pair.as_array_mut().expect("config pair");
             let (key, n) = redact::scrub(pair[0].as_str().expect("config key"));
             pair[0] = Value::String(key);
             count += n;
-            clean(&mut pair[1], &mut count, limits.max_string_bytes, &mut cuts);
+            clean(
+                &mut pair[1],
+                &mut count,
+                limits.max_string_bytes,
+                &mut cuts,
+                false,
+            );
         }
         v.as_object_mut()
             .expect("bundle object")
@@ -486,4 +516,52 @@ pub fn from_value(v: &Value) -> Result<Bundle, String> {
         })?,
         redactions: num(field(v, "redactions")?)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn long_object_keys_are_bounded_and_recorded() {
+        let key = format!("{}é", "a".repeat(4095));
+        let input = BundleInput {
+            generated_at: String::new(),
+            versions: Versions {
+                fireemu: String::new(),
+                runtimes: vec![],
+                sdks: vec![],
+            },
+            config: vec![],
+            functions: FunctionsSection {
+                events: vec![json!({(key): "value"})],
+                attempts: vec![],
+                retries: vec![],
+                log_gaps: false,
+            },
+            rules: RulesSection {
+                history_enabled: false,
+                retention: 0,
+                history_started_at: None,
+                denials: vec![],
+                dropped: 0,
+            },
+            indexes: vec![],
+            pending: PendingSection {
+                tasks: vec![],
+                resources: vec![],
+            },
+            logs: LogSection {
+                lines: vec![],
+                dropped_ranges: vec![],
+            },
+        };
+        let bundle = Bundle::from_input(input, Limits::default());
+        let object = bundle.functions.events[0].as_object().unwrap();
+        assert_eq!(object.keys().next().unwrap(), &"a".repeat(4095));
+        assert!(bundle
+            .truncations
+            .iter()
+            .any(|t| t.section == "strings" && t.kept == 4096 && t.dropped == 2));
+    }
 }

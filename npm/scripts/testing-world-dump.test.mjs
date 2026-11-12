@@ -11,12 +11,12 @@ test('dump paths name both bundle files in the requested directory', () => {
   });
 });
 
-import { mkdir, mkdtemp, readdir, rm, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { writeDiagnosticsDump } from '../fireemu/testing.mjs';
 
 const bundle = { schemaVersion: 1, generatedAt: 'virtual', rules: { denials: [], dropped: 0 } };
-const page = '<!doctype html><title>bundle</title>';
+const page = '<!doctype html>';
 
 function fakeControl(answers) {
   const calls = [];
@@ -36,7 +36,7 @@ async function scratch(test) {
   }
 }
 
-test('the dump writes bundle.json and bundle.html and asks the two control answers in order', () =>
+test('the dump writes both formats from one captured bundle', () =>
   scratch(async (root) => {
     const directory = join(root, 'nested', 'dump');
     const { control, calls } = fakeControl((path) =>
@@ -46,10 +46,15 @@ test('the dump writes bundle.json and bundle.html and asks the two control answe
     assert.deepEqual(paths, dumpPaths(directory));
     assert.deepEqual(calls, [
       ['GET', '/v1/sessions/default/diagnostics/bundle'],
-      ['GET', '/v1/sessions/default/diagnostics/bundle?format=html'],
     ]);
     assert.equal(await readFile(paths.json, 'utf8'), JSON.stringify(bundle, null, 2));
-    assert.equal(await readFile(paths.html, 'utf8'), page);
+    const html = await readFile(paths.html, 'utf8');
+    assert.ok(html.startsWith(page));
+    assert.ok(html.includes('&quot;generatedAt&quot;: &quot;virtual&quot;'));
+    if (process.platform !== 'win32') {
+      for (const path of [join(root, 'nested'), directory]) assert.equal((await stat(path)).mode & 0o777, 0o700);
+      for (const path of [paths.json, paths.html]) assert.equal((await stat(path)).mode & 0o777, 0o600);
+    }
     assert.deepEqual(JSON.parse(await readFile(paths.json, 'utf8')), bundle);
   }));
 
@@ -73,21 +78,6 @@ test('an answer that is not an array-free object is refused; an array is refused
   scratch(async (root) => {
     const { control } = fakeControl(() => [bundle]);
     await assert.rejects(writeDiagnosticsDump(root, control), /invalid diagnostics bundle/);
-  }));
-
-test('an HTML answer that does not start with the doctype writes no HTML file', () =>
-  scratch(async (root) => {
-    const { control } = fakeControl((path) =>
-      path.includes('format=html') ? { html: '<html>' } : bundle,
-    );
-    await assert.rejects(writeDiagnosticsDump(root, control), /invalid diagnostics HTML/);
-    assert.deepEqual(await readdir(root), []);
-  }));
-
-test('a missing html field is refused', () =>
-  scratch(async (root) => {
-    const { control } = fakeControl((path) => (path.includes('format=html') ? {} : bundle));
-    await assert.rejects(writeDiagnosticsDump(root, control), /invalid diagnostics HTML/);
   }));
 
 test('a failed rename leaves no temporary file behind', () =>

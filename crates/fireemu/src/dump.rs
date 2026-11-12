@@ -82,66 +82,128 @@ pub(super) fn command(args: &[String]) -> Result<(), CliError> {
             (key, value)
         })
         .collect();
+    let previous_redactions = bundle.redactions;
+    let previous_truncations = std::mem::take(&mut bundle.truncations);
+    bundle = diagnostics::Bundle::from_input(
+        diagnostics::BundleInput {
+            generated_at: bundle.generated_at,
+            versions: bundle.versions,
+            config: bundle.config,
+            functions: bundle.functions,
+            rules: bundle.rules,
+            indexes: bundle.indexes,
+            pending: bundle.pending,
+            logs: bundle.logs,
+        },
+        diagnostics::Limits::default(),
+    );
+    bundle.redactions += previous_redactions;
+    bundle.truncations.splice(0..0, previous_truncations);
     let dir = Path::new(out);
     let json_path = dir.join("bundle.json");
     let html_path = dir.join("bundle.html");
-    for (path, is_dir) in [
-        (dir, true),
-        (json_path.as_path(), false),
-        (html_path.as_path(), false),
-    ] {
-        match std::fs::symlink_metadata(path) {
-            Ok(metadata) => {
-                if metadata.file_type().is_symlink()
-                    || (is_dir && !metadata.is_dir())
-                    || (!is_dir && (!metadata.is_file() || !force))
-                {
-                    return Err(CliError::refused(format!(
-                        "cannot use {}: already exists or is a symbolic link",
-                        crate::diagnostic_path(path)
-                    )));
-                }
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => {
-                return Err(CliError::refused(format!(
-                    "cannot inspect {}: {e}",
-                    crate::diagnostic_path(path)
-                )))
-            }
-        }
-    }
-    let mut builder = std::fs::DirBuilder::new();
-    builder.recursive(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    // On non-Unix targets, directory and file creation use the platform defaults.
-    builder.create(dir).map_err(|e| {
-        CliError::refused(format!(
-            "cannot create {}: {e}",
-            crate::diagnostic_path(dir)
-        ))
-    })?;
-    for (path, content) in [
-        (&json_path, diagnostics::to_json(&bundle)),
-        (&html_path, diagnostics::to_html(&bundle)),
-    ] {
-        if force {
-            match std::fs::symlink_metadata(path) {
-                Ok(metadata) if metadata.is_file() => std::fs::remove_file(path).map_err(|e| {
-                    CliError::refused(format!(
-                        "cannot remove {}: {e}",
-                        crate::diagnostic_path(path)
-                    ))
-                })?,
+        use rustix::fs::{self, AtFlags, FileType, Mode, OFlags};
+        use std::path::Component;
+        let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        let mut directory = fs::open(
+            if dir.is_absolute() { "/" } else { "." },
+            flags,
+            Mode::empty(),
+        )
+        .map_err(|e| CliError::refused(format!("cannot open output root: {e}")))?;
+        for component in dir.components() {
+            let name = match component {
+                Component::RootDir | Component::CurDir => continue,
+                Component::Normal(name) => name,
+                Component::ParentDir => std::ffi::OsStr::new(".."),
+                Component::Prefix(_) => return Err(CliError::refused("invalid output path")),
+            };
+            match fs::mkdirat(&directory, name, Mode::RWXU) {
+                Ok(()) | Err(rustix::io::Errno::EXIST) => {}
+                Err(e) => {
+                    return Err(CliError::refused(format!(
+                        "cannot create {}: {e}",
+                        crate::diagnostic_path(dir)
+                    )))
+                }
+            }
+            directory = fs::openat(&directory, name, flags, Mode::empty()).map_err(|e| {
+                CliError::refused(format!("cannot open {}: {e}", crate::diagnostic_path(dir)))
+            })?;
+        }
+        for name in ["bundle.json", "bundle.html"] {
+            match fs::statat(&directory, name, AtFlags::SYMLINK_NOFOLLOW) {
+                Ok(stat)
+                    if force && FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile => {}
                 Ok(_) => {
                     return Err(CliError::refused(format!(
-                        "cannot replace {}",
-                        crate::diagnostic_path(path)
+                        "cannot use {name}: already exists or is a symbolic link"
                     )))
+                }
+                Err(rustix::io::Errno::NOENT) => {}
+                Err(e) => return Err(CliError::refused(format!("cannot inspect {name}: {e}"))),
+            }
+        }
+        for (name, content) in [
+            ("bundle.json", diagnostics::to_json(&bundle)),
+            ("bundle.html", diagnostics::to_html(&bundle)),
+        ] {
+            if force {
+                match fs::unlinkat(&directory, name, AtFlags::empty()) {
+                    Ok(()) | Err(rustix::io::Errno::NOENT) => {}
+                    Err(e) => return Err(CliError::refused(format!("cannot remove {name}: {e}"))),
+                }
+            }
+            let fd = fs::openat(
+                &directory,
+                name,
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::RUSR | Mode::WUSR,
+            )
+            .map_err(|e| CliError::refused(format!("cannot create {name}: {e}")))?;
+            let mut file = std::fs::File::from(fd);
+            file.write_all(content.as_bytes())
+                .map_err(|e| CliError::refused(format!("cannot write {name}: {e}")))?;
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        for ancestor in dir.ancestors() {
+            match std::fs::symlink_metadata(ancestor) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(CliError::refused(format!(
+                        "cannot use {}: symbolic link",
+                        crate::diagnostic_path(ancestor)
+                    )));
+                }
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    return Err(CliError::refused(format!(
+                        "cannot inspect {}: {e}",
+                        crate::diagnostic_path(ancestor)
+                    )))
+                }
+            }
+        }
+        for (path, is_dir) in [
+            (dir, true),
+            (json_path.as_path(), false),
+            (html_path.as_path(), false),
+        ] {
+            match std::fs::symlink_metadata(path) {
+                Ok(metadata) => {
+                    if metadata.file_type().is_symlink()
+                        || (is_dir && !metadata.is_dir())
+                        || (!is_dir && (!metadata.is_file() || !force))
+                    {
+                        return Err(CliError::refused(format!(
+                            "cannot use {}: already exists or is a symbolic link",
+                            crate::diagnostic_path(path)
+                        )));
+                    }
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => {
@@ -152,25 +214,69 @@ pub(super) fn command(args: &[String]) -> Result<(), CliError> {
                 }
             }
         }
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true);
         #[cfg(unix)]
         {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
         }
-        let mut file = options.open(path).map_err(|e| {
+        // On non-Unix targets, directory and file creation use the platform defaults.
+        builder.create(dir).map_err(|e| {
             CliError::refused(format!(
                 "cannot create {}: {e}",
-                crate::diagnostic_path(path)
+                crate::diagnostic_path(dir)
             ))
         })?;
-        file.write_all(content.as_bytes()).map_err(|e| {
-            CliError::refused(format!(
-                "cannot write {}: {e}",
-                crate::diagnostic_path(path)
-            ))
-        })?;
+        for (path, content) in [
+            (&json_path, diagnostics::to_json(&bundle)),
+            (&html_path, diagnostics::to_html(&bundle)),
+        ] {
+            if force {
+                match std::fs::symlink_metadata(path) {
+                    Ok(metadata) if metadata.is_file() => {
+                        std::fs::remove_file(path).map_err(|e| {
+                            CliError::refused(format!(
+                                "cannot remove {}: {e}",
+                                crate::diagnostic_path(path)
+                            ))
+                        })?
+                    }
+                    Ok(_) => {
+                        return Err(CliError::refused(format!(
+                            "cannot replace {}",
+                            crate::diagnostic_path(path)
+                        )))
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => {
+                        return Err(CliError::refused(format!(
+                            "cannot inspect {}: {e}",
+                            crate::diagnostic_path(path)
+                        )))
+                    }
+                }
+            }
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut file = options.open(path).map_err(|e| {
+                CliError::refused(format!(
+                    "cannot create {}: {e}",
+                    crate::diagnostic_path(path)
+                ))
+            })?;
+            file.write_all(content.as_bytes()).map_err(|e| {
+                CliError::refused(format!(
+                    "cannot write {}: {e}",
+                    crate::diagnostic_path(path)
+                ))
+            })?;
+        }
     }
     println!("{}", crate::diagnostic_path(&json_path));
     println!("{}", crate::diagnostic_path(&html_path));

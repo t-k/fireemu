@@ -93,20 +93,18 @@ export function dumpPaths(directory){
   return {json:join(directory,'bundle.json'),html:join(directory,'bundle.html')};
 }
 
-/** Writes the diagnostics bundle (bundle.json) and its HTML page (bundle.html) into `directory`.
- * `control(method, path)` answers the control endpoint: the JSON bundle first, then the HTML answer,
- * which is a JSON object whose `html` field holds the page. bundle.json is the parsed answer written
- * back out with JSON.stringify, not the raw response bytes. Files go through a temporary name and a rename. */
+/** Writes JSON and HTML diagnostics from one captured bundle. */
 export async function writeDiagnosticsDump(directory,control){
   const paths=dumpPaths(directory);
   const bundle=await control('GET','/v1/sessions/default/diagnostics/bundle');
   if(!bundle||typeof bundle!=='object'||Array.isArray(bundle)||bundle.schemaVersion!==1)throw Error(`invalid diagnostics bundle for ${directory}`);
-  const html=await control('GET','/v1/sessions/default/diagnostics/bundle?format=html');
-  if(typeof html?.html!=='string'||!html.html.startsWith('<!doctype html>'))throw Error(`invalid diagnostics HTML for ${paths.html}`);
-  await mkdir(directory,{recursive:true});
-  for(const [path,contents] of [[paths.json,JSON.stringify(bundle,null,2)],[paths.html,html.html]]){
+  const json=JSON.stringify(bundle,null,2);
+  const escaped=json.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  const html=`<!doctype html><html><head><meta charset="utf-8"><title>Diagnostics bundle</title></head><body><h1>Diagnostics bundle</h1><h2>Omitted or redacted</h2><p>Redactions: ${Number(bundle.redactions)||0}</p><pre>${escaped}</pre></body></html>`;
+  await mkdir(directory,{recursive:true,mode:0o700});
+  for(const [path,contents] of [[paths.json,json],[paths.html,html]]){
     const temporary=`${path}.${randomUUID()}.tmp`;
-    try{await writeFile(temporary,contents);await rename(temporary,path);}
+    try{await writeFile(temporary,contents,{mode:0o600,flag:'wx'});await rename(temporary,path);}
     finally{await rm(temporary,{force:true});}
   }
   return paths;

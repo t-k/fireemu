@@ -285,3 +285,79 @@ fn exec_preserves_child_status_when_dump_is_refused() {
         .next()
         .is_none());
 }
+
+#[test]
+fn refuses_symlinked_ancestor() {
+    let dir = Scratch::new("dump-security", "ancestor-link");
+    std::fs::write(dir.join("fireemu.json"), r#"{"schemaVersion":1}"#).unwrap();
+    std::fs::create_dir(dir.join("target")).unwrap();
+    std::os::unix::fs::symlink(dir.join("target"), dir.join("linked")).unwrap();
+    let (_daemon, url, token) = start(&dir);
+    let result = run(
+        &dir,
+        &["dump", "--out", "linked/new", "--url", &url],
+        &token,
+    );
+    assert!(!result.status.success());
+    assert!(!dir.join("target/new").exists());
+}
+
+#[test]
+fn local_config_is_scrubbed_and_bounded() {
+    let dir = Scratch::new("dump-security", "config-scrub");
+    std::fs::write(dir.join("fireemu.json"), r#"{"schemaVersion":1}"#).unwrap();
+    let (_daemon, url, token) = start(&dir);
+    for (index, value, expected) in [
+        (0, "Bearer sentinel123".to_owned(), "[redacted]".to_owned()),
+        (
+            1,
+            ["/home/", "example/config"].concat(),
+            "~/config".to_owned(),
+        ),
+        (2, "x".repeat(5000), "x".repeat(4096)),
+    ] {
+        std::fs::write(
+            dir.join("local.json"),
+            serde_json::json!({"schemaVersion":1,"daemon":{"authProject":value}}).to_string(),
+        )
+        .unwrap();
+        let out = format!("out{index}");
+        let result = run(
+            &dir,
+            &[
+                "dump",
+                "--out",
+                &out,
+                "--url",
+                &url,
+                "--config",
+                "local.json",
+            ],
+            &token,
+        );
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let bundle: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join(&out).join("bundle.json")).unwrap())
+                .unwrap();
+        let row = bundle["config"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row[0] == "daemon.authProject")
+            .unwrap();
+        assert_eq!(row[1], expected);
+        if index == 2 {
+            assert!(bundle["truncations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t["section"] == "strings" && t["dropped"] == 904));
+        }
+        let html = std::fs::read_to_string(dir.join(out).join("bundle.html")).unwrap();
+        assert!(!html.contains(&value));
+    }
+}

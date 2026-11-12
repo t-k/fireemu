@@ -86,6 +86,25 @@ export function dumpPaths(directory){
   return {json:join(directory,'bundle.json'),html:join(directory,'bundle.html')};
 }
 
+/** Writes the diagnostics bundle (bundle.json) and its HTML page (bundle.html) into `directory`.
+ * `control(method, path)` answers the control endpoint: the JSON bundle first, then the HTML answer,
+ * which is a JSON object whose `html` field holds the page. bundle.json is the parsed answer written
+ * back out with JSON.stringify, not the raw response bytes. Files go through a temporary name and a rename. */
+export async function writeDiagnosticsDump(directory,control){
+  const paths=dumpPaths(directory);
+  const bundle=await control('GET','/v1/sessions/default/diagnostics/bundle');
+  if(!bundle||typeof bundle!=='object'||Array.isArray(bundle)||bundle.schemaVersion!==1)throw Error(`invalid diagnostics bundle for ${directory}`);
+  const html=await control('GET','/v1/sessions/default/diagnostics/bundle?format=html');
+  if(typeof html?.html!=='string'||!html.html.startsWith('<!doctype html>'))throw Error(`invalid diagnostics HTML for ${paths.html}`);
+  await mkdir(directory,{recursive:true});
+  for(const [path,contents] of [[paths.json,JSON.stringify(bundle,null,2)],[paths.html,html.html]]){
+    const temporary=`${path}.${randomUUID()}.tmp`;
+    try{await writeFile(temporary,contents);await rename(temporary,path);}
+    finally{await rm(temporary,{force:true});}
+  }
+  return paths;
+}
+
 /** Create an independent emulator world; no method changes the parent's environment. */
 export async function createTestWorld(options={}){
   options={...options,nodePathExcludes:Array.isArray(options.nodePathExcludes)?[...options.nodePathExcludes]:options.nodePathExcludes,config:typeof options.config==='object'?structuredClone(options.config):options.config,services:options.services?[...options.services]:undefined,env:{...(options.env??{...process.env,NODE_PATH:''})},clock:options.clock?{...options.clock}:undefined};
@@ -168,20 +187,7 @@ export async function createTestWorld(options={}){
     get environment(){check();return current.environment;},
     get directory(){return directory;},
     control,
-    async dump(directory){
-      const paths=dumpPaths(directory);
-      const bundle=await control('GET','/v1/sessions/default/diagnostics/bundle');
-      if(!bundle||typeof bundle!=='object'||Array.isArray(bundle)||bundle.schemaVersion!==1)throw Error(`invalid diagnostics bundle for ${directory}`);
-      const html=await control('GET','/v1/sessions/default/diagnostics/bundle?format=html');
-      if(typeof html?.html!=='string'||!html.html.startsWith('<!doctype html>'))throw Error(`invalid diagnostics HTML for ${paths.html}`);
-      await mkdir(directory,{recursive:true});
-      for(const [path,contents] of [[paths.json,JSON.stringify(bundle,null,2)],[paths.html,html.html]]){
-        const temporary=`${path}.${randomUUID()}.tmp`;
-        try{await writeFile(temporary,contents);await rename(temporary,path);}
-        finally{await rm(temporary,{force:true});}
-      }
-      return paths;
-    },
+    dump(directory){return writeDiagnosticsDump(directory,control);},
     clock:Object.freeze({
       get:()=>control('GET','/v1/sessions/default'),
       set:(instant,{allowBackwards=false}={})=>control('POST','/v1/sessions/default/clock:set',{instant,allowBackwards}),

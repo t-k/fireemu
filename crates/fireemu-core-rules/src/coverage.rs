@@ -715,6 +715,30 @@ mod index_tests {
     }
 
     proptest::proptest! {
+        /// Enabling a smaller retention after requests were already traced keeps the newest
+        /// window and counts the rest as dropped (the trim in enable_request_traces_with_capacity).
+        #[test]
+        fn enabling_a_smaller_retention_trims_the_newest_window(
+            first in 1usize..=10_000, n in 0usize..300, smaller in 1usize..=10_000
+        ) {
+            let mut diagnostics = RulesDiagnostics::default();
+            diagnostics.enable_request_traces_with_capacity(first);
+            for _ in 0..n {
+                diagnostics.push(&Coverage::default(), |sequence| RequestTrace {
+                    sequence, method: "get", path: String::new(), allowed: false,
+                    reason: String::new(), uid: None, expressions: Vec::new(),
+                });
+            }
+            let kept_before = n.min(first);
+            proptest::prop_assert_eq!(diagnostics.requests().len(), kept_before);
+            diagnostics.enable_request_traces_with_capacity(smaller);
+            let kept = kept_before.min(smaller);
+            let requests = diagnostics.requests();
+            proptest::prop_assert_eq!(requests.len(), kept);
+            proptest::prop_assert_eq!(diagnostics.dropped(), (n - kept) as u64);
+            proptest::prop_assert!(requests.iter().enumerate().all(|(i, request)| request.sequence == (n - i) as u64));
+        }
+
         #[test]
         fn request_trace_retains_newest(capacity in 1usize..=10_000, n in 0usize..20_000) {
             let mut diagnostics = RulesDiagnostics::default();

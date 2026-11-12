@@ -1,11 +1,17 @@
-//! Content-Encoding for the strict profile: gzip, as the production recording shows it (rows
-//! `v01.gz-*` of runs 658bb2 and 9a8d57, corpus `conformance/src/hosting-production`).
+//! Content-Encoding for the strict profile: gzip, as the production recordings show it (rows
+//! `v01.gz-*` of runs 658bb2 and 9a8d57; rows `v14.*` and `v15.*` of the follow-up runs 11ae6c and
+//! 1c6a4c; corpora `conformance/src/hosting-production`).
 //!
-//! Production answers a compressible file with `Content-Encoding: gzip` when the request accepts
-//! gzip, keeps the file's own `ETag` (a gzip answer carries no suffix; only a Brotli answer's tag
-//! ends in `-br`), keeps `Vary: x-fh-requested-host, accept-encoding` on every answer, and leaves
-//! an incompressible type (`v01.gz-png-gzip`) alone. Brotli is not produced here: a request that
-//! accepts only `br` is answered as identity, a declared difference.
+//! What production does, read from the rows: it looks for the text `gzip` (and `br`) in the
+//! `Accept-Encoding` header as a plain, case-sensitive substring. The header `x-gzip` and
+//! `gzip;q=0` get gzip, `GZIP`, `*`, `deflate` and `identity` get none, and a header with `br` gets
+//! Brotli. It compresses any content type (an image, a zip and a font as well as text) when the
+//! compressed body is smaller: files of 1 and 10 bytes are left alone, files of 100 bytes and more
+//! (to the 4,500 recorded) are compressed. A `Content-Encoding` header set by a `headers` rule is
+//! not served. The `ETag` stays the file's own. A `Range` is taken over the compressed body.
+//!
+//! Brotli is not produced here (a declared difference): a request that accepts only `br` is answered
+//! as identity, one that accepts both as gzip.
 
 use std::io::Read;
 
@@ -19,6 +25,12 @@ pub(super) fn within_limit(length: u64) -> bool {
     length > 0 && length <= MAX_GZIP_INPUT
 }
 
+/// Whether a compressed body of `packed` bytes is sent for a file of `original` bytes: only when it
+/// is smaller (`v15.size-0001` and `-0010` are identity, `-0100` and up are gzip).
+pub(super) fn pays_off(packed: u64, original: u64) -> bool {
+    packed < original
+}
+
 /// [`accepts_gzip`] over every `Accept-Encoding` line of a request: several lines are one
 /// comma-separated list (RFC 9110), so `br` on one line and `gzip` on the next accepts gzip.
 pub(super) fn accepts_gzip_in(headers: &hyper::HeaderMap) -> bool {
@@ -30,52 +42,22 @@ pub(super) fn accepts_gzip_in(headers: &hyper::HeaderMap) -> bool {
     !lines.is_empty() && accepts_gzip(Some(&lines.join(", ")))
 }
 
-/// Whether `Accept-Encoding` accepts gzip: the first `gzip` member has a quality above zero.
-/// `x-gzip`, `*` and every other coding do not count (production recorded only `gzip` and `br`);
-/// a quality that is not a number from 0 to 1 refuses the member.
+/// Whether `Accept-Encoding` holds the text `gzip`, as production reads it (`v15.ae-*`): `gzip`,
+/// `x-gzip` and `gzip;q=0` do, `GZIP`, `*`, `deflate`, `identity` and an absent header do not.
 pub(super) fn accepts_gzip(header: Option<&str>) -> bool {
-    let Some(header) = header else {
-        return false;
-    };
-    for member in header.split(',') {
-        let mut parts = member.split(';');
-        if !parts
-            .next()
-            .unwrap_or("")
-            .trim()
-            .eq_ignore_ascii_case("gzip")
-        {
-            continue;
-        }
-        let quality = parts.find_map(|parameter| {
-            let (name, value) = parameter.split_once('=')?;
-            name.trim().eq_ignore_ascii_case("q").then(|| value.trim())
-        });
-        return quality.is_none_or(|value| quality_thousandths(value).is_some_and(|q| q > 0));
-    }
-    false
+    header.is_some_and(|value| value.contains("gzip"))
 }
 
-/// An RFC 9110 `qvalue` in thousandths: `0` to `0.999` or `1` to `1.000`, or `None` for any other
-/// text.
-fn quality_thousandths(text: &str) -> Option<u16> {
-    let (whole, fraction) = text.split_once('.').map_or((text, ""), |(w, f)| (w, f));
-    if fraction.len() > 3 || !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    let digits: u16 = format!("{fraction:0<3}").parse().ok()?;
-    match whole {
-        "0" => Some(digits),
-        "1" if digits == 0 => Some(1000),
-        _ => None,
-    }
-}
+/// The `OS` byte of the gzip header: production's is `0x13` (`v15.ae-range`).
+const GZIP_OS: u8 = 0x13;
 
 /// The first `size` bytes of `source` compressed as one gzip member at the default level, or the error that reading
 /// them gave (a source shorter than `size` is an error). The same input always gives the same
 /// output: the header carries no time and no file name. Blocking: callers run it on a blocking thread.
 pub(super) fn gzip_reader(source: impl Read, size: u64) -> std::io::Result<Vec<u8>> {
-    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    let mut encoder = flate2::GzBuilder::new()
+        .operating_system(GZIP_OS)
+        .write(Vec::new(), flate2::Compression::default());
     let copied = std::io::copy(&mut source.take(size), &mut encoder)?;
     if copied != size {
         return Err(std::io::Error::new(
@@ -105,47 +87,51 @@ mod tests {
 
     #[test]
     fn accept_encoding_forms() {
+        // the rows v15.ae-* and v01.gz-* of the recordings, then the same rule on other forms
         let yes = [
             "gzip",
-            "GZIP",
-            " gzip ",
-            "gzip, br",
+            "x-gzip",
+            "gzip;q=0",
+            "gzip, deflate, br",
             "br, gzip",
             "br;q=0, gzip",
-            "gzip;q=1",
             "gzip;q=0.5",
-            "gzip; q=0.001",
+            " gzip ",
+            "deflate, gzip",
+            "xgzip",
             "gzip;level=1",
-            "deflate, gzip;q=0.2",
-            "gzip;Q=1",
         ];
         for form in yes {
-            assert!(accepts_gzip(Some(form)), "{form:?} accepts gzip");
+            assert!(accepts_gzip(Some(form)), "{form:?} holds gzip");
         }
         let no = [
             "",
             "identity",
             "br",
             "*",
-            "x-gzip",
-            "gzipx",
-            "xgzip",
-            "gzip;q=0",
-            "gzip;q=0.0",
-            "gzip; q=0.000",
-            "gzip;q=abc",
-            "gzip;q=",
-            "gzip;q=2",
-            "gzip;q=-1",
-            "gzip;q=1.5",
-            "gzip;q=0.0001",
-            "gzip;q=0, gzip",
+            "deflate",
+            "GZIP",
+            "Gzip",
+            "gzi",
+            "zip",
             "br;q=1, deflate",
         ];
         for form in no {
-            assert!(!accepts_gzip(Some(form)), "{form:?} does not accept gzip");
+            assert!(!accepts_gzip(Some(form)), "{form:?} does not hold gzip");
         }
         assert!(!accepts_gzip(None));
+    }
+
+    #[test]
+    fn a_compressed_body_is_sent_only_when_it_is_smaller() {
+        // v15.size-*: 1 and 10 bytes stay, 100 bytes and more are compressed
+        assert!(!pays_off(21, 1));
+        assert!(!pays_off(30, 10));
+        assert!(pays_off(73, 100));
+        assert!(pays_off(93, 4500));
+        assert!(!pays_off(100, 100));
+        assert!(pays_off(99, 100));
+        assert!(!pays_off(0, 0));
     }
 
     #[test]
@@ -169,8 +155,10 @@ mod tests {
             b"gzip;q=1"
         ])));
         assert!(!accepts_gzip_in(&request(&[b"br", b"deflate"])));
-        // the first gzip member decides, across lines too
-        assert!(!accepts_gzip_in(&request(&[b"gzip;q=0", b"gzip"])));
+        // a quality is not read (`v15.ae-gzip-q0`): the text `gzip` is enough, on any line
+        assert!(accepts_gzip_in(&request(&[b"gzip;q=0"])));
+        assert!(accepts_gzip_in(&request(&[b"br", b"GZIP", b"x-gzip"])));
+        assert!(!accepts_gzip_in(&request(&[b"br", b"GZIP"])));
         // a line that is not text is skipped, the others still count
         assert!(accepts_gzip_in(&request(&[b"\xff", b"gzip"])));
         assert!(!accepts_gzip_in(&request(&[b"\xff"])));
@@ -191,6 +179,9 @@ mod tests {
         let packed = gzip(body.as_bytes());
         // magic, deflate, no flags, mtime zero
         assert_eq!(&packed[..8], &[0x1f, 0x8b, 8, 0, 0, 0, 0, 0]);
+        // flags `XFL` 0 and `OS` 0x13, the ten bytes production's header is (`v15.ae-range` is `bytes=0-9`
+        // of its gzip body, and the digest of those ten bytes is that of this header)
+        assert_eq!(&packed[8..10], &[0, 0x13]);
         assert_eq!(gunzip(&packed), body.as_bytes());
         assert_eq!(packed, gzip(body.as_bytes()));
         // 4,500 bytes of a repeated line: the recorded production answer is 93 bytes
@@ -208,53 +199,11 @@ mod tests {
         assert!(gzip_reader(&data[..50], 51).is_err());
     }
 
-    /// One `Accept-Encoding` member: a coding and an optional quality text.
-    fn member() -> impl Strategy<Value = (String, Option<String>)> {
-        (
-            prop_oneof![
-                Just("gzip".to_owned()),
-                Just("GZip".to_owned()),
-                Just("br".to_owned()),
-                Just("identity".to_owned()),
-                Just("*".to_owned()),
-                Just("deflate".to_owned()),
-                "[a-z-]{1,8}",
-            ],
-            prop_oneof![
-                Just(None),
-                Just(Some("0".to_owned())),
-                Just(Some("0.000".to_owned())),
-                Just(Some("1".to_owned())),
-                Just(Some("0.5".to_owned())),
-                Just(Some("0.001".to_owned())),
-                Just(Some("x".to_owned())),
-                Just(Some(String::new())),
-            ],
-        )
-    }
-
     proptest! {
-        /// The decision follows the first gzip member and nothing else.
+        /// The decision is the plain substring test and nothing else.
         #[test]
-        fn accepts_gzip_follows_the_first_gzip_member(
-            members in proptest::collection::vec(member(), 0..6),
-            spaces in "[ ]{0,2}",
-        ) {
-            let text = members
-                .iter()
-                .map(|(coding, quality)| match quality {
-                    Some(q) => format!("{spaces}{coding};{spaces}q={q}"),
-                    None => format!("{spaces}{coding}"),
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            let expected = members
-                .iter()
-                .find(|(coding, _)| coding.eq_ignore_ascii_case("gzip"))
-                .is_some_and(|(_, quality)| {
-                    matches!(quality.as_deref(), None | Some("1" | "0.5" | "0.001"))
-                });
-            prop_assert_eq!(accepts_gzip(Some(&text)), expected, "{}", text);
+        fn accepts_gzip_is_the_substring_test(text in "[a-zA-Z;=,0-9 *.-]{0,40}") {
+            prop_assert_eq!(accepts_gzip(Some(&text)), text.contains("gzip"));
         }
 
         #[test]
@@ -268,7 +217,7 @@ mod tests {
         ) {
             let packed = gzip(&data);
             prop_assert_eq!(&packed[..4], &[0x1f, 0x8b, 8, 0][..]);
-            prop_assert_eq!(&packed[4..8], &[0, 0, 0, 0][..]);
+            prop_assert_eq!(&packed[4..10], &[0, 0, 0, 0, 0, 0x13][..]);
             prop_assert_eq!(gunzip(&packed), data.clone());
             prop_assert_eq!(gzip_reader(&data[..], data.len() as u64).unwrap(), packed);
         }

@@ -100,7 +100,65 @@
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
       },
-      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109",
+      "followUpEvidence": {
+        "corpus": "hosting-followup-v1",
+        "followUpConditions": [
+          "dot-segments"
+        ],
+        "productionEvidence": [
+          {
+            "alias": "followup-1",
+            "fixturePath": "conformance/hosting-production-followup-1.json",
+            "fixtureSha256": "398a35dc1df788b268dab42cdbd4557bb04dec0c7dc5f89978259ba27b804262"
+          },
+          {
+            "alias": "followup-2",
+            "fixturePath": "conformance/hosting-production-followup-2.json",
+            "fixtureSha256": "b921586e2fc4b1de7ceedc6d658d2e5148e252dfc2af4c2b89d4ae5b01af0826"
+          }
+        ],
+        "comparisons": {
+          "followUpRunVsRun": {
+            "rows": 17,
+            "counts": {
+              "MATCH": 2,
+              "MATCH_LAYOUT": 0,
+              "KNOWN_DIFFERENCE": 15,
+              "MISMATCH": 0,
+              "UNKNOWN": 0
+            },
+            "knownDifferenceRows": 15
+          },
+          "followUpStrictVsRun1": {
+            "rows": 17,
+            "counts": {
+              "MATCH": 0,
+              "MATCH_LAYOUT": 0,
+              "KNOWN_DIFFERENCE": 17,
+              "MISMATCH": 0,
+              "UNKNOWN": 0
+            },
+            "knownDifferenceRows": 17
+          },
+          "followUpStrictVsRun2": {
+            "rows": 17,
+            "counts": {
+              "MATCH": 0,
+              "MATCH_LAYOUT": 0,
+              "KNOWN_DIFFERENCE": 17,
+              "MISMATCH": 0,
+              "UNKNOWN": 0
+            },
+            "knownDifferenceRows": 17
+          }
+        },
+        "knownDifferences": [
+          "KD-SAFETY-ORIGIN-REDIRECT",
+          "KD-DEFAULT-404-BODY"
+        ],
+        "requests": 17
+      }
     },
     {
       "conditionId": "HOSTING/redirects",
@@ -179,7 +237,64 @@
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
       },
-      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109",
+      "followUpEvidence": {
+        "corpus": "hosting-followup-v1",
+        "followUpConditions": [
+          "redirect-names"
+        ],
+        "productionEvidence": [
+          {
+            "alias": "followup-1",
+            "fixturePath": "conformance/hosting-production-followup-1.json",
+            "fixtureSha256": "398a35dc1df788b268dab42cdbd4557bb04dec0c7dc5f89978259ba27b804262"
+          },
+          {
+            "alias": "followup-2",
+            "fixturePath": "conformance/hosting-production-followup-2.json",
+            "fixtureSha256": "b921586e2fc4b1de7ceedc6d658d2e5148e252dfc2af4c2b89d4ae5b01af0826"
+          }
+        ],
+        "comparisons": {
+          "followUpRunVsRun": {
+            "rows": 14,
+            "counts": {
+              "MATCH": 14,
+              "MATCH_LAYOUT": 0,
+              "KNOWN_DIFFERENCE": 0,
+              "MISMATCH": 0,
+              "UNKNOWN": 0
+            },
+            "knownDifferenceRows": 0
+          },
+          "followUpStrictVsRun1": {
+            "rows": 14,
+            "counts": {
+              "MATCH": 2,
+              "MATCH_LAYOUT": 0,
+              "KNOWN_DIFFERENCE": 12,
+              "MISMATCH": 0,
+              "UNKNOWN": 0
+            },
+            "knownDifferenceRows": 12
+          },
+          "followUpStrictVsRun2": {
+            "rows": 14,
+            "counts": {
+              "MATCH": 2,
+              "MATCH_LAYOUT": 0,
+              "KNOWN_DIFFERENCE": 12,
+              "MISMATCH": 0,
+              "UNKNOWN": 0
+            },
+            "knownDifferenceRows": 12
+          }
+        },
+        "knownDifferences": [
+          "KD-DEFAULT-404-BODY"
+        ],
+        "requests": 14
+      }
     },
     {
       "conditionId": "HOSTING/rewrites",
@@ -755,15 +870,72 @@
         }
       },
       "knownDifferences": [
-        "KD-AUTH-HANDLER-PAGE",
+        "KD-SDK-FILES",
         "KD-INIT-KEYS",
-        "KD-SDK-FILES"
+        "KD-AUTH-HANDLER-PAGE"
       ],
       "profiles": {
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
       },
-      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109",
+      "followUpEvidence": {
+        "corpus": "hosting-followup-v1",
+        "followUpConditions": [
+          "auth-handler"
+        ],
+        "productionEvidence": [
+          {
+            "alias": "followup-1",
+            "fixturePath": "conformance/hosting-production-followup-1.json",
+            "fixtureSha256": "398a35dc1df788b268dab42cdbd4557bb04dec0c7dc5f89978259ba27b804262"
+          },
+          {
+            "alias": "followup-2",
+            "fixturePath": "conformance/hosting-production-followup-2.json",
+            "fixtureSha256": "b921586e2fc4b1de7ceedc6d658d2e5148e252dfc2af4c2b89d4ae5b01af0826"
+          }
+        ],
+        "comparisons": {
+          "followUpRunVsRun": {
+            "rows": 2,
+            "counts": {
+              "MATCH": 2,
+              "MATCH_LAYOUT": 0,
+              "KNOWN_DIFFERENCE": 0,
+              "MISMATCH": 0,
+              "UNKNOWN": 0
+            },
+            "knownDifferenceRows": 0
+          },
+          "followUpStrictVsRun1": {
+            "rows": 2,
+            "counts": {
+              "MATCH": 0,
+              "MATCH_LAYOUT": 0,
+              "KNOWN_DIFFERENCE": 2,
+              "MISMATCH": 0,
+              "UNKNOWN": 0
+            },
+            "knownDifferenceRows": 2
+          },
+          "followUpStrictVsRun2": {
+            "rows": 2,
+            "counts": {
+              "MATCH": 0,
+              "MATCH_LAYOUT": 0,
+              "KNOWN_DIFFERENCE": 2,
+              "MISMATCH": 0,
+              "UNKNOWN": 0
+            },
+            "knownDifferenceRows": 2
+          }
+        },
+        "knownDifferences": [
+          "KD-AUTH-HANDLER-PAGE"
+        ],
+        "requests": 2
+      }
     },
     {
       "conditionId": "HOSTING/not-found",
@@ -839,7 +1011,64 @@
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
       },
-      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109",
+      "followUpEvidence": {
+        "corpus": "hosting-followup-v1",
+        "followUpConditions": [
+          "default-404"
+        ],
+        "productionEvidence": [
+          {
+            "alias": "followup-1",
+            "fixturePath": "conformance/hosting-production-followup-1.json",
+            "fixtureSha256": "398a35dc1df788b268dab42cdbd4557bb04dec0c7dc5f89978259ba27b804262"
+          },
+          {
+            "alias": "followup-2",
+            "fixturePath": "conformance/hosting-production-followup-2.json",
+            "fixtureSha256": "b921586e2fc4b1de7ceedc6d658d2e5148e252dfc2af4c2b89d4ae5b01af0826"
+          }
+        ],
+        "comparisons": {
+          "followUpRunVsRun": {
+            "rows": 3,
+            "counts": {
+              "MATCH": 3,
+              "MATCH_LAYOUT": 0,
+              "KNOWN_DIFFERENCE": 0,
+              "MISMATCH": 0,
+              "UNKNOWN": 0
+            },
+            "knownDifferenceRows": 0
+          },
+          "followUpStrictVsRun1": {
+            "rows": 3,
+            "counts": {
+              "MATCH": 0,
+              "MATCH_LAYOUT": 0,
+              "KNOWN_DIFFERENCE": 3,
+              "MISMATCH": 0,
+              "UNKNOWN": 0
+            },
+            "knownDifferenceRows": 3
+          },
+          "followUpStrictVsRun2": {
+            "rows": 3,
+            "counts": {
+              "MATCH": 0,
+              "MATCH_LAYOUT": 0,
+              "KNOWN_DIFFERENCE": 3,
+              "MISMATCH": 0,
+              "UNKNOWN": 0
+            },
+            "knownDifferenceRows": 3
+          }
+        },
+        "knownDifferences": [
+          "KD-DEFAULT-404-BODY"
+        ],
+        "requests": 3
+      }
     },
     {
       "conditionId": "HOSTING/content-types",
@@ -913,7 +1142,7 @@
     },
     {
       "conditionId": "HOSTING/compression-vary",
-      "description": "Vary and negotiation headers of compressible and incompressible types and gzip Content-Encoding with the file's own ETag and length; Brotli is not reproduced (KD-COMPRESSION: br only)",
+      "description": "Vary, Accept-Encoding negotiation (gzip by the text gzip, any content type, a compressed body smaller than the file, a Range over it), precompressed files and Content-Encoding header rules; Brotli is not reproduced (KD-COMPRESSION, KD-BROTLI: br only)",
       "status": "VERIFIED",
       "recipeIds": [
         "hosting/compression-vary"
@@ -981,7 +1210,68 @@
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
         "emulator": "NO_PRODUCTION_CLAIM"
       },
-      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109"
+      "reviewRef": "3417880952084c9fad3c06945d3847439620d7ff211e05c508f4de4843bc9109",
+      "followUpEvidence": {
+        "corpus": "hosting-followup-v1",
+        "followUpConditions": [
+          "precompressed",
+          "gzip-sizes",
+          "gzip-types",
+          "gzip-negotiation"
+        ],
+        "productionEvidence": [
+          {
+            "alias": "followup-1",
+            "fixturePath": "conformance/hosting-production-followup-1.json",
+            "fixtureSha256": "398a35dc1df788b268dab42cdbd4557bb04dec0c7dc5f89978259ba27b804262"
+          },
+          {
+            "alias": "followup-2",
+            "fixturePath": "conformance/hosting-production-followup-2.json",
+            "fixtureSha256": "b921586e2fc4b1de7ceedc6d658d2e5148e252dfc2af4c2b89d4ae5b01af0826"
+          }
+        ],
+        "comparisons": {
+          "followUpRunVsRun": {
+            "rows": 42,
+            "counts": {
+              "MATCH": 1,
+              "MATCH_LAYOUT": 41,
+              "KNOWN_DIFFERENCE": 0,
+              "MISMATCH": 0,
+              "UNKNOWN": 0
+            },
+            "knownDifferenceRows": 0
+          },
+          "followUpStrictVsRun1": {
+            "rows": 42,
+            "counts": {
+              "MATCH": 0,
+              "MATCH_LAYOUT": 34,
+              "KNOWN_DIFFERENCE": 8,
+              "MISMATCH": 0,
+              "UNKNOWN": 0
+            },
+            "knownDifferenceRows": 8
+          },
+          "followUpStrictVsRun2": {
+            "rows": 42,
+            "counts": {
+              "MATCH": 0,
+              "MATCH_LAYOUT": 34,
+              "KNOWN_DIFFERENCE": 8,
+              "MISMATCH": 0,
+              "UNKNOWN": 0
+            },
+            "knownDifferenceRows": 8
+          }
+        },
+        "knownDifferences": [
+          "KD-BROTLI",
+          "KD-GZIP-LENGTH"
+        ],
+        "requests": 42
+      }
     },
     {
       "conditionId": "HOSTING/app-association",
@@ -1058,7 +1348,7 @@
     "status": "OFFLINE_PASS",
     "suite": "conformance/src/hosting/run.mjs",
     "matrix": "conformance/HOSTING-MATRIX.md",
-    "scope": "82 HTTP cases and 138 glob pairs against the official emulator (emulator profile); the strict profile against the two production recordings (comparisons)",
+    "scope": "82 HTTP cases and 138 glob pairs against the official emulator (emulator profile); the strict profile against the two production recordings of the parent corpus and the two follow-up recordings (comparisons)",
     "comparisons": [
       {
         "path": "conformance/hosting-production-run-comparison.json",
@@ -1095,6 +1385,42 @@
           "MISMATCH": 0,
           "UNKNOWN": 0
         }
+      },
+      {
+        "path": "conformance/hosting-followup-run-comparison.json",
+        "sha256": "a20f2ff77fb6225c43a2f7800c3c39476a7e0c1de74bb881a8dba10a7cc368f0",
+        "rows": 78,
+        "summary": {
+          "MATCH": 22,
+          "MATCH_LAYOUT": 41,
+          "KNOWN_DIFFERENCE": 15,
+          "MISMATCH": 0,
+          "UNKNOWN": 0
+        }
+      },
+      {
+        "path": "conformance/hosting-followup-strict-vs-run-1.json",
+        "sha256": "b73eee4c6cfb00acb1e9247099058df875fa31938651c8f1245e0c7e766bd191",
+        "rows": 78,
+        "summary": {
+          "MATCH": 2,
+          "MATCH_LAYOUT": 34,
+          "KNOWN_DIFFERENCE": 42,
+          "MISMATCH": 0,
+          "UNKNOWN": 0
+        }
+      },
+      {
+        "path": "conformance/hosting-followup-strict-vs-run-2.json",
+        "sha256": "dacb5b05d93a410f3168ec7f89e9e920a7be8429c08b9995f499049c4e6d4820",
+        "rows": 78,
+        "summary": {
+          "MATCH": 2,
+          "MATCH_LAYOUT": 34,
+          "KNOWN_DIFFERENCE": 42,
+          "MISMATCH": 0,
+          "UNKNOWN": 0
+        }
       }
     ],
     "productionRequests": 0,
@@ -1104,7 +1430,7 @@
       "command": "FIREEMU_BIN=<fireemu> node --test conformance/src/hosting-production/strict-replay.test.mjs",
       "requires": "the committed comparisons equal the ones recomputed on the binary, with productionExact set (local.mjs does)"
     },
-    "releaseBindingNote": "Run R37 of conformance/src/release-strict-regression.mjs reproduces the three comparisons on the packed binary (strict profile, productionExact, loopback only) and requires each to equal its committed file; the conformance workflow runs the same replay on a fresh build (conformance.yml, step \"strict replay of the Hosting recordings\"). The kinds of the production recordings are not rerun: the release job cannot reach production."
+    "releaseBindingNote": "Run R37 of conformance/src/release-strict-regression.mjs reproduces the six comparisons (the parent corpus and the follow-up corpus, each against its two recordings) on the packed binary (strict profile, productionExact, loopback only) and requires each to equal its committed file; the conformance workflow runs the same replay on a fresh build (conformance.yml, step \"strict replay of the Hosting recordings\"). The kinds of the production recordings are not rerun: the release job cannot reach production."
   },
   "productionProposal": "spec/compatibility/hosting-production-packet.md",
   "recordingPolicy": {
@@ -1184,11 +1510,12 @@
     "ETag and Last-Modified are compared by form, not by value.",
     "The redirect `type` default of the CLI is not observable through the REST API, which requires a status code.",
     "The strict profile matches the recorded cases under productionExact. Under the default profile two development defaults differ from production on purpose (hosting.cacheControl \"none\": no default Cache-Control; hosting.clientCountry \"honoured\": X-Country-Code and the country cookie select i18n content); productionExact restores production for both (owner policy 1396/1403, coordinator ruling 23). A request outside the corpus is answered by the same rules, not by an observation.",
-    "Known differences (known-differences.json): Brotli encoding (KD-COMPRESSION: strict answers a request that accepts only br as identity, and one that also accepts gzip as gzip), the 21,376-byte default 404 page body (KD-DEFAULT-404-BODY), the hosted SDK files (KD-SDK-FILES), the init.json layout beyond apiKey and projectId and the init.json and init.js lengths (KD-INIT-KEYS), the length of the hosted /__/auth/handler page (KD-AUTH-HANDLER-PAGE, ruling 20) and the Location host of a parent-directory 302 (KD-SAFETY-ORIGIN-REDIRECT: production answers a 302 to an internal origin host, strict answers the same 302 to the normalized path of this origin; rulings 17 and 21). Strict-transport-security, x-robots-tag and the SDK-row headers are excluded as edge-set. 18 of the 201 rows of each strict comparison carry a known difference and are counted as KNOWN_DIFFERENCE, not MATCH.",
-    "Gzip: strict answers a compressible file as gzip when the request accepts it, with the file's own ETag, the recorded Vary and the same length as production's 93 bytes for the corpus file, as the recorded rows gz-gzip, gz-head-gzip and gz-json-gzip show (miniz_oxide through flate2 at the default level; the length of another file may differ from production's encoder by a few bytes, and the body is compared decoded). Not recorded: which types and sizes production compresses beyond text/plain and application/json (compressed) and image/png of two bytes (not); strict decides by the content type it sends (the mime-db compressible flag, and text/plain for an unknown extension), compresses a file of 1 byte up to 32 MiB (an empty file and a larger one are answered as identity, the whole answer being built in memory), accepts only an explicit gzip member of Accept-Encoding with a quality above zero (not `*` and not x-gzip), answers a Range request and a 304 without Content-Encoding, reads every Accept-Encoding line as one list, and compresses the /404.html answer like any file; a file whose headers rule sets Content-Encoding (any case, any value, for the request path the rule matches) is answered as it is, without gzip, so a precompressed `*.br` file keeps its bytes and the rule's header; not recorded; a generated answer (redirect, default 404 page, reserved routes) is not compressed. Probing these is a To-Do for the next idp packet.",
-    "Not compared: the body of init.js in the production-vs-local comparison (only init.json has a layout compared), and the stand-in /__/auth/handler page body (HEAD only was recorded).",
-    "Inferred, not recorded: the redirect parameter name rule. Strict reads a name as letters and underscore only, so `:id2` is the parameter `id` followed by a literal `2`. The recording shows only that GET /capture/one/two and GET /capture/:id2/two do not match the source /capture/:id/:id2; other readings fit both rows (`:id2` a literal segment; production rejecting or dropping the rule; digit names allowed but repeated parameters refused). The rule applies to every user redirect with a digit in a parameter name (ruling 24); probing digit-bearing names is a To-Do for the next idp packet.",
-    "Strict answers that no recording covers: 416 with Content-Range: bytes */N for an unsatisfiable range; a multi-range request answered whole; Range on HEAD answering 206 with the part's length and no body; If-Modified-Since on HEAD; OPTIONS on a path that is not a file (answered as any request); the normalized-path 302 for dot segments other than a leading parent (`/a/../b` answers 302 to `/b`, `/a/./b` to `/a/b`, and a path that ends in a dot segment ends in a slash as RFC 3986 says: `/a/b/..` answers 302 to `/a/`); a dot-segment path with a raw backslash, control character or space, which is not redirected (a browser reads `\\` as `/`, so `Location: /\\evil.example` would leave the origin) and answers 404; the stand-in /__/auth/handler page; and the redirect rule for digit-bearing parameter names above."
+    "Known differences (known-differences.json for the parent corpus, followup-known-differences.json for the follow-up corpus): Brotli encoding (KD-COMPRESSION and KD-BROTLI: production answers br to a request whose Accept-Encoding holds the text br; strict has no Brotli encoder and answers gzip when the header also holds gzip and identity when it does not), the length of a gzip body of a file of 100 to 1,500 bytes (KD-GZIP-LENGTH, coordinator ruling 27: 1 to 5 bytes longer in strict; the judge excuses it only when both answers are gzip, their decoded digests are equal and their content-lengths differ by at most 8 bytes, any other difference on those rows is a MISMATCH), the body of production's default 404 page and of the hosted /__/auth/handler page (KD-DEFAULT-404-BODY, KD-AUTH-HANDLER-PAGE: their bytes are not shipped, owner decision of 2026-11-11, so strict answers with pages written for fireemu; status, content type, Cache-Control and Vary are production's and are compared), the hosted SDK files (KD-SDK-FILES), the init.json layout beyond apiKey and projectId and the init.json and init.js lengths (KD-INIT-KEYS), and the host of the Location of a 302 for a path with dot segments (KD-SAFETY-ORIGIN-REDIRECT: production names an internal origin host that changes from request to request, strict names the host the request came to; the path of the Location is compared, rulings 17 and 21). Strict-transport-security, x-robots-tag and the SDK-row headers are excluded as edge-set. 18 of the 201 rows of each parent strict comparison and 42 of the 78 rows of each follow-up strict comparison carry a known difference and are counted as KNOWN_DIFFERENCE, not MATCH.",
+    "Gzip (rows v01.gz-*, v14.*, v15.*): strict looks for the text gzip in Accept-Encoding as a case-sensitive substring, as production does (x-gzip and gzip;q=0 get gzip; GZIP, *, deflate and identity do not, and every Accept-Encoding line counts); it compresses any content type when the gzip body is smaller than the file (production left files of 1 and 10 bytes alone and compressed files of 100 bytes and more; what it does from 11 to 99 bytes is not recorded, and `smaller than the file` is the reading used) from 1 byte to 32 MiB (an empty file and a larger one are answered as identity; the 32 MiB limit is strict's own, the whole answer being built in memory), with the file's own ETag and, for a Range, the range of the compressed body (206 with Content-Encoding: gzip, 416 when the range starts past it). A file with no known content type is text/html; charset=UTF-8 once compressed (rows v15.type-noext and -unknownext; its type uncompressed at this size is not recorded, v01 recorded text/plain for two bytes) and a .br file is application/octet-stream. A Content-Encoding header that a headers rule sets is not served: production ignored br, gzip and identity rules on four files (rows v14.*), so a precompressed file is sent as it is only because compressing it again does not make it smaller. The gzip header is the ten bytes production sent; the deflate stream of strict (miniz_oxide through flate2) is 1 to 5 bytes longer for files of 100 to 1,500 bytes (KD-GZIP-LENGTH, ruling 27, bounded at 8 bytes by the judge) and the same length at 2,048 and 4,500 bytes. Not recorded: other ranges over a compressed body and If-Range. Inferred, not recorded: a range that starts past the gzip length but inside the file answers 416 with `bytes */<gzip length>` and no Content-Encoding (the length of the compressed body, as the one recorded 416 over a compressed body suggests), and a range past the file answers the identity 416 with `bytes */<file length>`; production was not asked either.",
+    "Not compared: the body of init.js in the production-vs-local comparison (only init.json has a layout compared), and the bodies of the default 404 page and the hosted auth handler page (21,376 and 462 bytes, recorded as lengths and digests only: the published recordings do not hold them, owner decision of 2026-11-11).",
+    "Observed (rows v12.*, v13.*, v01.redirect-capture-*): a redirect whose source has a digit in a :name (/capture/:id/:id2, /p/:a1, /s/:a1/x, /t/:a1/:a2) matches nothing in production, neither the literal paths nor any other path tried, so strict never matches such a rule; a repeated name (/q/:id/:id) matches and the last value wins. How production reads other characters in a name (a hyphen, a literal after a name) is not recorded.",
+    "Dot segments (rows v01.safety-*, v11.dot-*, v11.backslash-*): production redirects a request with a dot segment to the normalized path (RFC 3986: empty segments stay, a path that ends in a dot segment ends in a slash as /a/b/.. gives /a/, an escaped dot is a dot), reads a raw backslash as a slash before it looks for dot segments (/.\\\\b gives /b, /a/./\\\\evil.example gives /a//evil.example, /./\\\\evil gives //evil), writes the hex digits of an escape that stays in upper case (%5c gives %5C; only that escape was seen) and answers a path with a backslash and no dot segment as any other path (404). The Location is absolute on an internal host, which strict replaces by the host the request came to, so a path that starts with // names no other host. The Host that goes in front of the path must be plain (letters, digits, dots, hyphens, a port, brackets): a Host with a slash, a backslash, an @, a ? or #, a space or an escape is refused with a 400, so the Location cannot name another origin.",
+    "Strict answers that no recording covers: 416 with Content-Range: bytes */N for an unsatisfiable range; a multi-range request answered whole; Range on HEAD answering 206 with the part's length and no body; If-Modified-Since on HEAD; OPTIONS on a path that is not a file (answered as any request); a path with dot segments and a control character or a space, which is not redirected (the recorder cannot send such a target); the query string of a dot-segment redirect, which is appended as sent; and the hosted /__/auth/ pages other than /__/auth/handler."
   ],
   "outOfScope": [
     "Production deployment of functions and live upstream routing are not executed (owner ledger 2435).",
@@ -1231,7 +1558,7 @@
   },
   "knownDifferences": {
     "path": "conformance/src/hosting-production/known-differences.json",
-    "sha256": "bd764258654fa8265c6433421583f1f49b083644a5a5abb7c01d8b694a1035a1",
+    "sha256": "8ac09f13cdaa36a72c1389d296bd532276e25bbc437407661a9e02a495cc29a8",
     "entries": [
       "KD-COMPRESSION",
       "KD-DEFAULT-404-BODY",
@@ -1270,9 +1597,8 @@
     }
   ],
   "followUps": [
-    "Next idp packet: probe gzip beyond the corpus file: a small text file (the size below which production does not compress), text/html and image/svg+xml, a file with no known extension, a Range request with Accept-Encoding: gzip, Accept-Encoding: * and x-gzip, a precompressed file (a `*.br` or `*.gz` file with a headers rule that sets Content-Encoding), so that the types and sizes strict compresses are observed (strict gzip itself is built, owner ledger 2458; Brotli stays a declared difference).",
-    "Next idp packet: record the body of the default 404 page (ruling 16) and the hosted /__/auth/handler page with a GET (ruling 20), and the answers to dot-segment paths other than a leading parent: /a/b/.. (strict: 302 to /a/), /a/./b (302 to /a/b) and a path with a raw backslash (strict: 404).",
-    "Next idp packet: probe redirect sources with digit-bearing parameter names so the `:id2` rule (ruling 24) is observed: /capture/one/two2 against /capture/:id/:id2, /capture/x/:id2, a single-parameter source such as /p/:a1 with /p/x, and a repeated name `/q/:id/:id`. Alternative readings to separate: (1) letters-and-underscore names with a literal suffix (strict today), (2) `:id2` a literal segment, (3) the rule rejected or dropped by production, (4) digit names allowed but a second parameter refused."
+    "Optional probes, not needed for the claim: the gzip decision for files of 11 to 99 bytes (between the recorded 10 and 100), the content type of a text file with an unknown extension without compression, the upper-case rule for escapes other than %5c in a dot-segment redirect, other ranges and If-Range over a compressed body (including the two inferred 416 answers: a range past the gzip length but inside the file, and a range past the file), and the other pages under /__/auth/ (iframe, handler.js).",
+    "Brotli stays a declared difference (KD-COMPRESSION, KD-BROTLI); adding an encoder is a separate decision (owner ledger 2458 approved flate2 for gzip only)."
   ],
   "closureReview": {
     "decision": "APPROVED",
@@ -1308,7 +1634,89 @@
         "reviewedCommit": "234f8c208760339cc7d4da3fc903df8db6552fa4",
         "outcome": "MERGE-AFTER-FIXES",
         "scope": "strict gzip (owner ledger 2458, ruling 26): KD-COMPRESSION narrowed to the four Brotli rows, judge compares the decoded body of an encoded answer with the plain body of an unencoded one, counts 64/119/18/0/0 per strict comparison, limitations and gzip probe follow-up"
+      },
+      {
+        "reviewer": "independent delta reviewer",
+        "reportPath": "docs.local/reviews/2026-11-12-hosting-followup-align-delta-review.md",
+        "reportSha256": "2b187e62589a9d51bdf404c41daaa56b818a940bedb64693ec77b829446922b5",
+        "reviewedCommit": "c88d59ae2242bff8053f2a8ffcecc147253ae0aa",
+        "outcome": "MERGE-AFTER-FIXES",
+        "scope": "strict alignment to the follow-up recordings (runs 11ae6c and 1c6a4c): the fireemu-authored 404 and auth-handler pages (owner decision 2483/2485), Host validation for the dot-segment redirect, the send guard and hermetic mutation harness, the six comparison files, KD-GZIP-LENGTH (ruling 27); Must Fix M1 (page bytes in the branch history, ruling 28) and M2 (ruling 27 citation), Should Fix S1 to S4",
+        "carriedInto": "e543a92e67ba085f41418d8337896221a367305c",
+        "carriedIntoNote": "the fixes for M1 (clean rebuild), M2, S1, S2 and S3 followed in e543a92e6; S4 is noted in the lane status file"
       }
+    ]
+  },
+  "followUpCorpus": {
+    "path": "conformance/src/hosting-production/followup.manifest.json",
+    "sha256": "88ace2806296e9e7e9e3adbccb0925ccd50c881244f97755283156c6e78deaec",
+    "corpusSha256": "32906eba4ceafd2a3d20041f3d6a55aef116c60b0e4cfd13d356bf473d7db8ac",
+    "versions": 5,
+    "requests": 78,
+    "recorder": "conformance/src/hosting-production/record.mjs (FIREEMU_HOSTING_PROFILE=followup)"
+  },
+  "followUpRecordings": [
+    {
+      "alias": "followup-1",
+      "run": "11ae6c",
+      "envelope": "HOSTING-FOLLOWUP-V1-20261111",
+      "fixturePath": "conformance/hosting-production-followup-1.json",
+      "fixtureSha256": "398a35dc1df788b268dab42cdbd4557bb04dec0c7dc5f89978259ba27b804262",
+      "corpusSha256": "32906eba4ceafd2a3d20041f3d6a55aef116c60b0e4cfd13d356bf473d7db8ac"
+    },
+    {
+      "alias": "followup-2",
+      "run": "1c6a4c",
+      "envelope": "HOSTING-FOLLOWUP-V1-20261111",
+      "fixturePath": "conformance/hosting-production-followup-2.json",
+      "fixtureSha256": "b921586e2fc4b1de7ceedc6d658d2e5148e252dfc2af4c2b89d4ae5b01af0826",
+      "corpusSha256": "32906eba4ceafd2a3d20041f3d6a55aef116c60b0e4cfd13d356bf473d7db8ac"
+    }
+  ],
+  "followUpComparisons": {
+    "followUpRunVsRun": {
+      "path": "conformance/hosting-followup-run-comparison.json",
+      "sha256": "a20f2ff77fb6225c43a2f7800c3c39476a7e0c1de74bb881a8dba10a7cc368f0",
+      "summary": {
+        "MATCH": 22,
+        "MATCH_LAYOUT": 41,
+        "KNOWN_DIFFERENCE": 15,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      }
+    },
+    "followUpStrictVsRun1": {
+      "path": "conformance/hosting-followup-strict-vs-run-1.json",
+      "sha256": "b73eee4c6cfb00acb1e9247099058df875fa31938651c8f1245e0c7e766bd191",
+      "summary": {
+        "MATCH": 2,
+        "MATCH_LAYOUT": 34,
+        "KNOWN_DIFFERENCE": 42,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      }
+    },
+    "followUpStrictVsRun2": {
+      "path": "conformance/hosting-followup-strict-vs-run-2.json",
+      "sha256": "dacb5b05d93a410f3168ec7f89e9e920a7be8429c08b9995f499049c4e6d4820",
+      "summary": {
+        "MATCH": 2,
+        "MATCH_LAYOUT": 34,
+        "KNOWN_DIFFERENCE": 42,
+        "MISMATCH": 0,
+        "UNKNOWN": 0
+      }
+    }
+  },
+  "followUpKnownDifferences": {
+    "path": "conformance/src/hosting-production/followup-known-differences.json",
+    "sha256": "ff6e89b6165c6935f462f0f5a79098d3a23e58a023de9d4ce456f578b3a5e489",
+    "entries": [
+      "KD-SAFETY-ORIGIN-REDIRECT",
+      "KD-DEFAULT-404-BODY",
+      "KD-AUTH-HANDLER-PAGE",
+      "KD-BROTLI",
+      "KD-GZIP-LENGTH"
     ]
   }
 }

@@ -3,14 +3,21 @@
 //
 //   FIRESTORE_EMULATOR_HOST=... FIREBASE_AUTH_EMULATOR_HOST=... FIREBASE_STORAGE_EMULATOR_HOST=...
 //   FIREEMU_FUNCTIONS_HOST=127.0.0.1:5001 node functions.mjs
+//
+// FIREEMU_SMOKE_PROFILE (strict, the default, or emulator) names the profile the daemon runs
+// under: three checks expect that profile's shape (see functions-expect.mjs). Run it once per
+// profile, with fireemu.smoke.json (strict) and fireemu.smoke-emulator.json (emulator).
 import { initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
 import { getStorage } from "firebase-admin/storage";
 import { getEventarc } from "firebase-admin/eventarc";
 import { getFunctions } from "firebase-admin/functions";
+import { expectedShapes, profileFromEnv } from "./functions-expect.mjs";
 
 const project = process.env.GOOGLE_CLOUD_PROJECT || "demo-app";
+const smokeProfile = profileFromEnv(process.env);
+const expected = expectedShapes(smokeProfile, project);
 const control = `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}`;
 const functionsHost = process.env.FIREEMU_FUNCTIONS_HOST || "127.0.0.1:5001";
 const eventarcHost = process.env.CLOUD_EVENTARC_EMULATOR_HOST || "http://127.0.0.1:9299";
@@ -70,7 +77,9 @@ try {
   await awaitIdle();
   const audit = (await db.doc("stats/audit").get()).data();
   check("onDocumentWritten counted create, update and delete", audit?.writes === 3, audit);
-  check("delete event carries before and no after", audit?.last?.before?.v === 2 && audit?.last?.after === null, audit?.last);
+  // The handler records the delete event under its own member: the three events of one document
+  // may be handled concurrently, so "the last one handled" is not necessarily the delete.
+  check("delete event carries before and no after", audit?.deleted?.before?.v === 2 && audit?.deleted?.after === null, audit?.deleted);
 
   // deleted trigger.
   await db.doc("todos/t1").delete();
@@ -180,7 +189,13 @@ try {
   await db.doc("audited/a1").set({ v: 1 });
   await awaitIdle();
   const audited = (await db.doc("auditedBy/a1").get()).data();
-  check("withAuthContext carries the Admin SDK principal", audited?.authType === "service_account" && audited?.type === "google.cloud.firestore.document.v1.created.withAuthContext", audited);
+  check(
+    `withAuthContext names the Admin SDK principal as the ${smokeProfile} profile does`,
+    audited?.authType === expected.authType &&
+      audited?.authId === expected.authId &&
+      audited?.type === "google.cloud.firestore.document.v1.created.withAuthContext",
+    { expected: { authType: expected.authType, authId: expected.authId }, audited },
+  );
   // Eventarc custom events, through the Admin SDK's own client: it reads
   // CLOUD_EVENTARC_EMULATOR_HOST, so nothing here names a port.
   await getEventarc(eventarcApp)
@@ -199,10 +214,10 @@ try {
       custom?.source === "https://example.com/things" &&
       custom?.subject === "things/e1" &&
       custom?.specversion === "1.0" &&
-      custom?.datacontenttype === "application/json" &&
+      custom?.datacontenttype === expected.customEventDatacontenttype &&
       custom?.hasTime === true &&
       custom?.data?.n === 3,
-    custom,
+    { expectedDatacontenttype: expected.customEventDatacontenttype, custom },
   );
 
   // A filtered trigger only sees the events whose attribute matches.
@@ -276,11 +291,11 @@ try {
   check(
     "onTaskDispatched receives the payload and the queue context",
     task?.n === 5 &&
-      task?.queueName === `queue:${project}-us-central1-countJob` &&
+      task?.queueName === expected.taskQueueName &&
       task?.retryCount === 0 &&
       task?.executionCount === 0 &&
       task?.hasScheduledTime === true,
-    task,
+    { expectedQueueName: expected.taskQueueName, task },
   );
 
   await getFunctions(app).taskQueue("flakyJob").enqueue({ go: true });

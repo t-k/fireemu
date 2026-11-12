@@ -172,14 +172,18 @@ const rtdbRun = (id, campaign, files) => ({
 });
 
 /**
- * The Hosting comparisons (HOSTING closure): the production corpus served by the strict profile
- * under productionExact on the binary under test and compared with the two committed recordings.
- * One run exports the three comparison documents; each committed file must equal its own.
+ * The Hosting comparisons (HOSTING closure): the production corpus and the follow-up corpus served by
+ * the strict profile under productionExact on the binary under test and compared with the committed
+ * recordings (two of each). One run exports the six comparison documents; each committed file must
+ * equal its own.
  */
 const HOSTING_COMPARISONS = [
   "conformance/hosting-production-run-comparison.json",
   "conformance/hosting-production-strict-vs-pass-1.json",
   "conformance/hosting-production-strict-vs-pass-2.json",
+  "conformance/hosting-followup-run-comparison.json",
+  "conformance/hosting-followup-strict-vs-run-1.json",
+  "conformance/hosting-followup-strict-vs-run-2.json",
 ];
 const hostingRun = (id) => ({
   id,
@@ -1349,6 +1353,8 @@ export const FUNCTIONS_HTTP_LOCK_SUCCESSORS = {
  * recording re-serialized with only these kinds is the recorded bytes. Anything else is refused.
  */
 export const FUNCTIONS_HTTP_RECORDED_REQUEST_KINDS = {
+  // The recording the lane compared with the 2026-09-27 production recording (history: its three
+  // callable auth-refusal rows were superseded on 2026-11-12).
   "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f": [
     "invocation",
     "control",
@@ -1356,6 +1362,20 @@ export const FUNCTIONS_HTTP_RECORDED_REQUEST_KINDS = {
     "auth",
     "cliDeploy",
     "cliDelete",
+  ],
+  // The current one: the same corpus with the three callable auth-refusal rows answered by the
+  // wrapper's envelope, as the two re-recordings of 2026-11-11 show (closure amendment A1). It was
+  // recorded by a recorder that already had the token and upload kinds, so all eight are listed: a
+  // later added kind, if unspent, stands in; a recording cut to these eight is the recorded bytes.
+  "2f354fbcd16be3c6e30190d5f590d32a6dc41039672f06473424da8ee51053f8": [
+    "invocation",
+    "control",
+    "cleanup",
+    "auth",
+    "cliDeploy",
+    "cliDelete",
+    "token",
+    "upload",
   ],
 };
 

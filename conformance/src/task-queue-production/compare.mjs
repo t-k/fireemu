@@ -352,7 +352,7 @@ export function compareProjections(
     left: { alias: left.alias, corpusSha256: left.corpusSha256 },
     right: { alias: right.alias, corpusSha256: right.corpusSha256 },
     tolerance,
-    layoutRules: [...LAYOUT_RULES.map(({ id, what }) => ({ id, what, rows: used.get(id) ?? 0 }))],
+    layoutRules: LAYOUT_RULES.map(({ id, what }) => ({ id, what, rows: used.get(id) ?? 0 })),
     knownDifferences: knownDifferences.map(
       ({ id, cases, part, ruling, what, paths, window, allowance }) => ({
         id,

@@ -168,11 +168,11 @@ test("a snapshot created again after its own DELETE is a new incarnation: a lost
   assert.ok(ledger.closureReady());
 });
 
-test("a new incarnation answered 2xx or a known error is judged on its own, a 409 keeps the earlier one", () => {
+test("a re-create starts fresh on success and restores delete bookkeeping on refusal", () => {
   for (const [result, status] of [
     ["ok", "live"],
     ["conflict", "delete-present"],
-    ["notfound", "deleted"],
+    ["notfound", "delete-unread"],
   ]) {
     const ledger = createLedger();
     create(ledger, "ok");
@@ -231,6 +231,13 @@ test("a DELETE of a name the run never created is a plain absent answer", () => 
   del(ledger, "notfound");
   assert.equal(ledger.status(N), "never-created");
   assert.ok(ledger.closureReady());
+});
+
+test("a successful DELETE and absence without a create do not establish a deleted resource", () => {
+  const ledger = createLedger();
+  del(ledger, "ok");
+  ledger.read(N, "absent");
+  assert.equal(ledger.status(N), "never-created");
 });
 
 test("property: closureReady implies every resource is deleted, gone at A2 or never created", () => {
@@ -371,19 +378,24 @@ test("S1 of the m1 delta review: a known refusal of a re-create restores the ear
     assert.ok(!unread.closureReady(), result);
     unread.read(N, "absent", "list");
     assert.equal(unread.status(N), "deleted", result);
-    // read absent before the refusal: the refusal created nothing, the absence still stands
+    // read absent before the refusal: a later read is needed
     const absent = createLedger();
     create(absent, "ok");
     del(absent, "ok");
     absent.read(N, "absent", "get");
     create(absent, result);
+    assert.equal(absent.status(N), "delete-unread", result);
+    assert.ok(!absent.closureReady(), result);
+    absent.read(N, "absent", "list");
     assert.equal(absent.status(N), "deleted", result);
-    // read present before the refusal stays present
+    // read present before the refusal: a later read is needed
     const present = createLedger();
     create(present, "ok");
     del(present, "ok");
     present.read(N, "present", "list");
     create(present, result);
+    assert.equal(present.status(N), "delete-unread", result);
+    present.read(N, "present");
     assert.equal(present.status(N), "delete-present", result);
     assert.deepEqual(present.deletable(), [N], result);
   }
@@ -398,4 +410,67 @@ test("S1 of the m1 delta review: a known refusal of a re-create restores the ear
   create(lost, "unknown");
   create(lost, "error");
   assert.equal(lost.status(N), "unconfirmed-create");
+});
+
+test("a re-create refusal clears an earlier A2 absence", () => {
+  for (const result of ["conflict", "error"]) {
+    const ledger = createLedger();
+    create(ledger, "ok");
+    del(ledger, "ok");
+    ledger.a2Absent(N);
+    create(ledger, result);
+    assert.equal(ledger.status(N), result === "conflict" ? "delete-present" : "delete-unread");
+    assert.ok(!ledger.closureReady());
+    if (result === "conflict") {
+      assert.deepEqual(ledger.deletable(), [N]);
+      ledger.read(N, "absent");
+      assert.equal(ledger.status(N), "deleted");
+    }
+  }
+});
+
+test("property: closure evidence follows the latest create attempt", () => {
+  for (let seed = 1; seed <= 300; seed += 1) {
+    const random = prng(seed);
+    const ledger = createLedger();
+    let latestCreate = -1;
+    let latestAbsence = -1;
+    for (let i = 0; i < 14; i += 1) {
+      const operation = Math.floor(random() * 4);
+      if (operation === 0) {
+        latestCreate = i;
+        const answers = ["ok", "notfound", "conflict", "error", "unknown"];
+        create(ledger, answers[Math.floor(random() * answers.length)]);
+      } else if (operation === 1) {
+        const answers = ["ok", "notfound", "error", "unknown"];
+        del(ledger, answers[Math.floor(random() * answers.length)]);
+      } else if (operation === 2) {
+        const what = random() < 0.5 ? "present" : "absent";
+        if (what === "absent") latestAbsence = i;
+        ledger.read(N, what, random() < 0.5 ? "get" : "list");
+      } else {
+        latestAbsence = i;
+        ledger.a2Absent(N);
+      }
+      const status = ledger.status(N);
+      if (["deleted", "gone-a2"].includes(status))
+        assert.ok(latestCreate >= 0 && latestAbsence > latestCreate, `seed ${seed}, step ${i}`);
+      if (ledger.closureReady())
+        for (const name of ledger.all())
+          assert.ok(["never-created", "deleted", "gone-a2"].includes(ledger.status(name)));
+    }
+  }
+});
+
+test("a create attempt takes back the admission of a retry: the LIST that admitted it came before the attempt", () => {
+  const ledger = createLedger();
+  create(ledger, "ok");
+  del(ledger, "notfound");
+  ledger.read(N, "present", "list");
+  assert.deepEqual(ledger.deletable(), [N]);
+  create(ledger, "conflict");
+  assert.equal(ledger.status(N), "delete-404-present");
+  assert.deepEqual(ledger.deletable(), [], "another LIST is needed");
+  ledger.read(N, "present", "list");
+  assert.deepEqual(ledger.deletable(), [N]);
 });

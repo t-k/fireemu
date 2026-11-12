@@ -86,7 +86,7 @@ When a test fails in CI, the log alone rarely shows which Security Rules conditi
 
 Call `world.dump('/tmp/fireemu-failure')` in the test's failure handler, as shown in [Test worlds](../test-worlds/#dump-diagnostics-when-a-test-fails). Open `bundle.html` from the artifact to read it in a browser; the page needs no network access. `bundle.json` is the same data for scripts.
 
-The command line can write the same files without a test. `fireemu dump --url <control-url> --out <dir>` reads a running daemon (the token comes from `FIREEMU_CONTROL_TOKEN`); `fireemu exec --dump-on-failure <dir> -- <command>` writes the dump when the wrapped command fails, before the daemon stops. The command line writes `bundle.html` directly from the HTML answer, and fills the config section with the redacted configuration rows.
+The command line can write the same files without a test. `fireemu dump --url <control-url> --out <dir>` reads a running daemon (the token comes from `FIREEMU_CONTROL_TOKEN`); `fireemu exec --dump-on-failure <dir> -- <command>` writes the dump when the wrapped command fails, before the daemon stops. The command line writes `bundle.html` directly from the HTML answer, and fills the config section with the redacted rows of the configuration files the CLI reads. That section is the CLI's view of those files, not the running daemon's live configuration; the daemon has no configuration route, so the two can differ.
 
 ## Serve the emulators from a container
 

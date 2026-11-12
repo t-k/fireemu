@@ -10,7 +10,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Added
 
-- Diagnostics: `GET /v1/sessions/{session}/diagnostics/bundle` answers a schema version 1 bundle with the Security Rules denials and their source positions, missing indexes, Functions events and attempts, retained resources and dropped-range markers. `format=json` (default) returns the bundle; `format=html` returns the self-contained HTML page in a JSON field named `html`. The route needs the control token, like the rules trace. The config section is filled by the command-line dump.
+- Diagnostics: `GET /v1/sessions/{session}/diagnostics/bundle` answers a schema version 1 bundle with the Security Rules denials and their source positions, missing indexes, Functions events and attempts, retained resources and dropped-range markers. `format=json` (default) returns the bundle; `format=html` returns the self-contained HTML page in a JSON field named `html`. The route needs the control token, like the rules trace. The config section is filled by the command-line dump from the CLI's view of the configuration files, not the running daemon's live configuration.
 - CLI: `fireemu dump --url <control-url> --out <dir>` writes `bundle.json` and `bundle.html` from a running daemon; `fireemu exec --dump-on-failure <dir>` writes them when the wrapped command fails.
 - Test worlds: `world.dump(directory)` writes `bundle.json` (the parsed answer re-serialised, not the raw bytes) and `bundle.html` into a directory, for use in a test's failure handler.
 - `rules.denialHistory` (`enabled`, `retention` 1 to 10000, default 100, off by default) keeps the Security Rules request trace from daemon start, with a reported `dropped` count, instead of starting it at the first read.

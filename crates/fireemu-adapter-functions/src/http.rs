@@ -1267,13 +1267,12 @@ pub(crate) fn strict_callable_bearer_unverified(
 ///
 /// There is no queue to create: the official emulator creates one per `onTaskDispatched`
 /// function at load time and fireemu's queue *is* the function, so the create route reports
-/// what the queue already is rather than storing a second copy of it. Deleting a task is
-/// refused rather than silently accepted, because a task is dispatched as soon as it is
-/// accepted here and there is no window in which a delete could still take effect.
+/// what the queue already is rather than storing a second copy of it.
 fn task_route(
     runtime: &Arc<FunctionsRuntime>,
     route: &crate::tasks::Route,
     method: &hyper::Method,
+    target: &str,
     body: &[u8],
 ) -> Response<OutBody> {
     use crate::tasks::Route;
@@ -1345,21 +1344,27 @@ fn task_route(
             queue,
             task,
         } => {
-            if runtime.is_strict() {
-                // The emulator profile answers every method on this path as it always has (the official emulator
-                // registers no other handler there); only the strict profile tells a method from a delete.
-                if method != hyper::Method::DELETE {
+            if method != hyper::Method::DELETE {
+                if runtime.is_strict() {
                     return simple(StatusCode::METHOD_NOT_ALLOWED, "Method Not Allowed");
                 }
-                return match runtime.delete_task_strict(project, location, queue, task) {
-                    Ok(()) => typed(StatusCode::OK, PRODUCTION_JSON, "{}\n"),
-                    Err(refusal) => refusal_response(runtime, &refusal),
-                };
+                let escaped = target
+                    .replace('&', "&amp;")
+                    .replace('<', "&lt;")
+                    .replace('>', "&gt;")
+                    .replace('"', "&quot;")
+                    .replace('\'', "&#39;");
+                return typed(StatusCode::NOT_FOUND, "text/html; charset=utf-8", &format!("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot {method} {escaped}</pre>\n</body>\n</html>\n"));
             }
-            simple(
-                StatusCode::NOT_FOUND,
-                "Tried to remove a task that doesn't exist",
-            )
+            match runtime.delete_task_strict(project, location, queue, task) {
+                Ok(()) if runtime.is_strict() => typed(StatusCode::OK, PRODUCTION_JSON, "{}\n"),
+                Ok(()) => typed(
+                    StatusCode::OK,
+                    "application/json; charset=utf-8",
+                    "{\"res\":\"OK\"}",
+                ),
+                Err(refusal) => refusal_response(runtime, &refusal),
+            }
         }
     }
 }
@@ -1710,13 +1715,18 @@ async fn respond_support_surface(
             .await
         }
         HttpSurface::Tasks => {
+            let target = req
+                .uri()
+                .path_and_query()
+                .map_or(path.as_str(), |value| value.as_str())
+                .to_owned();
             let Some(route) = crate::tasks::route(&path) else {
                 drain_refused_body(req.into_body()).await;
                 return simple(StatusCode::NOT_FOUND, "Not Found");
             };
             let method = req.method().clone();
             match collect_body(req.into_body(), body_limit).await {
-                Ok(body) => task_route(&runtime, &route, &method, &body),
+                Ok(body) => task_route(&runtime, &route, &method, &target, &body),
                 Err(answer) => *answer,
             }
         }

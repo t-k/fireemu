@@ -550,6 +550,7 @@ async fn the_strict_listener_deletes_with_json_and_refuses_other_methods() {
     );
     let path = format!("{TASKS}/wire-del");
     assert_eq!(wire(addr, "GET", &path, b"").await.0, 405);
+    assert_eq!(wire(addr, "PUT", &path, b"").await.0, 405);
     assert_eq!(wire(addr, "POST", &path, b"{}").await.0, 405);
     let (status, head, body) = wire(addr, "DELETE", &path, b"").await;
     assert_eq!((status, body.as_str()), (200, "{}\n"));
@@ -613,17 +614,16 @@ async fn the_emulator_listener_keeps_plain_text_refusals_and_the_hundred_kibibyt
             .0,
         413
     );
-    // Every method on a task's own path gets the answer the emulator profile always gave.
-    for method in ["GET", "POST", "PATCH", "DELETE"] {
+    for method in ["GET", "PUT", "POST", "PATCH"] {
         let (status, head, body) = wire(addr, method, &format!("{TASKS}/never-was"), b"").await;
         assert_eq!(status, 404, "{method}");
         assert_eq!(
-            body, "Tried to remove a task that doesn't exist",
+            body, format!("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot {method} {TASKS}/never-was</pre>\n</body>\n</html>\n"),
             "{method}"
         );
         assert!(
             head.to_ascii_lowercase()
-                .contains("content-type: text/plain"),
+                .contains("content-type: text/html; charset=utf-8"),
             "{head}"
         );
     }
@@ -633,6 +633,58 @@ async fn the_emulator_listener_keeps_plain_text_refusals_and_the_hundred_kibibyt
         head.to_ascii_lowercase()
             .contains("content-type: text/plain"),
         "{head}"
+    );
+    server.abort();
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn emulator_delete_removes_a_pending_task_before_dispatch() {
+    let h = start_full(
+        "emulator-delete",
+        FunctionsHttpProfile::Emulator,
+        NameReuse::Retained,
+        60,
+        retry(1, 500),
+        true,
+        false,
+    )
+    .await;
+    let (addr, server) = tasks_listener(&h).await;
+    let due = LogicalInstant::from_unix_seconds(1_788_004_920)
+        .to_rfc3339()
+        .unwrap();
+    let queued = body_of(&json!({"name": format!("{BASE}/tasks/delete-me"), "scheduleTime": due}));
+    assert_eq!(
+        wire(addr, "POST", TASKS, queued.to_string().as_bytes())
+            .await
+            .0,
+        200
+    );
+    assert_eq!(h.runtime.pending_tasks().len(), 1);
+    let path = format!("{TASKS}/delete-me");
+    for method in ["GET", "PUT"] {
+        let (status, head, body) = wire(addr, method, &path, b"").await;
+        assert_eq!(status, 404);
+        assert!(head
+            .to_ascii_lowercase()
+            .contains("content-type: text/html; charset=utf-8"));
+        assert!(body.contains(&format!("Cannot {method} {path}")));
+        assert_eq!(h.runtime.pending_tasks().len(), 1);
+    }
+    let (status, head, body) = wire(addr, "DELETE", &path, b"").await;
+    assert_eq!((status, body.as_str()), (200, "{\"res\":\"OK\"}"));
+    assert!(head
+        .to_ascii_lowercase()
+        .contains("content-type: application/json; charset=utf-8"));
+    assert!(h.runtime.pending_tasks().is_empty());
+    assert_eq!(h.runtime.run_tasks_now("taskA", None), 0);
+    h.idle().await;
+    assert!(!h.probe.exists() || std::fs::read_to_string(&h.probe).unwrap().is_empty());
+    let (status, _, body) = wire(addr, "DELETE", &path, b"").await;
+    assert_eq!(
+        (status, body.as_str()),
+        (404, "Tried to remove a task that doesn't exist")
     );
     server.abort();
     h.stop().await;

@@ -4,8 +4,8 @@
 //! 10 seconds after a real 404 of the same URL on the same connection, even when the subscription
 //! has been created in the meantime. gRPC, topics and snapshots never show it. A cached 404 right
 //! after a successful create makes local tests flaky, so this model is **off unless
-//! `pubsub.restNegativeCache = "production"` asks for it** (strict profile only; `productionExact`
-//! selects it); the adapter holds it only then.
+//! `pubsub.restNegativeCache = "production"` asks for it** (an explicit opt-in, strict profile only;
+//! `productionExact` does not select it); the adapter holds it only then.
 //!
 //! The rule is the one two production recordings settle (the packet `PUBSUB-NEGCACHE`, runs
 //! 50a305aa54d1 and 331317b47c44, see `docs/pubsub-rest-negative-cache.md`):
@@ -25,7 +25,6 @@
 //! virtual clock, so a test (or `await-idle`) moves it by moving that clock.
 
 use std::collections::BTreeMap;
-use std::net::SocketAddr;
 
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
@@ -58,19 +57,21 @@ impl RuleChoice {
     };
 }
 
-/// The connection a request arrived on. An entry is only ever served on the connection that armed
-/// it (recorded: every read on a fresh connection was forwarded).
+/// The connection a request arrived on, as the id the server gave it when it accepted the socket.
+/// An entry is only ever served on the connection that armed it (recorded: every read on a fresh
+/// connection was forwarded). Ids are never reused, so a new connection that gets the same source
+/// port does not inherit an entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ConnectionId(Option<SocketAddr>);
+pub struct ConnectionId(u64);
 
 impl ConnectionId {
     /// A request whose connection is not known (an in-process call): one shared pseudo-connection.
-    pub const UNATTRIBUTED: Self = Self(None);
+    pub const UNATTRIBUTED: Self = Self(0);
 
-    /// The connection a peer address identifies while it is open.
+    /// The connection with this accept-time id (the server counts from 1).
     #[must_use]
-    pub const fn peer(address: SocketAddr) -> Self {
-        Self(Some(address))
+    pub const fn new(id: u64) -> Self {
+        Self(id)
     }
 }
 
@@ -213,14 +214,19 @@ impl RestNegativeCache {
             resource: resource.clone(),
         };
         match (request, outcome) {
-            (RestRequest::Get, RestOutcome::Success) => {
-                self.last_success.insert(key, started);
-            }
+            (RestRequest::Get, RestOutcome::Success) => self.remember_success(key, started),
             (RestRequest::Get | RestRequest::Patch, RestOutcome::NotFound) => {
                 self.arm(key, started);
             }
             _ => {}
         }
+    }
+
+    /// Drops everything the cache holds for a connection that has closed.
+    pub fn forget_connection(&mut self, connection: ConnectionId) {
+        self.armed.retain(|key, _| key.connection != connection);
+        self.last_success
+            .retain(|key, _| key.connection != connection);
     }
 
     /// The number of live and not-yet-pruned entries.
@@ -238,6 +244,20 @@ impl RestNegativeCache {
     fn is_live(&self, armed_at: LogicalInstant, now: LogicalInstant) -> bool {
         now.checked_duration_since(armed_at)
             .is_some_and(|age| age >= LogicalDuration::ZERO && age < self.rule.ttl)
+    }
+
+    fn remember_success(&mut self, key: Key, started: LogicalInstant) {
+        if self.last_success.len() >= MAX_ENTRIES && !self.last_success.contains_key(&key) {
+            if let Some(oldest) = self
+                .last_success
+                .iter()
+                .min_by_key(|(_, &seen)| seen)
+                .map(|(entry, _)| entry.clone())
+            {
+                self.last_success.remove(&oldest);
+            }
+        }
+        self.last_success.insert(key, started);
     }
 
     fn arm(&mut self, key: Key, started: LogicalInstant) {
@@ -289,7 +309,7 @@ mod tests {
     const C1: ConnectionId = ConnectionId::UNATTRIBUTED;
 
     fn other_connection() -> ConnectionId {
-        ConnectionId::peer("127.0.0.1:50000".parse().unwrap())
+        ConnectionId::new(2)
     }
     fn sub(id: &str) -> RestResource {
         RestResource::parse_path(&format!("/v1/projects/p/subscriptions/{id}")).unwrap()
@@ -535,6 +555,46 @@ mod tests {
         );
         assert!(serves(&mut cache, &x, RestRequest::Get, TTL_MS + 300));
         assert!(!serves(&mut cache, &x, RestRequest::Get, 2 * TTL_MS + 200));
+    }
+
+    #[test]
+    fn a_closed_connection_leaves_nothing_behind_and_the_others_keep_theirs() {
+        let mut cache = RestNegativeCache::default();
+        let x = sub("x");
+        let second = other_connection();
+        cache.observe(C1, &x, RestRequest::Get, at(0), RestOutcome::NotFound);
+        cache.observe(C1, &sub("y"), RestRequest::Get, at(0), RestOutcome::Success);
+        cache.observe(second, &x, RestRequest::Get, at(0), RestOutcome::NotFound);
+        cache.forget_connection(C1);
+        assert_eq!(cache.len(), 1);
+        assert!(!cache.serves(C1, &x, RestRequest::Get, at(1)));
+        assert!(cache.serves(second, &x, RestRequest::Get, at(1)));
+        // The success mark of the closed connection is gone too: a new 404 under the same id arms.
+        cache.observe(
+            C1,
+            &sub("y"),
+            RestRequest::Get,
+            at(10),
+            RestOutcome::NotFound,
+        );
+        assert!(cache.serves(C1, &sub("y"), RestRequest::Get, at(20)));
+    }
+
+    #[test]
+    fn success_marks_are_bounded_too() {
+        let mut cache = RestNegativeCache::default();
+        // A stationary clock: nothing ever expires, so only the bound limits the marks.
+        for index in 0..(MAX_ENTRIES + 50) {
+            observe(
+                &mut cache,
+                &sub(&format!("s{index}")),
+                RestRequest::Get,
+                0,
+                RestOutcome::Success,
+            );
+        }
+        assert_eq!(cache.last_success.len(), MAX_ENTRIES);
+        assert!(cache.is_empty());
     }
 
     #[test]

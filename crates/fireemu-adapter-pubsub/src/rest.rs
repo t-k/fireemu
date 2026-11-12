@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::connection::AcceptedConnection;
 use axum::body::{to_bytes, Body, Bytes};
 use axum::http::{Method, Request, StatusCode};
 use axum::response::Response;
@@ -216,6 +217,8 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
     let path = request.uri().path().to_owned();
     let query = request.uri().query().unwrap_or_default().to_owned();
     let connection = connection_of(&request);
+    // The window runs from the arrival of the request, not from the end of its upload.
+    let started = handle.now();
     let body_result = if handle.paging_policy == crate::PagingPolicy::Strict {
         strict_body_bytes(request.into_body()).await
     } else {
@@ -243,7 +246,7 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
         }
     };
 
-    let negative_cache = negative_cache_probe(&handle, connection, &method, &path, &query);
+    let negative_cache = negative_cache_probe(&handle, connection, started, &method, &path, &query);
     if let Some(probe) = &negative_cache {
         if probe.serves() {
             return error_response(
@@ -289,14 +292,14 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
     }
 }
 
-/// The connection a request arrived on, from the peer address tonic records for it. A request
-/// that did not come through a socket (an in-process call) shares one pseudo-connection.
+/// The connection a request arrived on, from the id the listener gave the socket when it accepted
+/// it. A request that did not come through that listener (an in-process call) shares one
+/// pseudo-connection.
 fn connection_of(request: &Request<Body>) -> ConnectionId {
     request
         .extensions()
-        .get::<tonic::transport::server::TcpConnectInfo>()
-        .and_then(tonic::transport::server::TcpConnectInfo::remote_addr)
-        .map_or(ConnectionId::UNATTRIBUTED, ConnectionId::peer)
+        .get::<AcceptedConnection>()
+        .map_or(ConnectionId::UNATTRIBUTED, |accepted| accepted.0)
 }
 
 /// One request the REST negative cache looks at: the connection and the resource its URL names,
@@ -337,6 +340,7 @@ impl NegativeCacheProbe {
 fn negative_cache_probe(
     handle: &PubSubHandle,
     connection: ConnectionId,
+    started: LogicalInstant,
     method: &Method,
     path: &str,
     query: &str,
@@ -356,7 +360,7 @@ fn negative_cache_probe(
         connection,
         resource: RestResource::parse_path(path)?,
         request,
-        started: handle.now(),
+        started,
     })
 }
 

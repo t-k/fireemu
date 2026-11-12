@@ -7,8 +7,6 @@
 //! question the recordings leave open (`rule.md`), so it is named here and checked exactly: a change
 //! to the model that moves a divergence, in either direction, fails this test.
 
-use std::net::SocketAddr;
-
 use fireemu_core_pubsub::rest_negative_cache::{
     ConnectionId, RestNegativeCache, RestOutcome, RestRequest, RestResource,
 };
@@ -34,7 +32,7 @@ fn instant(millis: f64) -> LogicalInstant {
 }
 
 fn connection(index: u16) -> ConnectionId {
-    ConnectionId::peer(SocketAddr::from(([127, 0, 0, 1], 40_000 + index)))
+    ConnectionId::new(u64::from(index))
 }
 
 /// One divergence: (cell, step).

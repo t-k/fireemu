@@ -1652,7 +1652,8 @@ pub enum RestNegativeCacheMode {
     /// Do not cache missing resources.
     #[default]
     Off,
-    /// Apply production's recorded REST negative cache (`productionExact` selects it).
+    /// Apply production's recorded REST negative cache (an explicit opt-in; `productionExact` does not
+    /// select it).
     Production,
 }
 

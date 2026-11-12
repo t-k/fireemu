@@ -71,13 +71,20 @@ impl Conn {
     }
 
     async fn raw(&mut self, method: &str, path: &str, body: &[u8]) -> (u16, Vec<u8>) {
+        self.send_head(method, path, body.len()).await;
+        self.stream.write_all(body).await.unwrap();
+        self.read_response().await
+    }
+
+    async fn send_head(&mut self, method: &str, path: &str, length: usize) {
         let request = format!(
-            "{method} {path} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            "{method} {path} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {length}\r\n\r\n",
             self.address,
-            body.len()
         );
         self.stream.write_all(request.as_bytes()).await.unwrap();
-        self.stream.write_all(body).await.unwrap();
+    }
+
+    async fn read_response(&mut self) -> (u16, Vec<u8>) {
         let mut response = Vec::new();
         let mut chunk = [0_u8; 4096];
         let (headers_end, length) = loop {
@@ -409,6 +416,58 @@ async fn unrecorded_a_recent_200_keeps_a_later_404_from_arming() {
     assert_eq!(conn.status("PUT", SUB, plain()).await, 200);
     advance(&clock, 1_000);
     assert_eq!(conn.status("GET", SUB, json!({})).await, 200);
+}
+
+#[tokio::test]
+async fn the_window_runs_from_the_arrival_of_the_request_not_from_the_end_of_its_upload() {
+    let (address, clock) = start(true).await;
+    let mut conn = Conn::open(address).await;
+    topic(&mut conn).await;
+    // The PATCH of a missing subscription arrives; its body takes 5 s more to arrive.
+    let body = serde_json::to_vec(&patch()).unwrap();
+    conn.send_head("PATCH", SUB, body.len()).await;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    advance(&clock, 5_000);
+    conn.stream.write_all(&body).await.unwrap();
+    assert_eq!(conn.read_response().await.0, 404);
+    assert_eq!(conn.status("PUT", SUB, plain()).await, 200);
+    // 5 s after the upload ended but 10.349 s after the request arrived: still inside the window.
+    advance(&clock, WINDOW_MS - 5_000 - 1);
+    assert_eq!(conn.status("GET", SUB, json!({})).await, 404);
+    advance(&clock, 1);
+    assert_eq!(conn.status("GET", SUB, json!({})).await, 200);
+}
+
+#[tokio::test]
+async fn a_closed_connection_takes_its_entries_with_it_and_an_id_is_never_reused() {
+    let state = Arc::new(Mutex::new(PubSubState::new(99)));
+    let clock: Clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(1_700_000_000),
+    )));
+    let handle = PubSubHandle::new(state, clock, None)
+        .with_paging_policy(PagingPolicy::Strict)
+        .with_rest_negative_cache(true);
+    let observer = handle.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = serve_pubsub(listener, handle).await;
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    let mut first = Conn::open(address).await;
+    let mut second = Conn::open(address).await;
+    assert_eq!(first.status("GET", SUB, json!({})).await, 404);
+    assert_eq!(second.status("GET", SUB, json!({})).await, 404);
+    assert_eq!(observer.rest_negative_cache_len(), 2);
+    drop(first);
+    let mut waited = 0;
+    while observer.rest_negative_cache_len() != 1 && waited < 100 {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        waited += 1;
+    }
+    assert_eq!(observer.rest_negative_cache_len(), 1);
+    // The second connection keeps its entry.
+    assert_eq!(second.status("GET", SUB, json!({})).await, 404);
 }
 
 #[tokio::test]

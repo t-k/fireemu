@@ -22,6 +22,7 @@
 mod ack_token;
 mod admission;
 mod authentication;
+mod connection;
 mod convert;
 mod publisher;
 mod push;
@@ -35,7 +36,7 @@ use std::sync::{Arc, Mutex};
 
 pub use fireemu_core_pubsub::pagination::PagingPolicy;
 
-use fireemu_core_pubsub::rest_negative_cache::RestNegativeCache;
+use fireemu_core_pubsub::rest_negative_cache::{ConnectionId, RestNegativeCache};
 use fireemu_core_pubsub::{
     DeadLetterForward, OrderedPullBatching, PubSubError, PubSubState, PubsubMessage,
     ReceivedMessage, StoredMessage, SubscriptionName, TopicName,
@@ -523,13 +524,23 @@ impl PubSubHandle {
     /// PATCH of a subscription is repeated, on the same connection, for about 10 s even after the
     /// subscription exists, and GET, PATCH and DELETE of it are answered from that entry. Off by
     /// default, because it makes a test that creates a resource right after probing it fail; the
-    /// `pubsub.restNegativeCache = "production"` setting (and `productionExact`) turns it on. gRPC,
-    /// topics and snapshots are never affected. The rule is the one two production recordings settle.
+    /// `pubsub.restNegativeCache = "production"` setting (an explicit opt-in; `productionExact` does
+    /// not select it) turns it on. gRPC, topics and snapshots are never affected. The rule is the one
+    /// two production recordings settle.
     #[must_use]
     pub fn with_rest_negative_cache(mut self, enabled: bool) -> Self {
         self.rest_negative_cache =
             enabled.then(|| Arc::new(Mutex::new(RestNegativeCache::default())));
         self
+    }
+
+    /// The number of entries the REST negative cache holds (tests).
+    #[doc(hidden)]
+    #[must_use]
+    pub fn rest_negative_cache_len(&self) -> usize {
+        self.rest_negative_cache
+            .as_ref()
+            .map_or(0, |cache| cache.lock().expect("negative cache lock").len())
     }
 
     /// Returns whether the REST negative cache is enabled.
@@ -1442,12 +1453,24 @@ pub async fn serve_pubsub(
     }
     // Outermost, so a rebound page is refused before authentication or any route runs.
     prepared_router = prepared_router.layer(axum::middleware::from_fn(refuse_rebound_hosts));
+    // Each accepted socket gets an id the REST negative cache keys on, and tells the cache when it closes.
+    let cache = handle.rest_negative_cache.clone();
+    let next_connection = AtomicU64::new(1);
+    let incoming = tokio_stream::StreamExt::map(
+        tokio_stream::wrappers::TcpListenerStream::new(listener),
+        move |accepted| {
+            accepted.map(|stream| {
+                connection::TrackedStream::new(
+                    stream,
+                    ConnectionId::new(next_connection.fetch_add(1, Ordering::Relaxed)),
+                    cache.clone(),
+                )
+            })
+        },
+    );
     let result = tonic::transport::Server::builder()
         .accept_http1(true)
-        .serve_with_incoming(
-            prepared_router,
-            tokio_stream::wrappers::TcpListenerStream::new(listener),
-        )
+        .serve_with_incoming(prepared_router, incoming)
         .await;
     handle.shutdown_push_dispatcher().await;
     result

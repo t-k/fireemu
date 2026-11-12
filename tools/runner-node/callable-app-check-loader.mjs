@@ -28,7 +28,7 @@ function transform(source, name) {
     next = replaceOnce(
       next,
       "function encodeSSE(data) {",
-      `function onCallHandler(options, handler, version) {\n\tconst fn = fireemuOriginalOnCallHandler(options, handler, version);\n\t${REGISTRY}.observe(fn, options);\n\treturn fn;\n}\nfunction encodeSSE(data) {`,
+      `function onCallHandler(options, handler, version) {\n\tconst fn = fireemuOriginalOnCallHandler(options, handler, version);\n\treturn ${REGISTRY}.observe(fn, options);\n}\nfunction encodeSSE(data) {`,
       "encodeSSE",
     );
     return next;

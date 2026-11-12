@@ -1,0 +1,11 @@
+{
+  "note": "Recorded production answers the callable-ingress observation is judged against. The front-end page (provisional) is read from ../bearer-observation.baseline.json. The control is the callable wrapper's answer to a request without Authorization; the stage 3 recorder kept the parsed JSON body, so its byte count and digest are those of the compact serialization the SDK sends with res.send (checked by the judge against the observed bytes).",
+  "control": {
+    "cite": "functions-http/callable/auth-context#no-authorization, passes 1 and 2 (run functions-http-stage3-2026-09-27T135803.703Z, recording sha256 555c1150e708606a6f21ac931d9196a5e75e62486398b760d9e9cfafc8d94e0f)",
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"result\":{\"auth\":null}}",
+    "bodyBytes": 24,
+    "bodySha256": "b267f186af5790ea4506732b69763cfa8252978c7092063dc79ad27f5e1cc0da"
+  }
+}

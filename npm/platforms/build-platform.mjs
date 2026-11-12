@@ -58,6 +58,7 @@ export const RUNNER_FILES = [
   "callable-app-check.mjs",
   "callable-app-check-loader.mjs",
   "app-check-token.mjs",
+  "nested-callable.mjs",
   "blocking-error.mjs",
   "blocking-event.mjs",
   "blocking-response.mjs",

@@ -2005,6 +2005,22 @@ const bindPort = (port) =>
     server.once("error", reject);
     server.listen(port, "127.0.0.1", () => resolve(server));
   });
+// Binds a port that its owner has just released. Nothing in this process can still hold it, but the
+// operating system may hand the same number to something else for a moment: the source port of a
+// loopback connection another test (or another test file, in its own process) opens takes it from the
+// same ephemeral range the reservation drew it from (ubuntu CI: EADDRINUSE 127.0.0.1:34937). Such a
+// holder lets go within milliseconds, so a busy port is retried for about a second. A reservation that
+// was never released holds its port for good and still fails every attempt.
+async function bindFreedPort(port, { attempts = 40, intervalMs = 25 } = {}) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await bindPort(port);
+    } catch (error) {
+      if (error.code !== "EADDRINUSE" || attempt >= attempts) throw error;
+      await delay(intervalMs);
+    }
+  }
+}
 
 test("concurrencyFromEnvironment accepts defaults and positive decimal integers", () => {
   assert.equal(concurrencyFromEnvironment({}), 8);
@@ -2036,6 +2052,24 @@ test("concurrencyFromEnvironment controls check when concurrency is omitted", as
     else process.env.FIREEMU_EVENTARC_CHECK_CONCURRENCY = previous;
   }
 });
+test("bindFreedPort waits out a transient holder and still fails for one that never lets go", async () => {
+  const holder = await bindPort(0);
+  const { port } = holder.address();
+  const closing = new Promise((done) => setTimeout(() => holder.close(done), 150));
+  const server = await bindFreedPort(port);
+  await closing;
+  await new Promise((done) => server.close(done));
+
+  const permanent = await bindPort(0);
+  try {
+    await assert.rejects(bindFreedPort(permanent.address().port, { attempts: 4, intervalMs: 5 }), {
+      code: "EADDRINUSE",
+    });
+    await assert.rejects(bindFreedPort(-1), { code: "ERR_SOCKET_BAD_PORT" });
+  } finally {
+    await new Promise((done) => permanent.close(done));
+  }
+});
 test("reservePorts holds distinct ports until release across concurrent callers", async () => {
   const reservations = await Promise.all(Array.from({ length: 16 }, () => reservePorts()));
   const ports = reservations.flatMap((r) => r.ports);
@@ -2046,7 +2080,7 @@ test("reservePorts holds distinct ports until release across concurrent callers"
     await Promise.all(reservations.map((r) => r.release()));
   }
   for (const port of ports) {
-    const server = await bindPort(port);
+    const server = await bindFreedPort(port);
     await new Promise((done) => server.close(done));
   }
 });
@@ -2321,7 +2355,7 @@ test("check keeps spawned ports free", async (t) => {
         Number(args[args.indexOf("--tasks-port") + 1]),
       ]) {
         try {
-          const server = await bindPort(port);
+          const server = await bindFreedPort(port);
           await new Promise((done) => server.close(done));
         } catch (error) {
           errors.push(error);

@@ -838,6 +838,8 @@ mod tests {
                 "config_schema"
                     | "check_allow_entries"
                     | "config_show"
+                    | "redact_config_row"
+                    | "mask_secret"
                     | "resolve_project_alias"
                     | "resolve_storage_rules_targets"
                     | "database_rules_by_instance"

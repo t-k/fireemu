@@ -54,6 +54,19 @@ firebaseJson = "firebase.json"
 
 If you relied on the old behavior, where a `firebase.json` next to your tests was ignored, pass `--no-config-discovery`. Discovery means that the project ID comes from the `.firebaserc` beside the discovered `firebase.json`, that its emulator ports, Hub, UI and single-project settings apply, and that a `functions` entry starts the Functions runtime. `fireemu capabilities` also reports the profile of a discovered `fireemu.toml`.
 
+## Relative paths
+
+A relative path is resolved against a different directory depending on the file that wrote it:
+
+| Where the path is written | Resolved against |
+|---|---|
+| `fireemu.toml` or `fireemu.json`: `rules.source`, `firestore.indexFile`, `storage.rules`, `functions.source` and the other file settings | The working directory `fireemu` runs in |
+| `--functions <dir>` and the other path options | The working directory |
+| `firebaseJson` in `fireemu.toml` or `fireemu.json` | The directory of that configuration file |
+| Every path inside a `firebase.json` (`firestore.rules`, `functions.source`, `hosting.public`, ...) | The directory of that `firebase.json` |
+
+So `fireemu exec --config packages/api/fireemu.toml -- npm test`, run from the repository root, reads `rules.source = "firestore.rules"` from the repository root, not from `packages/api`. Fireemu keeps this behavior for compatibility. To avoid the difference, run it from the directory that holds the configuration, or put the paths in a `firebase.json` that `firebaseJson` references. [`fireemu up --plan`](../../reference/cli/#plan-a-run) shows, for every path, the absolute path the run opens and the directory it was resolved against, and warns when a path of the canonical configuration would resolve differently from the configuration file's own directory. A future schema version may resolve every path against the configuration file.
+
 ## File ownership checks
 
 A discovered file can name Functions code to run and the rules to enforce, so on Unix the search checks who owns what it finds, as git checks repository ownership. The Firebase CLI does not check this. The trusted owners are you, root, and, when you run as root through `sudo`, the user in `SUDO_UID`.
@@ -76,7 +89,7 @@ Two common setups run into this rule:
 
 `fireemu.toml` is validated at startup, and a value Fireemu does not accept stops it with an error. A key the schema does not list and a value of the wrong type are refused in both formats by `up`, `exec` and `config show`, naming the file, the key and the type it should have had, for example `fireemu.toml: daemon.firestorePort must be an integer, found a string`. Integer settings refuse floats even when their value is integral: write `8080` rather than `8080.0`, as the error message suggests. The [configuration schema](../../reference/configuration/) is a JSON Schema you can also use in your editor.
 
-`fireemu capabilities` prints the capability manifest for the profile your configuration resolves to.
+`fireemu capabilities` prints the capability manifest for the profile your configuration resolves to. `fireemu up --plan` and `fireemu exec --plan -- <command>` print everything the run resolves from your files, the command line and the environment (project, services, ports, files, Functions runtime, inherited variables) without starting it; see [Plan a run](../../reference/cli/#plan-a-run).
 
 ## Generate a reference file
 

@@ -57,6 +57,7 @@ mod hub;
 mod import_export;
 mod init;
 mod managed_storage;
+mod plan;
 mod python_functions;
 mod readiness;
 mod resources;
@@ -264,6 +265,12 @@ struct Options {
     owner_stdin: bool,
     /// Which configuration files were loaded, for the start banner.
     config_origin: String,
+    /// `--plan` (and `--json`): print what the run would do instead of starting it.
+    plan: Option<plan::PlanFormat>,
+    /// What to do about inherited emulator variables of services this run does not start.
+    inherited_env: plan::InheritedEnvPolicy,
+    /// What the resolution decided and where each part came from, for `--plan`.
+    facts: plan::Facts,
 }
 
 const DEFAULT_MAX_RUNTIME_WORKERS: usize = 4;
@@ -336,14 +343,14 @@ fn main() -> ExitCode {
             Err(e) => fail_for(command, &e),
         },
         Some("up" | "emulators:start") => match parse_options(&args[1..], OptionContext::Start) {
-            Ok((options, None)) => daemon::run(options, None),
+            Ok((options, None)) => run_or_plan(options, None, "up"),
             Ok((_, Some(_))) => unreachable!("start does not accept a positional argument"),
             Err(e) => fail_for(command, &e),
         },
         #[cfg(windows)]
         Some("__test-world-command") => supervise_world_command(&args[1..]),
         Some("exec" | "emulators:exec") => match parse_exec(&args[1..]) {
-            Ok((options, plan)) => daemon::run(options, Some(plan)),
+            Ok((options, exec)) => run_or_plan(options, Some(exec), "exec"),
             Err(e) => fail_for(command, &e),
         },
         Some("emulators:export") => match export_command(&args[1..]) {
@@ -385,6 +392,19 @@ fn main() -> ExitCode {
         },
         _ => usage(),
     }
+}
+
+/// `up` and `exec` after their options resolved: print the plan when one was asked for,
+/// otherwise apply the inherited-emulator-environment policy and start.
+fn run_or_plan(options: Options, exec: Option<ExecPlan>, command: &str) -> ExitCode {
+    let parent = plan::parent_environment();
+    if let Some(format) = options.plan {
+        return plan::run(&options, exec.as_ref(), command, format, &parent);
+    }
+    if let Err(error) = plan::guard_inherited_env(&options, &parent) {
+        return fail(&error);
+    }
+    daemon::run(options, exec)
 }
 
 /// Private bridge for the npm snapshot helper: parse without discovery, defaults or services.
@@ -1086,6 +1106,7 @@ enum AuxiliaryPort {
 
 /// The parsed command line, before it is applied to a configuration.
 #[derive(Default)]
+#[allow(clippy::struct_excessive_bools)] // one switch per flag, read independently
 struct RawOptions {
     /// The official `emulators:exec <script>` positional argument.
     positional_script: Option<String>,
@@ -1100,6 +1121,8 @@ struct RawOptions {
     discovered_text: Option<(PathBuf, Result<String, String>)>,
     project: Option<String>,
     only: Option<Selection>,
+    /// The `--only` list as typed, for `--plan`.
+    only_text: Option<String>,
     firestore_port: Option<u16>,
     http_port: Option<u16>,
     storage_port: Option<u16>,
@@ -1123,6 +1146,14 @@ struct RawOptions {
     import: Option<PathBuf>,
     /// `--export-on-exit [dir]`.
     export_on_exit: Option<ExportOnExit>,
+    /// `--plan`: resolve everything, print the plan and start nothing.
+    plan: bool,
+    /// `--json`: print the plan as JSON.
+    json: bool,
+    /// `--deny-inherited-emulator-env`.
+    deny_inherited_env: bool,
+    /// `--allow-inherited-emulator-env <NAME>`, repeatable.
+    allow_inherited_env: Vec<String>,
 }
 
 /// What `--export-on-exit` named, before it is resolved against `--import`.
@@ -1171,6 +1202,28 @@ fn parse_raw_options(args: &[String], context: OptionContext) -> Result<RawOptio
                 raw.owner_stdin = true;
                 i += 1;
             }
+            "--plan" => {
+                raw.plan = true;
+                i += 1;
+            }
+            "--json" => {
+                raw.json = true;
+                i += 1;
+            }
+            "--deny-inherited-emulator-env" => {
+                raw.deny_inherited_env = true;
+                i += 1;
+            }
+            "--allow-inherited-emulator-env" => {
+                raw.allow_inherited_env.push(
+                    args.get(i + 1)
+                        .ok_or_else(|| {
+                            CliError::usage("--allow-inherited-emulator-env needs a variable name")
+                        })?
+                        .clone(),
+                );
+                i += 2;
+            }
             "--ready-file" => {
                 raw.ready_file =
                     Some(PathBuf::from(args.get(i + 1).ok_or_else(|| {
@@ -1207,13 +1260,11 @@ fn parse_raw_options(args: &[String], context: OptionContext) -> Result<RawOptio
             "--only" => {
                 // A bad selection is a usage failure (exit 2), not a configuration one: the
                 // list came from the command line.
-                raw.only = Some(
-                    Selection::parse(
-                        args.get(i + 1)
-                            .ok_or_else(|| CliError::usage("--only needs a list"))?,
-                    )
-                    .map_err(|e| CliError::usage(e.0))?,
-                );
+                let list = args
+                    .get(i + 1)
+                    .ok_or_else(|| CliError::usage("--only needs a list"))?;
+                raw.only = Some(Selection::parse(list).map_err(|e| CliError::usage(e.0))?);
+                raw.only_text = Some(list.clone());
                 i += 2;
             }
             "--firestore-port" => {
@@ -1771,6 +1822,10 @@ enum FirebaseJsonVia {
 struct ConfigSources {
     canonical: Option<PathBuf>,
     firebase: Option<(PathBuf, FirebaseJsonVia)>,
+    /// The canonical configuration as parsed, for `--plan`.
+    canonical_document: Option<serde_json::Value>,
+    /// The `firebase.json` as parsed, for `--plan`.
+    firebase_document: Option<serde_json::Value>,
 }
 
 /// The start banner's account of which configuration files were loaded.
@@ -1862,6 +1917,7 @@ fn load_project_config(
             let (json, canonical) = config_document(raw, path)?;
             if canonical {
                 sources.canonical = Some(path.clone());
+                sources.canonical_document = Some(json.clone());
                 let config = if raw.context == OptionContext::Inspect {
                     RuntimeConfig::inspect_json(&json)
                 } else {
@@ -1909,6 +1965,7 @@ fn load_project_config(
     let mut project_root = PathBuf::from(".");
     if let Some(((json, path), via)) = &firebase {
         sources.firebase = Some((path.clone(), *via));
+        sources.firebase_document = Some(json.clone());
         project_root = project_dir(path);
         let report = cfg.apply_firebase_json(json, &project_root, only)?;
         if raw.verbosity > Verbosity::Quiet {
@@ -1920,11 +1977,15 @@ fn load_project_config(
     Ok((cfg, project_root, sources))
 }
 
+#[allow(clippy::too_many_lines)] // the one place every option is resolved, in order
 fn parse_options(
     args: &[String],
     context: OptionContext,
 ) -> Result<(Options, Option<String>), CliError> {
     let mut raw = parse_raw_options(args, context)?;
+    // Taken before discovery fills in the files it found: the plan lists what was typed.
+    let overrides = command_line_overrides(&raw);
+    let plan_format = plan_format(&raw, context)?;
     let positional_script = raw.positional_script.clone();
     let only = raw.only.clone().unwrap_or_default();
     let origin = discover_project_config(&mut raw)?;
@@ -1936,7 +1997,14 @@ fn parse_options(
     } else {
         read_firebaserc(&project_root)?
     };
-    if let Some(project) = resolve_project(rc.as_ref(), raw.project.as_deref())? {
+    let resolved_project = resolve_project(rc.as_ref(), raw.project.as_deref())?;
+    let project_source = project_source(
+        raw.project.as_deref(),
+        resolved_project.as_deref(),
+        rc.as_ref(),
+        &sources,
+    );
+    if let Some(project) = resolved_project {
         // The alias, when `--project` named one, is what a codebase's `.env.<alias>` file is
         // keyed by (`findEnvfiles`). A `--project` value that is already a project ID is not
         // an alias, and neither is one that resolves to itself.
@@ -1999,17 +2067,12 @@ fn parse_options(
     // The UI listener is configured through its own module when a port was asked for or when
     // exec must apply its official opt-in default. Start otherwise keeps the best-effort
     // default, where a busy 4000 disables the UI instead of failing the run.
-    if raw.ui_port == Some(AuxiliaryPort::Auto) {
-        ui::set_auto_port();
-    } else if cfg.ui_addr_explicit || context == OptionContext::Exec {
-        ui::set_port(if cfg.ui_enabled {
-            cfg.ui_addr
-                .rsplit_once(':')
-                .and_then(|(_, p)| p.parse().ok())
-                .unwrap_or(config::DEFAULT_UI_PORT)
-        } else {
-            0
-        });
+    let ui_selection = select_ui(&cfg, raw.ui_port, context);
+    match ui_selection {
+        UiSelection::Default => {}
+        UiSelection::Disabled => ui::set_port(0),
+        UiSelection::Auto => ui::set_auto_port(),
+        UiSelection::Fixed(port) => ui::set_port(port),
     }
     // `--export-on-exit` without a directory means "where --import read from", exactly as
     // the official CLI resolves it (`commandUtils.ts` `setExportOnExitOptions`). A target
@@ -2027,6 +2090,14 @@ fn parse_options(
             )));
         }
     }
+    plan::check_allowed_names(&raw.allow_inherited_env).map_err(CliError::usage)?;
+    let facts = plan_facts(
+        project_root,
+        project_source,
+        &sources,
+        overrides,
+        ui_selection,
+    );
     Ok((
         Options {
             cfg,
@@ -2037,9 +2108,183 @@ fn parse_options(
             ready_file: raw.ready_file,
             owner_stdin: raw.owner_stdin,
             config_origin,
+            plan: plan_format,
+            inherited_env: plan::InheritedEnvPolicy {
+                deny: raw.deny_inherited_env,
+                allow: raw.allow_inherited_env,
+            },
+            facts,
         },
         positional_script,
     ))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UiSelection {
+    Default,
+    Disabled,
+    Auto,
+    Fixed(u16),
+}
+
+fn select_ui(
+    cfg: &config::RuntimeConfig,
+    port: Option<AuxiliaryPort>,
+    context: OptionContext,
+) -> UiSelection {
+    if port == Some(AuxiliaryPort::Auto) {
+        UiSelection::Auto
+    } else if cfg.ui_addr_explicit || context == OptionContext::Exec {
+        let port = if cfg.ui_enabled {
+            cfg.ui_addr
+                .rsplit_once(':')
+                .and_then(|(_, p)| p.parse().ok())
+                .unwrap_or(config::DEFAULT_UI_PORT)
+        } else {
+            0
+        };
+        if port == 0 {
+            UiSelection::Disabled
+        } else {
+            UiSelection::Fixed(port)
+        }
+    } else {
+        UiSelection::Default
+    }
+}
+
+/// What option resolution decided besides the configuration, for `--plan`.
+fn plan_facts(
+    project_root: PathBuf,
+    project_source: String,
+    sources: &ConfigSources,
+    overrides: Vec<(String, String)>,
+    ui: UiSelection,
+) -> plan::Facts {
+    plan::Facts {
+        working_directory: std::env::current_dir().ok(),
+        project_root,
+        project_source,
+        canonical: sources.canonical.clone(),
+        canonical_document: sources.canonical_document.clone(),
+        firebase: sources.firebase.clone().map(|(path, via)| {
+            (
+                path,
+                matches!(via, FirebaseJsonVia::Reference),
+                sources.firebase_document.clone().unwrap_or_default(),
+            )
+        }),
+        overrides,
+        ui,
+    }
+}
+
+/// `--plan` and `--json`: how the plan prints, or `None` when none was asked for. `--json`
+/// alone is a usage error, because there is nothing to print as JSON.
+fn plan_format(
+    raw: &RawOptions,
+    context: OptionContext,
+) -> Result<Option<plan::PlanFormat>, CliError> {
+    if raw.plan {
+        Ok(Some(if raw.json {
+            plan::PlanFormat::Json
+        } else {
+            plan::PlanFormat::Text
+        }))
+    } else if raw.json && context != OptionContext::Inspect {
+        Err(CliError::usage(
+            "--json prints the plan, so it needs --plan",
+        ))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Where the project ID of a run came from, for `--plan`: the word that names the rule
+/// `parse_options` applied.
+fn project_source(
+    requested: Option<&str>,
+    resolved: Option<&str>,
+    rc: Option<&serde_json::Value>,
+    sources: &ConfigSources,
+) -> String {
+    match (requested, resolved) {
+        (Some(requested), Some(_)) => {
+            let alias = rc
+                .and_then(|rc| rc.get("projects"))
+                .is_some_and(|projects| projects.get(requested).is_some());
+            if alias {
+                "--project alias in .firebaserc"
+            } else {
+                "--project"
+            }
+            .to_owned()
+        }
+        (None, Some(_)) => ".firebaserc default".to_owned(),
+        _ => match (&sources.canonical, &sources.canonical_document) {
+            (Some(path), Some(document)) if document.pointer("/daemon/authProject").is_some() => {
+                format!(
+                    "daemon.authProject in {}",
+                    path.file_name().map_or_else(
+                        || "the configuration".to_owned(),
+                        |n| n.to_string_lossy().into_owned()
+                    )
+                )
+            }
+            _ => "built-in default".to_owned(),
+        },
+    }
+}
+
+/// The command-line options that override what the configuration files say, as the plan
+/// lists them: flag and value, in a fixed order.
+fn command_line_overrides(raw: &RawOptions) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut push = |flag: &str, value: Option<String>| {
+        if let Some(value) = value {
+            out.push((flag.to_owned(), value));
+        }
+    };
+    let auxiliary = |port: Option<AuxiliaryPort>| {
+        port.map(|port| match port {
+            AuxiliaryPort::Auto => "auto".to_owned(),
+            AuxiliaryPort::Fixed(port) => port.to_string(),
+        })
+    };
+    push(
+        "--config",
+        raw.config_path.as_ref().map(|p| p.display().to_string()),
+    );
+    push(
+        "--firebase-json",
+        raw.firebase_json.as_ref().map(|p| p.display().to_string()),
+    );
+    push("--project", raw.project.clone());
+    push("--only", raw.only_text.clone());
+    push(
+        "--firestore-port",
+        raw.firestore_port.map(|p| p.to_string()),
+    );
+    push("--http-port", raw.http_port.map(|p| p.to_string()));
+    push("--storage-port", raw.storage_port.map(|p| p.to_string()));
+    push(
+        "--functions-port",
+        raw.functions_port.map(|p| p.to_string()),
+    );
+    push("--hosting-port", raw.hosting_port.map(|p| p.to_string()));
+    push("--eventarc-port", raw.eventarc_port.map(|p| p.to_string()));
+    push("--tasks-port", raw.tasks_port.map(|p| p.to_string()));
+    push("--pubsub-port", raw.pubsub_port.map(|p| p.to_string()));
+    push("--database-port", raw.database_port.map(|p| p.to_string()));
+    push("--hub-port", auxiliary(raw.hub_port));
+    push("--ui-port", auxiliary(raw.ui_port));
+    push("--logging-port", raw.logging_port.map(|p| p.to_string()));
+    push("--functions", raw.functions_source.clone());
+    push(
+        "--import",
+        raw.import.as_ref().map(|p| p.display().to_string()),
+    );
+    out
 }
 
 /// Resolves `--export-on-exit` against `--import` and refuses a target that would replace
@@ -3250,10 +3495,7 @@ async fn bind_hosting(
     cfg: &RuntimeConfig,
     only: &Selection,
 ) -> Result<Option<tokio::net::TcpListener>, String> {
-    if only.explicit && only.hosting && cfg.hosting.is_none() {
-        return Err("--only hosting requires hosting.public in firebase.json".to_owned());
-    }
-    if !only.hosting || cfg.hosting.is_none() {
+    if !plan::hosting_starts(cfg, only)? {
         return Ok(None);
     }
     bind_relocatable_listener(
@@ -3276,6 +3518,8 @@ async fn bind_listeners_with(
     pick: EphemeralPick,
 ) -> Result<Listeners, String> {
     let configured = configured_ports(cfg);
+    // Which products start is decided once, by the code `--plan` reports from.
+    let starts = plan::ServiceStarts::resolve(cfg, only)?;
     // Every product listener reads the DNS-rebinding `Host` policy per request; it is in place
     // before the first listener exists.
     let host_policy = cfg.host_policy();
@@ -3294,24 +3538,24 @@ async fn bind_listeners_with(
     } else {
         None
     };
-    let firestore = if only.firestore {
+    let firestore = if starts.firestore {
         Some(bind_listener(&cfg.firestore_addr).await?)
     } else {
         None
     };
-    let control = if only.auth {
+    let control = if starts.auth {
         bind_listener(&cfg.http_addr).await?
     } else {
         // Loopback, ephemeral: the configured Auth port belongs to whoever wants it.
         bind_ephemeral_avoiding("127.0.0.1:0", &configured, pick)?
     };
-    let storage = if only.storage {
+    let storage = if starts.storage {
         Some(bind_listener(&cfg.storage_addr).await?)
     } else {
         None
     };
     let hosting = bind_hosting(cfg, only).await?;
-    let functions = if only.functions && cfg.functions_source.is_some() {
+    let functions = if starts.functions {
         Some(bind_listener(&cfg.functions_addr).await?)
     } else {
         None
@@ -3319,7 +3563,7 @@ async fn bind_listeners_with(
     // The pinned Firebase CLI starts both support emulators whenever a Functions backend is
     // loaded, even if `--only` did not name them. Naming either one without Functions is an
     // accepted no-op and binds neither listener.
-    let eventarc = if functions.is_some() {
+    let eventarc = if starts.eventarc {
         Some(
             bind_relocatable_listener(
                 &cfg.eventarc_addr,
@@ -3332,7 +3576,7 @@ async fn bind_listeners_with(
     } else {
         None
     };
-    let tasks = if functions.is_some() {
+    let tasks = if starts.tasks {
         Some(
             bind_relocatable_listener(
                 &cfg.tasks_addr,
@@ -3347,13 +3591,13 @@ async fn bind_listeners_with(
     };
     // Like the official suite, Pub/Sub starts only when it was configured or explicitly asked
     // for, rather than binding port 8085 on every run.
-    let pubsub = if only.pubsub && (cfg.pubsub_enabled || only.explicit) {
+    let pubsub = if starts.pubsub {
         Some(bind_listener(&cfg.pubsub_addr).await?)
     } else {
         None
     };
     // The Realtime Database follows the same rule as Pub/Sub: configured or asked for.
-    let database = if only.database && (cfg.database_enabled || only.explicit) {
+    let database = if starts.database {
         Some(bind_listener(&cfg.database_addr).await?)
     } else {
         None
@@ -3374,7 +3618,7 @@ async fn bind_listeners_with(
     Ok(Listeners {
         firestore,
         control,
-        auth_selected: only.auth,
+        auth_selected: starts.auth,
         storage,
         functions,
         hosting,

@@ -45,6 +45,12 @@ impl Config {
         &self.data
     }
 
+    /// The public directory, joined onto the directory of `firebase.json` as written.
+    #[must_use]
+    pub fn public(&self) -> &Path {
+        &self.public
+    }
+
     /// Loads one configured site without reading its public files or any credentials.
     pub fn parse(data: &Value, base: &Path) -> Result<Self, String> {
         let object = data

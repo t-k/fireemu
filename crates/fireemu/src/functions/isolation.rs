@@ -78,6 +78,7 @@ pub(super) fn function_spawn_spec(base: &SpawnSpec, function: &FunctionSpec) -> 
             name != LOCAL_SECRETS_VARIABLE
                 && !identity.iter().any(|(fixed, _)| fixed == name)
                 && !declared.contains(name)
+                && !secrets.contains_key(name)
         })
         .cloned()
         .collect();
@@ -367,6 +368,31 @@ mod tests {
             env_of(&function_spawn_spec(&codebase, &all[0]), "API_KEY"),
             vec!["secret-value"]
         );
+    }
+
+    #[test]
+    fn inherited_local_secrets_are_removed_from_other_functions() {
+        let all = functions(&json!({"functions": [
+            {"name": "alpha", "generation": 2, "trigger": {"type": "http"},
+             "platformOptions": {"secrets": ["ALPHA_KEY", "MISSING_KEY"]}},
+            {"name": "beta", "generation": 2, "trigger": {"type": "http"},
+             "platformOptions": {"secrets": ["BETA_KEY"]}},
+        ]}));
+        let mut codebase = base(&json!({"ALPHA_KEY": "local-alpha", "BETA_KEY": "local-beta"}));
+        codebase.env.extend([
+            ("ALPHA_KEY".to_owned(), "inherited-alpha".to_owned()),
+            ("BETA_KEY".to_owned(), "inherited-beta".to_owned()),
+            ("MISSING_KEY".to_owned(), "inherited-missing".to_owned()),
+            ("UNRELATED".to_owned(), "retained".to_owned()),
+        ]);
+        let alpha = function_spawn_spec(&codebase, &all[0]);
+        assert_eq!(env_of(&alpha, "ALPHA_KEY"), vec!["local-alpha"]);
+        assert!(env_of(&alpha, "BETA_KEY").is_empty());
+        assert!(env_of(&alpha, "MISSING_KEY").is_empty());
+        assert_eq!(env_of(&alpha, "UNRELATED"), vec!["retained"]);
+        let beta = function_spawn_spec(&codebase, &all[1]);
+        assert!(env_of(&beta, "ALPHA_KEY").is_empty());
+        assert_eq!(env_of(&beta, "BETA_KEY"), vec!["local-beta"]);
     }
 
     #[test]

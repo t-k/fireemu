@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 1,
+  "project": "fireemu-oracle-query",
+  "region": "us-central1",
+  "fixtureSource": "conformance/functions-http/callable-ingress/<variant>/fixtures",
+  "functions": {
+    "http": "fireemuHttpProbe",
+    "callable": "fireemuCallableProbe"
+  },
+  "programs": [
+    {
+      "id": "functions-http/http/callable-ingress",
+      "cases": [
+        {
+          "id": "no-authorization",
+          "target": "http",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {
+                "op": "auth"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "malformed-bearer",
+          "target": "http",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json",
+              "authorization": "Bearer malformed"
+            },
+            "body": {
+              "data": {
+                "op": "auth"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "lowercase-scheme",
+          "target": "http",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json",
+              "authorization": "bearer malformed"
+            },
+            "body": {
+              "data": {
+                "op": "auth"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "bare-scheme",
+          "target": "http",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json",
+              "authorization": "Bearer"
+            },
+            "body": {
+              "data": {
+                "op": "auth"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "basic-scheme",
+          "target": "http",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json",
+              "authorization": "Basic dXNlcjpwYXNz"
+            },
+            "body": {
+              "data": {
+                "op": "auth"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "unsigned-jwt",
+          "target": "http",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json",
+              "authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ4In0.c2ln"
+            },
+            "body": {
+              "data": {
+                "op": "auth"
+              }
+            }
+          },
+          "capture": "complete"
+        }
+      ]
+    }
+  ]
+}

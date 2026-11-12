@@ -1934,10 +1934,7 @@ impl Default for RuntimeConfig {
 /// Streaming each member preserves order without changing `serde_json`'s map representation.
 pub fn config_schema() -> Vec<(String, Value)> {
     let mut entries = Vec::new();
-    let mut pending = vec![(
-        String::new(),
-        include_str!("../../../spec/config/fireemu.schema.json"),
-    )];
+    let mut pending = vec![(String::new(), CONFIG_SCHEMA_JSON)];
     while let Some((path, text)) = pending.pop() {
         let schema: Value = serde_json::from_str(text).expect("embedded configuration schema");
         if schema.get("properties").is_some() {
@@ -2179,7 +2176,115 @@ impl RuntimeConfig {
             };
             rows.push(json!({"key": key, "value": value, "source": source, "description": schema["description"].as_str().unwrap_or("")}));
         }
+        for row in &mut rows {
+            redact_config_row(row);
+        }
         rows
+    }
+}
+
+/// Config keys whose values are secret-bearing. `config show` (text and `--json`) and
+/// `config lint --json` print these through [`redact_config_row`] instead of the value.
+/// An array key redacts only the secret field of each element, so the other fields stay
+/// readable.
+pub const SECRET_CONFIG_KEYS: &[&str] = &[
+    "pubsub.authentication.localBearerToken",
+    "auth.apiKeys",
+    "auth.customTokenSigners",
+    "auth.providers.oidc",
+    "appCheck.apps",
+];
+
+/// Schema leaves whose names look secret-like (`token`, `secret`, `key`, `password`,
+/// `credential`, `private`) but carry a mode, a switch or public material. Each entry says
+/// why. The schema test fails for any other secret-like leaf, so a new one must be added to
+/// [`SECRET_CONFIG_KEYS`] or here with a reason.
+#[cfg(test)]
+pub const NOT_SECRET_CONFIG_KEYS: &[(&str, &str)] = &[
+    ("auth.allowUnsignedCustomTokens", "boolean switch"),
+    ("auth.allowUnsignedIdTokens", "boolean switch"),
+    ("auth.idTokenSigning", "signing mode name"),
+    ("auth.forwardInboundCredentials", "boolean switch"),
+    ("auth.requireClientApiKey", "boolean switch"),
+    (
+        "auth.passwordPolicy",
+        "password policy rules, not a password",
+    ),
+    (
+        "auth.passwordPolicyOverrides",
+        "password policy rules, not a password",
+    ),
+    ("auth.signIn.email.passwordRequired", "boolean switch"),
+    ("auth.secretMaterialization", "materialization mode name"),
+    ("appCheck.tokenSigning", "signing mode name"),
+    ("appCheck.tokenTtlSeconds", "number of seconds"),
+    (
+        "appCheck.debugTokens",
+        "mode name (any or registered), not a token value",
+    ),
+    (
+        "eventarc.oauthCredentials",
+        "digest-keyed scope sets, the digests are not credentials",
+    ),
+    (
+        "functions.authBlockingToken",
+        "mode name, not a token value",
+    ),
+    (
+        "auth.blockingFunctions.forwardInboundCredentials",
+        "booleans: which inbound credentials a blocking function receives",
+    ),
+    (
+        "auth.idpSigners",
+        "public verification keys (JWKS) of an IdP, not secrets",
+    ),
+];
+
+/// Replaces the secret values of one `config show` row (see [`SECRET_CONFIG_KEYS`]).
+/// A non-null value becomes the string `"[redacted]"`; null stays null.
+fn mask_secret(value: &mut Value) {
+    if !value.is_null() {
+        *value = serde_json::json!("[redacted]");
+    }
+}
+
+pub fn redact_config_row(row: &mut Value) {
+    let Some(key) = row["key"].as_str().map(str::to_owned) else {
+        return;
+    };
+    if !SECRET_CONFIG_KEYS.contains(&key.as_str()) {
+        return;
+    }
+    let value = &mut row["value"];
+    match key.as_str() {
+        "auth.providers.oidc" => mask_each_field(value, "clientSecret"),
+        "appCheck.apps" => mask_each_field(value, "debugTokenSha256"),
+        "auth.apiKeys" => {
+            if let Some(items) = value.as_array_mut() {
+                items.iter_mut().for_each(mask_secret);
+            }
+        }
+        _ => mask_secret(value),
+    }
+}
+
+/// Masks `field` of every object in an array (for `debugTokenSha256`, the digests inside
+/// the field's array are masked one by one).
+fn mask_each_field(value: &mut Value, field: &str) {
+    let Some(items) = value.as_array_mut() else {
+        return;
+    };
+    for item in items {
+        let Some(secret) = item
+            .as_object_mut()
+            .and_then(|object| object.get_mut(field))
+        else {
+            continue;
+        };
+        match secret.as_array_mut() {
+            Some(digests) => digests.iter_mut().for_each(mask_secret),
+            None => mask_secret(secret),
+        }
     }
 }
 
@@ -4274,9 +4379,83 @@ pub(crate) const KNOWN_TOP_LEVEL: &[&str] = &[
     "daemon",
 ];
 
-pub const CANONICAL_SCHEMA_URL: &str =
-    "https://raw.githubusercontent.com/fireemu/fireemu/main/spec/config/fireemu.schema.json";
+const SCHEMA_URL_PREFIX: &str = "https://raw.githubusercontent.com/fireemu/fireemu/";
+const SCHEMA_URL_SUFFIX: &str = "/spec/config/fireemu.schema.json";
 const LEGACY_SCHEMA_URL: &str = "https://fireemu.dev/spec/config/fireemu.schema.json";
+
+/// A plain `major.minor.patch` release number: three dot-separated decimal numbers without
+/// leading zeros. Release tags (`v<version>`) have exactly this shape.
+fn is_release_number(text: &str) -> bool {
+    let mut parts = text.split('.');
+    let numbers = [parts.next(), parts.next(), parts.next()];
+    parts.next().is_none()
+        && numbers.iter().all(|part| {
+            part.is_some_and(|part| {
+                !part.is_empty()
+                    && part.bytes().all(|byte| byte.is_ascii_digit())
+                    && (part == "0" || !part.starts_with('0'))
+            })
+        })
+}
+
+/// The location of the schema file at the release tag of `version`. A version that is not a
+/// plain release number (a pre-release build) has no tag and falls back to the `main`
+/// location, which the loader also accepts.
+pub fn schema_url_for_version(version: &str) -> String {
+    if is_release_number(version) {
+        format!("{SCHEMA_URL_PREFIX}v{version}{SCHEMA_URL_SUFFIX}")
+    } else {
+        main_schema_url()
+    }
+}
+
+/// The location of the schema file on the `main` branch.
+fn main_schema_url() -> String {
+    format!("{SCHEMA_URL_PREFIX}main{SCHEMA_URL_SUFFIX}")
+}
+
+/// The schema URL for a build: the release tag's file for a binary built by the release
+/// workflow (`release_build` is `Some("1")`), the `main` location for any other build. The
+/// workspace version alone cannot tell them apart: a build from source between releases
+/// reports the last release's version but embeds the newer schema of `main`. The release
+/// workflow requires the tag to equal the workspace version, so a release binary's tag schema
+/// is the schema it embeds.
+pub fn schema_url_for_build(version: &str, release_build: Option<&str>) -> String {
+    if release_build == Some("1") {
+        schema_url_for_version(version)
+    } else {
+        main_schema_url()
+    }
+}
+
+/// The schema URL that generated configuration files carry (see [`schema_url_for_build`]).
+/// `FIREEMU_RELEASE_BUILD=1` is set at compile time by `.github/workflows/release.yml` only.
+/// `fireemu config schema` prints the schema this binary validates with, whatever the build.
+pub fn installed_schema_url() -> String {
+    schema_url_for_build(
+        env!("CARGO_PKG_VERSION"),
+        option_env!("FIREEMU_RELEASE_BUILD"),
+    )
+}
+
+/// Whether `url` is a location `$schema` may name: the schema at `main`, at any release tag, or
+/// at the original `fireemu.dev` location. The `$schema` pattern in
+/// `spec/config/fireemu.schema.json` states the same set; a test keeps the two together.
+pub fn is_accepted_schema_url(url: &str) -> bool {
+    if url == LEGACY_SCHEMA_URL {
+        return true;
+    }
+    let Some(reference) = url
+        .strip_prefix(SCHEMA_URL_PREFIX)
+        .and_then(|rest| rest.strip_suffix(SCHEMA_URL_SUFFIX))
+    else {
+        return false;
+    };
+    reference == "main" || reference.strip_prefix('v').is_some_and(is_release_number)
+}
+
+/// The embedded configuration schema, exactly as `fireemu config schema` prints it.
+pub const CONFIG_SCHEMA_JSON: &str = include_str!("../../../spec/config/fireemu.schema.json");
 
 /// The Firebase project configuration composed by a canonical fireemu configuration.
 /// Its path is resolved by the CLI because that layer knows which file contained this JSON.
@@ -5485,12 +5664,10 @@ impl RuntimeConfig {
             }
         }
         if let Some(schema) = obj.get("$schema") {
-            if !matches!(
-                schema.as_str(),
-                Some(CANONICAL_SCHEMA_URL | LEGACY_SCHEMA_URL)
-            ) {
+            if !schema.as_str().is_some_and(is_accepted_schema_url) {
                 return Err(ConfigError(format!(
-                    "$schema must be {CANONICAL_SCHEMA_URL:?}"
+                    "$schema must be the schema location of a release such as {:?}",
+                    installed_schema_url()
                 )));
             }
         }
@@ -6245,6 +6422,14 @@ mod tests {
         }
     }
 
+    /// The row value the test expects for `key`: the given value, with secrets masked the way
+    /// `config show` masks them.
+    fn redacted_expectation(key: &str, value: &Value) -> Value {
+        let mut row = json!({"key": key, "value": value.clone()});
+        redact_config_row(&mut row);
+        row["value"].clone()
+    }
+
     #[test]
     #[allow(clippy::too_many_lines)]
     fn config_show_reports_each_explicit_runtime_value() {
@@ -6388,10 +6573,11 @@ mod tests {
         let without_file = config.config_show(&json!({}));
         for (key, expected) in &cases {
             let row = rows.iter().find(|row| row["key"] == *key).unwrap();
-            assert_eq!(row["value"], *expected, "{key}");
+            let expected = redacted_expectation(key, expected);
+            assert_eq!(row["value"], expected, "{key}");
             assert_eq!(row["source"], "explicit", "{key}");
             let row = without_file.iter().find(|row| row["key"] == *key).unwrap();
-            assert_eq!(row["value"], *expected, "runtime projection: {key}");
+            assert_eq!(row["value"], expected, "runtime projection: {key}");
             // A governed development default records its source when the file is read.
             let governed = ["auth.multiTenant.allowTenants", "auth.mfa.state"].contains(key);
             assert_eq!(
@@ -12988,5 +13174,425 @@ mod hosting_selection_tests {
         result.unwrap();
         assert!(!cfg.hosting_addr_explicit);
         assert!(!RuntimeConfig::default().hosting_addr_explicit);
+    }
+}
+
+#[cfg(test)]
+mod secret_redaction_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// One sentinel per secret field, built at run time so no source line holds a complete
+    /// token-shaped literal.
+    fn sentinel(name: &str) -> String {
+        format!("{}{}", "sentinel-", name)
+    }
+
+    fn planted_input() -> Value {
+        json!({
+            "schemaVersion": 1,
+            "pubsub": {"authentication": {"localBearerToken": sentinel("pubsub-bearer")}},
+            "auth": {
+                "apiKeys": [sentinel("api-key")],
+                "customTokenSigners": {"signer@demo-app.iam.gserviceaccount.com": {"keys": [{"kty": "RSA", "alg": "RS256", "use": "sig", "kid": sentinel("signer-key"), "n": "0lwNtQWMVy0QqgEvrBmoFqwky_dcMx8CgS-o2rTesEV7QbG4cvNigTcDV7b_u0twRkJdonkMPjbUs0b8NKe_0_UOZ5vE_kILFG4TtPdeZWub8xnqhETc7WifXhEfqcB8xFbRyIxU9V0d_epsuNnQ-Nd7NlnFsH-aaq6f1HKp55_BVNxudwmHwT49P6JhNDDh7FWyoYBBBFtQ0St8dky4MFQTd2swZP4pEA8xGp-q-1mxbn0g9gfbq5voYWtOaDW9a2lsC_S_d6DecsrNWn4YYJ7Qc5xcx4pI70a23zftkVBj_I-Eip2hcvNUEsZJA4LlR4BgDLsNWu3ZWQxe08fOew", "e": "AQAB"}]}},
+                "providers": {"oidc": [{
+                    "name": "oidc.fixture",
+                    "enabled": true,
+                    "clientId": "visible-client-id",
+                    "displayName": "Visible display name",
+                    "issuer": "https://issuer.test",
+                    "clientSecret": sentinel("oidc-secret")
+                }]}
+            },
+            "appCheck": {"enabled": true, "apps": [{
+                "projectId": "demo-app",
+                "projectNumber": "1234567890",
+                "appId": "1:1234567890:web:abc",
+                "debugTokenSha256": ["cd".repeat(32)]
+            }]}
+        })
+    }
+
+    fn row<'a>(rows: &'a [Value], key: &str) -> &'a Value {
+        rows.iter().find(|row| row["key"] == key).unwrap()
+    }
+
+    #[test]
+    fn config_show_redacts_every_planted_secret_and_keeps_public_fields() {
+        let input = planted_input();
+        let config = RuntimeConfig::from_json(&input).unwrap();
+        let rows = config.config_show(&input);
+        let text = serde_json::to_string(&rows).unwrap();
+        for name in ["pubsub-bearer", "api-key", "signer-key", "oidc-secret"] {
+            assert!(
+                !text.contains(&sentinel(name)),
+                "{name} leaked into config show"
+            );
+        }
+        assert!(
+            !text.contains(&"cd".repeat(32)),
+            "debug token digest leaked into config show"
+        );
+        assert_eq!(
+            row(&rows, "pubsub.authentication.localBearerToken")["value"],
+            "[redacted]"
+        );
+        assert_eq!(row(&rows, "auth.apiKeys")["value"], json!(["[redacted]"]));
+        assert_eq!(row(&rows, "auth.customTokenSigners")["value"], "[redacted]");
+        let oidc = &row(&rows, "auth.providers.oidc")["value"][0];
+        assert_eq!(oidc["clientSecret"], "[redacted]");
+        assert_eq!(oidc["clientId"], "visible-client-id");
+        assert_eq!(oidc["displayName"], "Visible display name");
+        assert_eq!(
+            row(&rows, "appCheck.apps")["value"][0]["debugTokenSha256"],
+            json!(["[redacted]"])
+        );
+        assert_eq!(
+            row(&rows, "appCheck.apps")["value"][0]["appId"],
+            "1:1234567890:web:abc"
+        );
+    }
+
+    #[test]
+    fn null_secret_values_stay_null() {
+        let mut row = json!({"key": "pubsub.authentication.localBearerToken", "value": null});
+        redact_config_row(&mut row);
+        assert!(row["value"].is_null());
+    }
+
+    /// Every key the schema can reach, as dotted paths: `properties` names, `items` (`[]`),
+    /// map values (`*`), `$ref` targets and the `anyOf`/`oneOf`/`allOf` alternatives.
+    fn schema_reachable_keys(root: &Value) -> Vec<String> {
+        fn walk(
+            node: &Value,
+            root: &Value,
+            path: &str,
+            refs: &mut Vec<String>,
+            out: &mut Vec<String>,
+        ) {
+            if let Some(target) = node.get("$ref").and_then(Value::as_str) {
+                if let Some(pointer) = target.strip_prefix('#') {
+                    // A reference cycle is cut at the first repeat, not followed forever.
+                    if !refs.iter().any(|seen| seen == target) {
+                        if let Some(resolved) = root.pointer(pointer) {
+                            refs.push(target.to_owned());
+                            walk(resolved, root, path, refs, out);
+                            refs.pop();
+                        }
+                    }
+                }
+            }
+            for combinator in ["anyOf", "oneOf", "allOf"] {
+                for alternative in node
+                    .get(combinator)
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    walk(alternative, root, path, refs, out);
+                }
+            }
+            if let Some(properties) = node.get("properties").and_then(Value::as_object) {
+                for (name, child) in properties {
+                    let child_path = if path.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{path}.{name}")
+                    };
+                    out.push(child_path.clone());
+                    walk(child, root, &child_path, refs, out);
+                }
+            }
+            if let Some(items) = node.get("items") {
+                let schemas: Vec<&Value> = match items {
+                    Value::Array(list) => list.iter().collect(),
+                    single => vec![single],
+                };
+                for item in schemas {
+                    walk(item, root, &format!("{path}[]"), refs, out);
+                }
+            }
+            if let Some(values) = node.get("additionalProperties").filter(|v| v.is_object()) {
+                walk(values, root, &format!("{path}.*"), refs, out);
+            }
+        }
+        let mut out = Vec::new();
+        walk(root, root, "", &mut Vec::new(), &mut out);
+        out
+    }
+
+    /// The reachable schema paths whose names look secret-like and are not covered: a path is
+    /// covered when it is a listed secret key, sits under one (`key.`, `key[]`, `key.*`), or is
+    /// a reasoned not-secret key.
+    fn unlisted_secret_like(names: &[String]) -> Vec<String> {
+        let pattern = [
+            "token",
+            "secret",
+            "key",
+            "password",
+            "credential",
+            "private",
+        ];
+        names
+            .iter()
+            .filter(|name| {
+                let lower = name.to_ascii_lowercase();
+                pattern.iter().any(|p| lower.contains(p))
+            })
+            .filter(|name| {
+                let covered_by_secret = SECRET_CONFIG_KEYS.iter().any(|key| {
+                    name.as_str() == *key
+                        || [".", "[]", ".*"]
+                            .iter()
+                            .any(|suffix| name.starts_with(&format!("{key}{suffix}")))
+                });
+                let reasoned = NOT_SECRET_CONFIG_KEYS.iter().any(|(key, reason)| {
+                    !reason.is_empty()
+                        && [".", "[]", ".*"]
+                            .iter()
+                            .any(|suffix| name.starts_with(&format!("{key}{suffix}")))
+                        || name.as_str() == *key && !reason.is_empty()
+                });
+                !(covered_by_secret || reasoned)
+            })
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn every_secret_like_schema_path_is_listed() {
+        let root: Value =
+            serde_json::from_str(include_str!("../../../spec/config/fireemu.schema.json"))
+                .expect("schema");
+        let names = schema_reachable_keys(&root);
+        assert!(
+            names.len() > 50,
+            "the walk reached only {} paths",
+            names.len()
+        );
+        let unlisted = unlisted_secret_like(&names);
+        assert!(
+            unlisted.is_empty(),
+            "secret-like schema paths not covered (add to SECRET_CONFIG_KEYS or NOT_SECRET_CONFIG_KEYS with a reason): {unlisted:?}"
+        );
+    }
+
+    #[test]
+    fn the_schema_guard_fails_for_secret_like_leaves_under_items_refs_and_maps() {
+        let root = json!({
+            "properties": {
+                "list": {"type": "array", "items": {"properties": {"apiToken": {"type": "string"}}}},
+                "linked": {"$ref": "#/$defs/creds"},
+                "map": {"type": "object", "additionalProperties": {"properties": {"clientSecret": {"type": "string"}}}}
+            },
+            "$defs": {"creds": {"properties": {"privateKey": {"type": "string"}}}}
+        });
+        let unlisted = unlisted_secret_like(&schema_reachable_keys(&root));
+        for expected in ["list[].apiToken", "linked.privateKey", "map.*.clientSecret"] {
+            assert!(
+                unlisted.iter().any(|path| path == expected),
+                "{expected} not reported: {unlisted:?}"
+            );
+        }
+        // A covered path under a listed secret key is not reported.
+        let covered = json!({"properties": {"auth": {"properties": {"apiKeys": {"items": {"type": "string"}}}}}});
+        assert!(unlisted_secret_like(&schema_reachable_keys(&covered)).is_empty());
+    }
+
+    #[test]
+    fn every_secret_list_key_is_a_real_config_key() {
+        let schema: Vec<String> = config_schema().into_iter().map(|(key, _)| key).collect();
+        for key in SECRET_CONFIG_KEYS {
+            assert!(
+                schema.iter().any(|s| s == key)
+                    || *key == "auth.providers.oidc"
+                    || *key == "appCheck.apps",
+                "{key} is not a schema key"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod schema_url_tests {
+    use super::{
+        installed_schema_url, is_accepted_schema_url, schema_url_for_build, schema_url_for_version,
+        CONFIG_SCHEMA_JSON,
+    };
+    use proptest::prelude::*;
+
+    /// The pattern the embedded schema states for `$schema`, compiled once.
+    fn schema_pattern() -> regex::Regex {
+        let schema: serde_json::Value = serde_json::from_str(CONFIG_SCHEMA_JSON).unwrap();
+        let pattern = schema["properties"]["$schema"]["pattern"]
+            .as_str()
+            .expect("the $schema property carries a pattern");
+        regex::Regex::new(pattern).unwrap()
+    }
+
+    #[test]
+    fn the_embedded_schema_is_the_file_in_the_repository() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../spec/config/fireemu.schema.json");
+        assert_eq!(std::fs::read_to_string(path).unwrap(), CONFIG_SCHEMA_JSON);
+    }
+
+    #[test]
+    fn a_release_version_has_a_tagged_location_and_other_versions_use_main() {
+        let tagged = |version: &str| {
+            format!(
+                "https://raw.githubusercontent.com/fireemu/fireemu/v{version}/spec/config/fireemu.schema.json"
+            )
+        };
+        for version in ["0.0.0", "0.49.0", "1.2.3", "10.20.30"] {
+            assert_eq!(schema_url_for_version(version), tagged(version));
+        }
+        let main = "https://raw.githubusercontent.com/fireemu/fireemu/main/spec/config/fireemu.schema.json";
+        for version in [
+            "",
+            "1",
+            "1.2",
+            "1.2.3.4",
+            "1.2.3-rc.1",
+            "1.2.3+build",
+            "01.2.3",
+            "1.02.3",
+            "1.2.03",
+            "v1.2.3",
+            "a.b.c",
+            "1..3",
+            " 1.2.3",
+            "1.2.3 ",
+            "-1.2.3",
+            "+1.2.3",
+        ] {
+            assert_eq!(schema_url_for_version(version), main, "{version:?}");
+        }
+    }
+
+    #[test]
+    fn the_binary_pins_a_location_it_accepts() {
+        assert!(is_accepted_schema_url(&installed_schema_url()));
+        assert_eq!(
+            installed_schema_url(),
+            schema_url_for_build(
+                env!("CARGO_PKG_VERSION"),
+                option_env!("FIREEMU_RELEASE_BUILD")
+            )
+        );
+    }
+
+    #[test]
+    fn only_a_release_build_pins_its_release_tag() {
+        let main = "https://raw.githubusercontent.com/fireemu/fireemu/main/spec/config/fireemu.schema.json";
+        let tag = "https://raw.githubusercontent.com/fireemu/fireemu/v0.49.0/spec/config/fireemu.schema.json";
+        assert_eq!(schema_url_for_build("0.49.0", Some("1")), tag);
+        // A build from source reports the last release's version but embeds main's schema.
+        assert_eq!(schema_url_for_build("0.49.0", None), main);
+        for marker in ["", "0", "true", "yes", "1 ", " 1", "01"] {
+            assert_eq!(
+                schema_url_for_build("0.49.0", Some(marker)),
+                main,
+                "{marker:?}"
+            );
+        }
+        // A release build with a version that has no tag cannot name one.
+        assert_eq!(schema_url_for_build("0.50.0-rc.1", Some("1")), main);
+    }
+
+    #[test]
+    fn near_misses_of_the_accepted_locations_are_refused() {
+        let good = "https://raw.githubusercontent.com/fireemu/fireemu/v1.2.3/spec/config/fireemu.schema.json";
+        assert!(is_accepted_schema_url(good));
+        for bad in [
+            "",
+            "https://raw.githubusercontent.com/fireemu/fireemu/v1.2.3/spec/config/fireemu.schema.jsonx",
+            "https://raw.githubusercontent.com/fireemu/fireemu/v1.2.3/spec/config/fireemu.schema.json/",
+            "http://raw.githubusercontent.com/fireemu/fireemu/v1.2.3/spec/config/fireemu.schema.json",
+            "https://raw.githubusercontent.com/fireemu/fireemu/V1.2.3/spec/config/fireemu.schema.json",
+            "https://raw.githubusercontent.com/fireemu/fireemu/1.2.3/spec/config/fireemu.schema.json",
+            "https://raw.githubusercontent.com/fireemu/fireemu/v1.2/spec/config/fireemu.schema.json",
+            "https://raw.githubusercontent.com/fireemu/fireemu/v1.2.3-rc.1/spec/config/fireemu.schema.json",
+            "https://raw.githubusercontent.com/fireemu/fireemu/v/spec/config/fireemu.schema.json",
+            "https://raw.githubusercontent.com/fireemu/fireemu/Main/spec/config/fireemu.schema.json",
+            "https://raw.githubusercontent.com/fireemu/fireemu/mainv1.2.3/spec/config/fireemu.schema.json",
+            "https://raw.githubusercontent.com/other/fireemu/v1.2.3/spec/config/fireemu.schema.json",
+            "https://raw.githubusercontent.com/fireemu/other/v1.2.3/spec/config/fireemu.schema.json",
+            "https://raw.githubusercontent.com/fireemu/fireemu/v1.2.3/spec/config/fireemu.schema.json\n",
+            "https://fireemu.dev/spec/config/fireemu.schema.json/",
+            "https://fireemu.dev/spec/config/other.schema.json",
+        ] {
+            assert!(!is_accepted_schema_url(bad), "{bad:?}");
+        }
+        assert!(is_accepted_schema_url(
+            "https://fireemu.dev/spec/config/fireemu.schema.json"
+        ));
+    }
+
+    /// A string close to the accepted locations: pieces of them, glued and mutated.
+    fn near_location() -> impl Strategy<Value = String> {
+        let reference = prop_oneof![
+            Just("main".to_owned()),
+            Just("v1.2.3".to_owned()),
+            Just("v0.0.0".to_owned()),
+            Just("v01.2.3".to_owned()),
+            Just("v1.2".to_owned()),
+            Just("v1.2.3.4".to_owned()),
+            Just("v1.2.3-rc.1".to_owned()),
+            Just("1.2.3".to_owned()),
+            Just("Main".to_owned()),
+            Just("develop".to_owned()),
+            "[v0-9.a-z-]{0,12}",
+        ];
+        let prefix = prop_oneof![
+            Just("https://raw.githubusercontent.com/fireemu/fireemu/"),
+            Just("http://raw.githubusercontent.com/fireemu/fireemu/"),
+            Just("https://raw.githubusercontent.com/other/fireemu/"),
+            Just("https://raw.githubusercontent.com/fireemu/fireemu//"),
+        ];
+        let suffix = prop_oneof![
+            Just("/spec/config/fireemu.schema.json"),
+            Just("/spec/config/fireemu.schema.json/"),
+            Just("/spec/config/fireemu.schema.json "),
+            Just("/spec/config/fireemu.schema.jsonx"),
+            Just("/spec/config/other.schema.json"),
+            Just("/spec/fireemu.schema.json"),
+        ];
+        prop_oneof![
+            (prefix, reference, suffix).prop_map(|(p, r, s)| format!("{p}{r}{s}")),
+            Just("https://fireemu.dev/spec/config/fireemu.schema.json".to_owned()),
+            "\\PC{0,60}",
+        ]
+    }
+
+    proptest! {
+        /// The Rust predicate and the `$schema` pattern in the embedded schema state the same
+        /// set, so an editor and the loader accept the same locations.
+        #[test]
+        fn the_predicate_and_the_schema_pattern_agree(url in near_location()) {
+            prop_assert_eq!(is_accepted_schema_url(&url), schema_pattern().is_match(&url), "{:?}", url);
+        }
+
+        /// A build that is not marked as a release build never names a tag, whatever its version.
+        #[test]
+        fn an_unmarked_build_always_names_main(version in "\\PC{0,20}", marker in proptest::option::of("\\PC{0,3}")) {
+            prop_assume!(marker.as_deref() != Some("1"));
+            let url = schema_url_for_build(&version, marker.as_deref());
+            prop_assert!(url.contains("/main/"), "{:?}", url);
+            prop_assert!(is_accepted_schema_url(&url));
+        }
+
+        /// Whatever the running version looks like, the location written into a generated
+        /// file is one the loader and the schema accept.
+        #[test]
+        fn a_generated_location_is_always_accepted(version in prop_oneof![
+            "[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}",
+            "[0-9a-z.+-]{0,16}",
+            "\\PC{0,20}",
+        ]) {
+            let url = schema_url_for_version(&version);
+            prop_assert!(is_accepted_schema_url(&url), "{:?}", url);
+            prop_assert!(schema_pattern().is_match(&url), "{:?}", url);
+        }
     }
 }

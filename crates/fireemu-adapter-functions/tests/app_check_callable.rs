@@ -427,6 +427,45 @@ impl Harness {
             .expect("a well-formed response")
     }
 
+    /// Like [`Harness::request`] with header lines given as raw bytes (a value that is not text).
+    async fn request_raw_headers(
+        &self,
+        method: &str,
+        function: &str,
+        raw_headers: &[u8],
+    ) -> fireemu_adapter_functions::http::ProxiedResponse {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let mut request =
+            format!("{method} /{PROJECT}/us-central1/{function} HTTP/1.1\r\n").into_bytes();
+        request.extend_from_slice(raw_headers);
+        let body = br#"{"data":{"a":2,"b":3}}"#.as_slice();
+        request.extend_from_slice(
+            format!(
+                "host: {}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                self.addr,
+                body.len()
+            )
+            .as_bytes(),
+        );
+        request.extend_from_slice(body);
+        let mut stream = tokio::net::TcpStream::connect(self.addr)
+            .await
+            .expect("the functions port accepts");
+        stream
+            .write_all(&request)
+            .await
+            .expect("the request is written");
+        stream.flush().await.expect("flush");
+        let mut raw = Vec::new();
+        stream
+            .read_to_end(&mut raw)
+            .await
+            .expect("the response is read");
+        fireemu_adapter_functions::http::parse_response(&raw, method)
+            .expect("a well-formed response")
+    }
+
     /// A POST whose head is refused at once (two `origin` fields) and whose body arrives only after
     /// the server has answered: `delay` after the head, `body_len` bytes of it. A write that fails
     /// because the server already closed is not an error here; what is under test is whether the
@@ -2073,18 +2112,20 @@ async fn strict_callable_ingress_refuses_invalid_bearer_before_invocation() {
     )
     .await;
     let (_, valid) = h.user("strict@example.com");
-    let expected = "\n<html><head>\n<meta http-equiv=\"content-type\" content=\"text/html;charset=utf-8\">\n<title>401 Unauthorized</title>\n</head>\n<body text=#000000 bgcolor=#ffffff>\n<h1>Error: Unauthorized</h1>\n<h2>Your client does not have permission to the requested URL <code>/</code>.</h2>\n<h2></h2>\n</body></html>\n";
-    for bearer in ["Bearer malformed".to_owned(), format!("{valid}x")] {
-        let response = h
-            .request("POST", "add", &[("authorization", &bearer)])
-            .await;
-        assert_eq!(response.status, 401);
-        assert_eq!(
-            response_header(&response, "content-type"),
-            Some("text/html; charset=UTF-8")
-        );
-        assert_eq!(response.body, expected.as_bytes());
-    }
+    // An ID token this project issued, with a signature the daemon cannot verify: the wrapper's
+    // own envelope, as production answered the re-recordings of 2026-11-11 (invalid-signature and
+    // expired-id-token; the front end's page of 2026-09-27 is superseded).
+    assert_wrapper_refusal(
+        &h.request("POST", "add", &[("authorization", &format!("{valid}x"))])
+            .await,
+        "invalid-signature-project-token",
+    );
+    // A Bearer that is no such token reaches the wrapper in production, which refuses it itself.
+    assert_wrapper_refusal(
+        &h.request("POST", "add", &[("authorization", "Bearer malformed")])
+            .await,
+        "malformed-bearer",
+    );
     assert_eq!(h.request("POST", "add", &[]).await.status, 200);
     assert_eq!(
         h.request("POST", "add", &[("authorization", &valid)])
@@ -2107,11 +2148,7 @@ async fn strict_callable_ingress_checks_bearer_when_app_check_is_not_selected() 
     let refused = h
         .request("POST", "add", &[("authorization", "Bearer malformed")])
         .await;
-    assert_eq!(refused.status, 401);
-    assert_eq!(
-        response_header(&refused, "content-type"),
-        Some("text/html; charset=UTF-8")
-    );
+    assert_wrapper_refusal(&refused, "malformed-bearer");
     assert_eq!(h.request("POST", "add", &[]).await.status, 200);
     assert_eq!(
         h.request("POST", "add", &[("authorization", &valid)])
@@ -2142,26 +2179,27 @@ async fn a_callable_served_as_an_onrequest_function_passes_the_strict_bearer_che
     };
     let h = marked(Strict).await;
     let (_, valid) = h.user("onrequest@example.com");
-    let refused = h
-        .request("POST", "echo", &[("authorization", "Bearer malformed")])
-        .await;
-    assert_eq!(refused.status, 401);
-    assert_eq!(
-        response_header(&refused, "content-type"),
-        Some("text/html; charset=UTF-8")
+    assert_wrapper_refusal(
+        &h.request("POST", "echo", &[("authorization", "Bearer malformed")])
+            .await,
+        "malformed-bearer",
     );
-    assert_eq!(
-        h.request("POST", "echo", &[("authorization", &format!("{valid}x"))])
-            .await
-            .status,
-        401
+    // A token this project issued that the daemon cannot verify: the wrapper's envelope, as for a
+    // callable.
+    assert_wrapper_refusal(
+        &h.request("POST", "echo", &[("authorization", &format!("{valid}x"))])
+            .await,
+        "invalid-signature-project-token",
     );
-    for authorization in [
-        Some(valid.as_str()),
-        Some("Basic YQ=="),
-        Some("Bearer "),
-        None,
-    ] {
+    // Another scheme and a scheme without a token are refused by the wrapper in production too.
+    for (case, authorization) in [("basic-scheme", "Basic YQ=="), ("empty-token", "Bearer ")] {
+        assert_wrapper_refusal(
+            &h.request("POST", "echo", &[("authorization", authorization)])
+                .await,
+            case,
+        );
+    }
+    for authorization in [Some(valid.as_str()), None] {
         let headers: Vec<(&str, &str)> = authorization
             .map(|value| vec![("authorization", value)])
             .unwrap_or_default();
@@ -2207,6 +2245,237 @@ async fn a_callable_served_as_an_onrequest_function_passes_the_strict_bearer_che
     h.stop().await;
 }
 
+/// The credential shapes of the FUNCTIONS-HTTP-CALLABLE-INGRESS corpus that production refuses with
+/// the callable wrapper's own envelope, by case name. Production answered every one of them the same
+/// way, on both passes, for a real `onCall` function (run 2) and for a callable's code deployed as a
+/// plain `onRequest` function (run 1).
+const INGRESS_REFUSED_SHAPES: [(&str, &str); 5] = [
+    ("malformed-bearer", "Bearer malformed"),
+    ("lowercase-scheme", "bearer malformed"),
+    ("bare-scheme", "Bearer"),
+    ("basic-scheme", "Basic dXNlcjpwYXNz"),
+    (
+        "unsigned-jwt",
+        "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ4In0.c2ln",
+    ),
+];
+
+/// The recorded wrapper refusal: status 401, `application/json; charset=utf-8`, `vary: Origin`
+/// (sent with or without an Origin request header), and these 66 bytes (sha256 d6d8a75a9386...).
+const RECORDED_WRAPPER_REFUSAL_BODY: &str =
+    r#"{"error":{"message":"Unauthenticated","status":"UNAUTHENTICATED"}}"#;
+
+fn assert_wrapper_refusal(response: &fireemu_adapter_functions::http::ProxiedResponse, case: &str) {
+    assert_eq!(response.status, 401, "{case}: status");
+    assert_eq!(
+        response_header(response, "content-type"),
+        Some("application/json; charset=utf-8"),
+        "{case}: content-type"
+    );
+    assert_eq!(
+        response_header(response, "vary"),
+        Some("Origin"),
+        "{case}: vary"
+    );
+    assert_eq!(
+        response.body,
+        RECORDED_WRAPPER_REFUSAL_BODY.as_bytes(),
+        "{case}: body bytes"
+    );
+    assert_eq!(response.body.len(), 66, "{case}: recorded length");
+}
+
+/// FUNCTIONS-HTTP-CALLABLE-INGRESS, run 1: a callable's code served as `onRequest` (the daemon marks
+/// the entry when a configured manifest disagrees with the code). Production hands every shape to the
+/// function, so the strict daemon, which refuses before the runner, answers what the wrapper answers.
+#[tokio::test]
+async fn strict_callable_served_as_onrequest_answers_the_recorded_wrapper_refusal() {
+    use fireemu_adapter_functions::http::FunctionsHttpProfile::Strict;
+    let h = start_with_env_marking(
+        false,
+        vec![("FIREEMU_FAKE_CONSUME".to_owned(), "disabled".to_owned())],
+        Strict,
+        false,
+        &["echo"],
+    )
+    .await;
+    for (case, authorization) in INGRESS_REFUSED_SHAPES {
+        let response = h
+            .request("POST", "echo", &[("authorization", authorization)])
+            .await;
+        assert_wrapper_refusal(&response, case);
+    }
+    // The control case of the recording: no Authorization reaches the function.
+    assert_eq!(h.request("POST", "echo", &[]).await.status, 200);
+    h.stop().await;
+}
+
+/// FUNCTIONS-HTTP-CALLABLE-INGRESS, run 2: the same shapes sent to a real callable.
+#[tokio::test]
+async fn strict_real_callable_answers_the_recorded_wrapper_refusal() {
+    use fireemu_adapter_functions::http::FunctionsHttpProfile::Strict;
+    for trusted in [true, false] {
+        let h = start_with_consume_profile(trusted, "disabled", Strict).await;
+        for (case, authorization) in INGRESS_REFUSED_SHAPES {
+            let response = h
+                .request("POST", "add", &[("authorization", authorization)])
+                .await;
+            assert_wrapper_refusal(&response, case);
+        }
+        assert_eq!(h.request("POST", "add", &[]).await.status, 200);
+        h.stop().await;
+    }
+}
+
+/// What the refusal looks like on the other routes and for the credentials the corpus does not send.
+#[tokio::test]
+async fn strict_callable_refusals_follow_the_route_and_the_credential() {
+    use fireemu_adapter_functions::http::FunctionsHttpProfile::Strict;
+    let h = start_with_consume_profile(false, "disabled", Strict).await;
+    let (_, valid) = h.user("routes@example.com");
+    // A v2 streaming request gets the wrapper's envelope as one SSE record, whatever refused it.
+    let stream = h
+        .request(
+            "POST",
+            "guardedV2",
+            &[
+                ("accept", "text/event-stream"),
+                ("authorization", "Bearer malformed"),
+            ],
+        )
+        .await;
+    assert_eq!(stream.status, 200);
+    assert_eq!(
+        stream.body,
+        format!("data: {RECORDED_WRAPPER_REFUSAL_BODY}\n\n").as_bytes()
+    );
+    // The emulator's admin credential is not a user of the project: the wrapper refuses it.
+    assert_wrapper_refusal(
+        &h.request("POST", "add", &[("authorization", "Bearer owner")])
+            .await,
+        "owner",
+    );
+    // Two Authorization fields are never accepted; they get the front end's page (no recording sends the
+    // wrapper two: this answer is kept from before the re-recordings and is unrecorded).
+    let two = h
+        .request(
+            "POST",
+            "add",
+            &[("authorization", &valid), ("Authorization", &valid)],
+        )
+        .await;
+    assert_eq!(two.status, 401);
+    assert_eq!(
+        response_header(&two, "content-type"),
+        Some("text/html; charset=UTF-8")
+    );
+    // A preflight carries no credential check, as for any callable.
+    assert_eq!(
+        h.request("OPTIONS", "add", &[("authorization", "Bearer malformed")])
+            .await
+            .status,
+        200
+    );
+    h.stop().await;
+}
+
+/// The refusal never changes for the emulator profile, which the official emulator serves the same
+/// way: the request reaches the function.
+#[tokio::test]
+async fn the_emulator_profile_still_hands_every_recorded_shape_to_the_function() {
+    use fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator;
+    let h = start_with_consume_profile(false, "disabled", Emulator).await;
+    for (case, authorization) in INGRESS_REFUSED_SHAPES {
+        let response = h
+            .request("POST", "add", &[("authorization", authorization)])
+            .await;
+        assert_eq!(response.status, 200, "{case}");
+    }
+    h.stop().await;
+}
+
+const VERIFIED_CREDENTIAL_FIELD: &str = "x-fireemu-credential-verified";
+
+/// The values of the daemon's verified-credential field that a request to `echo` reaches the runner
+/// with.
+async fn marker_sent(h: &Harness, headers: &[(&str, &str)]) -> Vec<String> {
+    let response = h.request("POST", "echo", headers).await;
+    assert_eq!(response.status, 200, "{headers:?}");
+    let body: Value = serde_json::from_slice(&response.body).expect("echo body");
+    echoed(&body, VERIFIED_CREDENTIAL_FIELD)
+}
+
+/// A callable's wrapper nested in an `onRequest` function cannot be seen by discovery, so the strict
+/// daemon tells the runner whether the one credential of a request to a non-callable HTTP endpoint is
+/// a Bearer of a user of the project; the runner refuses the rest where a callable wrapper reads it
+/// (tools/runner-node/nested-callable.mjs).
+#[tokio::test]
+async fn strict_tells_the_runner_which_credential_of_a_plain_http_function_it_verified() {
+    use fireemu_adapter_functions::http::FunctionsHttpProfile::{Emulator, Strict};
+    const FIELD: &str = VERIFIED_CREDENTIAL_FIELD;
+    let h = start_with_consume_profile(false, "disabled", Strict).await;
+    let (_, valid) = h.user("nested@example.com");
+    assert_eq!(marker_sent(&h, &[("authorization", &valid)]).await, ["1"]);
+    // Anything the daemon cannot verify carries no marker, and the request is still served: a plain
+    // onRequest function owns its own credential checks.
+    for authorization in [
+        "Bearer malformed",
+        "bearer malformed",
+        "Bearer",
+        "Basic YQ==",
+        &format!("{valid}x"),
+        "Bearer owner",
+    ] {
+        assert!(
+            marker_sent(&h, &[("authorization", authorization)])
+                .await
+                .is_empty(),
+            "{authorization}"
+        );
+    }
+    assert!(marker_sent(&h, &[]).await.is_empty());
+    // A caller cannot set the marker, in any spelling, with or without a credential.
+    assert!(marker_sent(&h, &[(FIELD, "1")]).await.is_empty());
+    assert!(marker_sent(
+        &h,
+        &[
+            ("X-Fireemu-Credential-Verified", "1"),
+            ("authorization", "Bearer malformed")
+        ]
+    )
+    .await
+    .is_empty());
+    assert_eq!(
+        marker_sent(&h, &[(FIELD, "0"), ("authorization", &valid)]).await,
+        ["1"],
+        "only the daemon's own field reaches the runner"
+    );
+    // Two credentials are never verified, whatever they are.
+    assert!(
+        marker_sent(&h, &[("authorization", &valid), ("Authorization", &valid)])
+            .await
+            .is_empty()
+    );
+    h.stop().await;
+
+    // A real callable's credential is verified or refused before the runner, so the mark is not sent;
+    // and the emulator profile adds nothing and still strips a caller's copy.
+    let h = start_with_consume_profile(false, "disabled", Strict).await;
+    let (_, valid) = h.user("callable@example.com");
+    let response = h.request("POST", "add", &[("authorization", &valid)]).await;
+    let body: Value = serde_json::from_slice(&response.body).expect("add body");
+    assert!(echoed(&body, FIELD).is_empty());
+    h.stop().await;
+    let h = start_with_consume_profile(false, "disabled", Emulator).await;
+    let (_, valid) = h.user("emulator@example.com");
+    for headers in [vec![("authorization", valid.as_str())], vec![(FIELD, "1")]] {
+        let response = h.request("POST", "echo", &headers).await;
+        let body: Value = serde_json::from_slice(&response.body).expect("echo body");
+        assert!(echoed(&body, FIELD).is_empty(), "{headers:?}");
+    }
+    h.stop().await;
+}
+
 #[tokio::test]
 async fn default_functions_http_entry_serves_requests_with_the_emulator_profile() {
     let h = start_with_serve_entry(
@@ -2231,18 +2500,18 @@ async fn default_functions_http_entry_serves_requests_with_the_emulator_profile(
 }
 
 #[tokio::test]
-async fn strict_callable_bearer_refusal_leaves_other_schemes_and_empty_tokens_to_the_handler() {
+async fn strict_callable_answers_the_wrapper_refusal_for_other_schemes_and_empty_tokens() {
     let h = start_with_consume_profile(
         false,
         "disabled",
         fireemu_adapter_functions::http::FunctionsHttpProfile::Strict,
     )
     .await;
-    for authorization in ["Basic YQ==", "Bearer "] {
+    for (case, authorization) in [("basic-scheme", "Basic YQ=="), ("empty-token", "Bearer ")] {
         let response = h
             .request("POST", "add", &[("authorization", authorization)])
             .await;
-        assert_eq!(response.status, 200, "{authorization}");
+        assert_wrapper_refusal(&response, case);
     }
     h.stop().await;
 }
@@ -2957,5 +3226,103 @@ async fn the_functions_and_support_listeners_refuse_a_rebound_host() {
     }
     eventarc_server.abort();
     tasks_server.abort();
+    h.stop().await;
+}
+
+/// An empty `Authorization` value is no credential: the SDK the wrapper runs (firebase-functions
+/// `checkAuthToken`) reads it as missing and runs the handler unauthenticated. No recording covers
+/// the shape; strict follows the installed SDK (inferred, listed as a limitation). A value that is not
+/// text is a credential that cannot be verified and is refused with the envelope.
+#[tokio::test]
+async fn strict_follows_the_sdk_for_an_empty_authorization_value() {
+    use fireemu_adapter_functions::http::FunctionsHttpProfile::Strict;
+    for enforce_app_check in [false, true] {
+        let h = start_with_consume_profile(enforce_app_check, "disabled", Strict).await;
+        // A real callable: the handler runs, and it sees no authenticated identity.
+        for headers in [
+            vec![("authorization", "")],
+            vec![("Authorization", ""), ("x-near-miss", "1")],
+        ] {
+            let response = h.request("POST", "add", &headers).await;
+            assert_eq!(response.status, 200, "{enforce_app_check}: {headers:?}");
+            let body: Value = serde_json::from_slice(&response.body).expect("add body");
+            assert!(
+                echoed(&body, "authorization").iter().all(String::is_empty),
+                "{enforce_app_check}: no credential reaches the handler: {body}"
+            );
+        }
+        // Near misses stay refused with the 66-byte envelope: a scheme without a token, and a value
+        // that is not text. (Whitespace alone is trimmed to the empty value by the HTTP parser; two
+        // fields, one of them empty, are the front end's page.)
+        for (case, authorization) in [
+            ("one-character", "A"),
+            ("scheme-only", "Bearer"),
+            ("empty-token", "Bearer "),
+        ] {
+            assert_wrapper_refusal(
+                &h.request("POST", "add", &[("authorization", authorization)])
+                    .await,
+                case,
+            );
+        }
+        for (case, raw) in [
+            ("non-utf8", &b"authorization: \xff\r\n"[..]),
+            ("non-utf8-bearer", b"authorization: Bearer \xfe\xfe\r\n"),
+            ("latin1", b"authorization: caf\xe9\r\n"),
+        ] {
+            assert_wrapper_refusal(&h.request_raw_headers("POST", "add", raw).await, case);
+        }
+        let two = h
+            .request_raw_headers("POST", "add", b"authorization: \r\nauthorization: \xff\r\n")
+            .await;
+        assert_eq!(two.status, 401);
+        assert_eq!(
+            response_header(&two, "content-type"),
+            Some("text/html; charset=UTF-8")
+        );
+        h.stop().await;
+    }
+
+    // A callable's code served as onRequest runs the same wrapper: the same answers.
+    let h = start_with_env_marking(
+        false,
+        vec![("FIREEMU_FAKE_CONSUME".to_owned(), "disabled".to_owned())],
+        Strict,
+        false,
+        &["echo"],
+    )
+    .await;
+    assert_eq!(
+        h.request("POST", "echo", &[("authorization", "")])
+            .await
+            .status,
+        200
+    );
+    assert_wrapper_refusal(
+        &h.request_raw_headers("POST", "echo", b"authorization: \xff\r\n")
+            .await,
+        "non-utf8",
+    );
+    h.stop().await;
+
+    // The nested path (a plain onRequest function that nests the wrapper): the empty value is not a
+    // verified credential, carries no marker, and reaches the function as it came, where the
+    // wrapper reads it as missing; a value that is not text is dropped from what the runner sees.
+    let h = start_with_consume_profile(false, "disabled", Strict).await;
+    let response = h.request("POST", "echo", &[("authorization", "")]).await;
+    assert_eq!(response.status, 200);
+    let body: Value = serde_json::from_slice(&response.body).expect("echo body");
+    assert!(echoed(&body, VERIFIED_CREDENTIAL_FIELD).is_empty());
+    assert!(echoed(&body, "authorization").iter().all(String::is_empty));
+    let response = h
+        .request_raw_headers("POST", "echo", b"authorization: \xff\r\n")
+        .await;
+    assert_eq!(response.status, 200);
+    let body: Value = serde_json::from_slice(&response.body).expect("echo body");
+    assert!(echoed(&body, VERIFIED_CREDENTIAL_FIELD).is_empty());
+    assert!(
+        echoed(&body, "authorization").is_empty(),
+        "a value that is not text never reaches the runner: {body}"
+    );
     h.stop().await;
 }

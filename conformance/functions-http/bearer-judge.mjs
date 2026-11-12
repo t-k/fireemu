@@ -6,7 +6,8 @@
 // Recorded answer (FUNCTIONS-HTTP-BEARER-20261110-01, conformance/functions-http-bearer-production.json):
 // `different`. Production passed the malformed Bearer to the public onRequest function, which answered
 // its 200 echo, byte-equal to the control. The provisional page is not production's answer for a real
-// onRequest function; it stays fireemu strict's answer only for a callable's code served as onRequest.
+// onRequest function. FUNCTIONS-HTTP-CALLABLE-INGRESS (2026-11-11, callable-ingress/) then recorded what
+// a callable's code served as onRequest answers: the callable wrapper's own 401 envelope, not the page.
 //
 //   same-as-provisional  status, content-type, byte count and SHA-256 of the body equal the stage 3
 //                        recorded 401 page (functions-http/callable/auth-refusal#malformed-bearer)

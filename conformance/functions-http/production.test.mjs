@@ -1302,17 +1302,13 @@ test("a whole program whose upload cannot be deleted leaves the responsibility o
 // ---- the REST control and the deploy child, the parts the fakes above stand in for ----
 
 async function withStubbedFetch(handler, body) {
-  const original = globalThis.fetch;
+  // The clients take their transport as a parameter (`send`); nothing replaces the global fetch.
   const seen = [];
-  globalThis.fetch = async (url, init) => {
+  const send = async (url, init) => {
     seen.push({ url: String(url), method: init?.method });
     return handler(String(url), init);
   };
-  try {
-    return await body(seen);
-  } finally {
-    globalThis.fetch = original;
-  }
+  return body(seen, send);
 }
 
 test("the REST control reaches Cloud Storage, passes any status when asked and reports bytes", async () => {
@@ -1322,9 +1318,9 @@ test("the REST control reaches Cloud Storage, passes any status when asked and r
     url.startsWith("https://oauth2.googleapis.com/")
       ? new Response(JSON.stringify({ access_token: "t", expires_in: 3600 }))
       : new Response('{"error":{"code":412}}', { status: 412 });
-  await withStubbedFetch(handler, async (seen) => {
+  await withStubbedFetch(handler, async (seen, send) => {
     const budget = createBudget();
-    const control = production.createControl(adc, budget);
+    const control = production.createControl(adc, budget, { send });
     const reply = await control(
       "DELETE",
       "https://storage.googleapis.com/storage/v1/b/b/o/x?ifGenerationMatch=1",
@@ -1489,10 +1485,10 @@ test("a token refresh never costs the last upload request its place (S4)", async
     url.startsWith("https://oauth2.googleapis.com/")
       ? new Response(JSON.stringify({ access_token: "t", expires_in: 3600 }))
       : new Response("{}", { status: 200 });
-  await withStubbedFetch(handler, async () => {
+  await withStubbedFetch(handler, async (_seen, send) => {
     const budget = createBudget();
     for (let n = 0; n < BOUNDS.upload - 1; n += 1) budget.take("upload");
-    const control = production.createControl(adc, budget);
+    const control = production.createControl(adc, budget, { send });
     const reply = await control(
       "GET",
       "https://storage.googleapis.com/storage/v1/b/b/o/x",
@@ -1513,8 +1509,8 @@ test("the REST control counts response bytes, not characters", async () => {
     url.startsWith("https://oauth2.googleapis.com/")
       ? new Response(JSON.stringify({ access_token: "t", expires_in: 3600 }))
       : new Response('{"e":"é"}', { status: 200 });
-  await withStubbedFetch(handler, async () => {
-    const control = production.createControl(adc, createBudget());
+  await withStubbedFetch(handler, async (_seen, send) => {
+    const control = production.createControl(adc, createBudget(), { send });
     const reply = await control(
       "GET",
       "https://storage.googleapis.com/storage/v1/b/b/o/x",
@@ -1557,9 +1553,17 @@ test("the signUp answer is bounded in bytes while it is read (R2-S1)", async () 
   try {
     await withStubbedFetch(
       () => new Response(wide, { status: 200 }),
-      async () => {
+      async (_seen, send) => {
         await assert.rejects(
-          () => production.createUser("k".repeat(20), createBudget(), runDir, "program-x"),
+          () =>
+            production.createUser(
+              "k".repeat(20),
+              createBudget(),
+              runDir,
+              "program-x",
+              undefined,
+              send,
+            ),
           /exceeded 1 MiB/,
         );
       },
@@ -1742,13 +1746,14 @@ test("the REST control reaches an extra host only when the caller names it exact
     url.startsWith("https://oauth2.googleapis.com/")
       ? new Response(JSON.stringify({ access_token: "t", expires_in: 3600 }))
       : new Response("{}", { status: 200 });
-  await withStubbedFetch(handler, async (seen) => {
-    const plain = production.createControl(adc, createBudget());
+  await withStubbedFetch(handler, async (seen, send) => {
+    const plain = production.createControl(adc, createBudget(), { send });
     await assert.rejects(
       () => plain("GET", "https://logging.googleapis.com/v2/entries:list", undefined, "control"),
       /unreviewed REST host/,
     );
     const extended = production.createControl(adc, createBudget(), {
+      send,
       extraHosts: ["https://logging.googleapis.com"],
     });
     const reply = await extended(

@@ -6827,6 +6827,57 @@ async fn an_unstarted_runner_is_down_without_being_dead_and_stops_quietly() {
 }
 
 #[tokio::test]
+async fn run_due_returns_reports_for_unstarted_function_runners() {
+    let dir = lazy_dir("run-due");
+    let runtime = FunctionsRuntime::with_codebases(
+        lazy_units(&dir, &["echo"]).await,
+        FunctionsConfig {
+            clock_policy: fireemu_adapter_functions::application_clock::ApplicationClockPolicy {
+                timers_virtual: true,
+                ..Default::default()
+            },
+            ..FunctionsConfig::for_tests(1000, "s".into())
+        },
+        Arc::new(Mutex::new(VirtualClock::new(START))),
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator,
+    )
+    .unwrap();
+    assert_eq!(
+        runtime.run_due(10).await.unwrap(),
+        json!({"codebases": [{"codebase": "api", "function": "echo", "timers": null}]})
+    );
+    runtime.shutdown().await;
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn started_runner_without_http_port_has_no_http_target() {
+    let dir = lazy_dir("started-no-port");
+    let mut units = lazy_units(&dir, &["echo"]).await;
+    let runner = Runner::spawn_spec(&SpawnSpec {
+        command: vec![
+            "python3".into(),
+            "-c".into(),
+            "import json, sys; b = json.dumps({'type': 'hello', 'runner': 'test'}).encode(); sys.stdout.buffer.write(str(len(b)).encode() + b'\\n' + b); sys.stdout.buffer.flush(); sys.stdin.buffer.read()".into(),
+        ],
+        cwd: None,
+        env: Vec::new(),
+        hello_timeout: RUNNER_HELLO_TIMEOUT,
+    })
+    .await
+    .unwrap();
+    assert!(!runner.never_started());
+    assert!(runner.hello().http_port.is_none());
+    units[0].runner = Arc::new(runner);
+    let runtime = runtime_of_units(units);
+    assert!(runtime
+        .http_target("demo-app", "us-central1", "echo")
+        .is_none());
+    runtime.shutdown().await;
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
 async fn a_lazy_runner_starts_on_its_first_event_and_the_waiting_events_arrive_once_and_in_order() {
     let dir = lazy_dir("events");
     let runtime = runtime_of_units(lazy_units(&dir, &["echo", "onJob"]).await);

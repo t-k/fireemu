@@ -6241,9 +6241,16 @@ impl FunctionsRuntime {
         body: &[u8],
         profile: FunctionsHttpProfile,
     ) -> Result<ProxiedResponse, String> {
-        self.invoke_http_classified(target, method, path_and_query, headers, body, profile)
-            .await
-            .map_err(HttpInvokeError::into_message)
+        self.invoke_http_classified(
+            target,
+            method,
+            path_and_query,
+            &crate::tasks::without_task_identity(headers),
+            body,
+            profile,
+        )
+        .await
+        .map_err(HttpInvokeError::into_message)
     }
 
     fn admit_http_stream(
@@ -6402,7 +6409,10 @@ impl FunctionsRuntime {
             Ok(addr) => addr,
             Err(response) => return response.map(HttpStreamStart::Buffered),
         };
-        let forwarded = runner_headers(headers, &self.config.runner_secret);
+        let forwarded = runner_headers(
+            &crate::tasks::without_task_identity(headers),
+            &self.config.runner_secret,
+        );
         match forward_stream(&addr, method, path_and_query, &forwarded, body, deadline).await {
             Ok(started) => {
                 let status = started.response.status;

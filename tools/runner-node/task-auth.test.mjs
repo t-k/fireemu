@@ -1,63 +1,56 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
-
-import {
-  hasTaskIdentityToken,
-  inTaskAuthScope,
-  installTaskAuthEnvironment,
-  runWithTaskAuth,
-} from "./task-auth.mjs";
+import { TASK_IDENTITY_HEADER, takeTaskIdentityMarker, installTaskAuthEnvironment, runWithTaskAuth } from "./task-auth.mjs";
 
 const target = () => ({ env: { FUNCTIONS_EMULATOR: "true", OTHER: "1" } });
 
-test("only a Bearer of three segments is an identity token", () => {
-  assert.equal(hasTaskIdentityToken({ authorization: "Bearer a.b.c" }), true);
-  assert.equal(hasTaskIdentityToken({ authorization: "Bearer a.b." }), true, "an unsigned token has an empty third segment");
-  for (const authorization of ["Bearer a.b", "Bearer a.b.c.d", "bearer a.b.c", "Basic a.b.c", "Bearer .b.c", "Bearer a..c", "Bearer a.b.c d", "a.b.c", ""]) {
-    assert.equal(hasTaskIdentityToken({ authorization }), false, authorization);
+test("takes only the exact marker and removes all raw copies", () => {
+  for (const value of ["1", "true", "1, 1", "", undefined]) {
+    const req = { headers: { [TASK_IDENTITY_HEADER]: value }, rawHeaders: ["Other", "x", "X-Fireemu-Task-Identity", "1", TASK_IDENTITY_HEADER, "1"] };
+    assert.equal(takeTaskIdentityMarker(req), value === "1");
+    assert.equal(TASK_IDENTITY_HEADER in req.headers, false);
+    assert.deepEqual(req.rawHeaders, ["Other", "x"]);
   }
-  assert.equal(hasTaskIdentityToken({}), false);
-  assert.equal(hasTaskIdentityToken(undefined), false);
-  assert.equal(hasTaskIdentityToken({ authorization: ["Bearer a.b.c"] }), false);
+  for (const rawHeaders of [undefined, null, "bad"]) {
+    assert.equal(takeTaskIdentityMarker({ headers: {}, rawHeaders }), false);
+  }
 });
 
-test("the emulator flag is hidden only inside a task auth scope", async () => {
+test("only the first get is hidden, including across awaits and timers", async () => {
   const fake = target();
   installTaskAuthEnvironment(fake);
   assert.equal(fake.env.FUNCTIONS_EMULATOR, "true");
-  assert.equal(inTaskAuthScope(), false);
-  const inside = await runWithTaskAuth(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 1));
-    return {
-      value: fake.env.FUNCTIONS_EMULATOR,
-      has: "FUNCTIONS_EMULATOR" in fake.env,
-      keys: Object.keys(fake.env),
-      other: fake.env.OTHER,
-      scoped: inTaskAuthScope(),
-    };
+  await runWithTaskAuth(async () => {
+    assert.equal("FUNCTIONS_EMULATOR" in fake.env, true);
+    assert.ok(Object.keys(fake.env).includes("FUNCTIONS_EMULATOR"));
+    assert.equal(Object.getOwnPropertyDescriptor(fake.env, "FUNCTIONS_EMULATOR").value, "true");
+    assert.equal(fake.env.OTHER, "1");
+    assert.equal(fake.env[Symbol.toStringTag], undefined);
+    assert.equal(fake.env.FUNCTIONS_EMULATOR, undefined);
+    assert.equal(fake.env.FUNCTIONS_EMULATOR, "true");
+    await Promise.resolve();
+    assert.equal(fake.env.FUNCTIONS_EMULATOR, "true");
+    const timer = await new Promise(resolve => setTimeout(() => resolve(fake.env.FUNCTIONS_EMULATOR), 1));
+    assert.equal(timer, "true");
   });
-  assert.deepEqual(inside, { value: undefined, has: false, keys: ["OTHER"], other: "1", scoped: true });
   assert.equal(fake.env.FUNCTIONS_EMULATOR, "true");
-  assert.ok("FUNCTIONS_EMULATOR" in fake.env);
 });
 
-test("another function in the same process still sees the flag while a task dispatch runs", async () => {
+test("concurrent scopes consume independent reads while a sibling sees the flag", async () => {
   const fake = target();
   installTaskAuthEnvironment(fake);
   let release;
-  const gate = new Promise((resolve) => (release = resolve));
-  const task = runWithTaskAuth(async () => {
+  const gate = new Promise(resolve => { release = resolve; });
+  const run = () => runWithTaskAuth(async () => {
     await gate;
-    return fake.env.FUNCTIONS_EMULATOR;
+    return [fake.env.FUNCTIONS_EMULATOR, fake.env.FUNCTIONS_EMULATOR];
   });
-  const sibling = await (async () => {
-    await new Promise((resolve) => setTimeout(resolve, 1));
-    return fake.env.FUNCTIONS_EMULATOR;
-  })();
+  const a = run(), b = run();
+  assert.equal(fake.env.FUNCTIONS_EMULATOR, "true");
   release();
-  assert.equal(sibling, "true");
-  assert.equal(await task, undefined);
+  assert.deepEqual(await Promise.all([a, b]), [[undefined, "true"], [undefined, "true"]]);
+  assert.equal(fake.env.FUNCTIONS_EMULATOR, "true");
 });
 
 test("writes and deletes go to the real environment, and installing twice changes nothing", () => {

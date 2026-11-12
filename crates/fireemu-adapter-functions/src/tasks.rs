@@ -380,6 +380,18 @@ fn service_owned(name: &str) -> bool {
             .any(|prefix| name.starts_with(prefix))
 }
 
+/// Marks a strict dispatch carrying the daemon-issued identity token; public invoke entry points remove caller-supplied copies.
+pub const TASK_IDENTITY_HEADER: &str = "x-fireemu-task-identity";
+
+/// Removes caller-supplied task identity markers while preserving the other headers.
+pub fn without_task_identity(headers: &[(String, String)]) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .filter(|(name, _)| !name.eq_ignore_ascii_case(TASK_IDENTITY_HEADER))
+        .cloned()
+        .collect()
+}
+
 /// The headers one dispatch carries (`taskQueue.js:192`).
 ///
 /// `attempt` is 1-based, so the first delivery reports `X-CloudTasks-TaskRetryCount: 0`.
@@ -437,6 +449,7 @@ pub fn dispatch_headers(
                 "Authorization".to_owned(),
                 oidc_authorization(oidc, now_millis),
             ));
+            out.push((TASK_IDENTITY_HEADER.to_owned(), "1".to_owned()));
         }
     }
     if let Some(status) = previous_response {
@@ -452,6 +465,9 @@ pub fn dispatch_headers(
     }
     let mut forged = Vec::new();
     for (k, v) in &task.headers {
+        if k.eq_ignore_ascii_case(TASK_IDENTITY_HEADER) {
+            continue;
+        }
         // The identity token the task asked for replaces any Authorization header of its own.
         if matches!(shape, DispatchShape::Production { .. })
             && task.oidc.is_some()
@@ -505,12 +521,39 @@ fn decode_base64(text: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        accept, dispatch_headers, oidc_authorization, queue_key, route, DispatchShape, Route, Task,
-        TaskOidc,
+        accept, dispatch_headers, oidc_authorization, queue_key, route, without_task_identity,
+        DispatchShape, Route, Task, TaskOidc, TASK_IDENTITY_HEADER,
     };
     use fireemu_core_functions::manifest::TaskRetryConfig;
     use serde_json::json;
     use serde_json::Value;
+
+    #[test]
+    fn task_identity_filter_removes_mixed_case_and_preserves_order() {
+        let headers = vec![
+            ("first".into(), "a".into()),
+            ("X-Fireemu-Task-Identity".into(), "1".into()),
+            ("second".into(), "b".into()),
+            (TASK_IDENTITY_HEADER.into(), "yes".into()),
+        ];
+        assert_eq!(
+            without_task_identity(&headers),
+            vec![("first".into(), "a".into()), ("second".into(), "b".into())]
+        );
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn task_identity_filter_preserves_other_headers(entries in proptest::collection::vec((proptest::bool::ANY, "[a-z]{0,12}", "[a-z]{0,12}"), 0..40)) {
+            let headers: Vec<(String, String)> = entries.into_iter().map(|(marker, name, value)| {
+                (if marker { "X-Fireemu-Task-Identity".to_owned() } else { name }, value)
+            }).collect();
+            let result = without_task_identity(&headers);
+            proptest::prop_assert!(result.iter().all(|(name, _)| !name.eq_ignore_ascii_case(TASK_IDENTITY_HEADER)));
+            let expected: Vec<_> = headers.into_iter().filter(|(name, _)| !name.eq_ignore_ascii_case(TASK_IDENTITY_HEADER)).collect();
+            proptest::prop_assert_eq!(result, expected);
+        }
+    }
 
     /// Standard base64 with padding.
     fn b64(bytes: &[u8]) -> String {
@@ -1132,7 +1175,7 @@ mod tests {
     fn production_delivers_the_identity_token_a_task_asked_for_as_a_three_segment_bearer() {
         let body = json!({"task": {"httpRequest": {
             "url": "", "body": "e30=",
-            "headers": {"Authorization": "Bearer forged", "X-Own": "1"},
+            "headers": {"Authorization": "Bearer forged", "X-Own": "1", "X-Fireemu-Task-Identity": "1"},
             "oidcToken": {"serviceAccountEmail": "sa@example.test", "audience": "https://aud.example.test"},
         }}});
         let task = accept(
@@ -1163,6 +1206,14 @@ mod tests {
             )
         };
         let production = headers(DispatchShape::Production { queue: "onJob" }, &task);
+        assert_eq!(
+            production
+                .iter()
+                .filter(|(k, _)| k.eq_ignore_ascii_case(TASK_IDENTITY_HEADER))
+                .map(|(_, v)| v.as_str())
+                .collect::<Vec<_>>(),
+            ["1"]
+        );
         let authorization: Vec<&str> = production
             .iter()
             .filter(|(k, _)| k.eq_ignore_ascii_case("authorization"))
@@ -1218,6 +1269,9 @@ mod tests {
         assert!(production.iter().any(|(k, v)| k == "X-Own" && v == "1"));
         // The official emulator keeps the task's own header and adds none.
         let official = headers(DispatchShape::Official, &task);
+        assert!(!official
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case(TASK_IDENTITY_HEADER)));
         let official: Vec<&str> = official
             .iter()
             .filter(|(k, _)| k.eq_ignore_ascii_case("authorization"))
@@ -1228,10 +1282,20 @@ mod tests {
         let mut anonymous = task.clone();
         anonymous.oidc = None;
         anonymous.headers.remove("Authorization");
+        anonymous
+            .headers
+            .insert("X-Fireemu-Task-Identity".to_owned(), "1".to_owned());
         let production = headers(DispatchShape::Production { queue: "onJob" }, &anonymous);
         assert!(!production
             .iter()
             .any(|(k, _)| k.eq_ignore_ascii_case("authorization")));
+        assert!(!production
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case(TASK_IDENTITY_HEADER)));
+        let official_anonymous = headers(DispatchShape::Official, &anonymous);
+        assert!(!official_anonymous
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case(TASK_IDENTITY_HEADER)));
         // No audience: the URL.
         let body = json!({"task": {"httpRequest": {"url": "", "body": "e30=", "oidcToken": {"serviceAccountEmail": "sa@example.test"}}}});
         let task = accept(

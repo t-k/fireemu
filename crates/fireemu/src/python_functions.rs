@@ -106,7 +106,9 @@ pub async fn preflight(source: &Path, runtime: Option<&str>) -> Result<PythonEnv
     let mut command = tokio::process::Command::new(&interpreter);
     command
         .arg("-I")
+        .arg("-B")
         .arg("-c")
+        .env("PYTHONDONTWRITEBYTECODE", "1")
         .arg(PROBE)
         .current_dir(source)
         .stdin(std::process::Stdio::null())
@@ -260,6 +262,22 @@ mod tests {
         )
         .unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[tokio::test]
+    async fn preflight_disables_bytecode_writes() {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = Scratch::new();
+        let bin = scratch.path().join("venv/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let interpreter = bin.join("python");
+        std::fs::write(&interpreter, "#!/bin/sh\ncd \"$(dirname \"$0\")\" || exit 1\nprintf '%s\\n' \"$1\" \"$2\" \"$PYTHONDONTWRITEBYTECODE\" > recorded\nprintf '3.12\\n0.6.0\\n'\n").unwrap();
+        std::fs::set_permissions(&interpreter, std::fs::Permissions::from_mode(0o755)).unwrap();
+        preflight(scratch.path(), None).await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(bin.join("recorded")).unwrap(),
+            "-I\n-B\n1\n"
+        );
     }
 
     #[derive(Debug, PartialEq, Eq)]

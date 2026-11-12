@@ -952,7 +952,9 @@ fn ttl_sweep_route(state: &ControlState, method: &str, project: &str) -> JsonRes
     }
 }
 
-/// Builds a bounded, redacted diagnostics bundle.
+/// Builds a bounded, redacted diagnostics bundle on the shared Auth/control listener behind
+/// the control token. A separate diagnostics port is not implemented; the decision is pending
+/// with the coordinator.
 #[allow(clippy::too_many_lines)]
 fn diagnostics_bundle_route(
     state: &ControlState,
@@ -964,6 +966,32 @@ fn diagnostics_bundle_route(
         self, Bundle, BundleInput, FunctionsSection, Limits, LogSection, PendingSection,
         RuleCondition, RuleDenial, RulesSection, Versions,
     };
+
+    fn render_expression_values(
+        values: &[(fireemu_core_rules::coverage::ExprValue, u64)],
+    ) -> String {
+        use fireemu_core_rules::coverage::ExprValue;
+
+        let values: Vec<String> = values
+            .iter()
+            .map(|(value, count)| {
+                let value = match value {
+                    ExprValue::Null
+                    | ExprValue::Bool(_)
+                    | ExprValue::Int(_)
+                    | ExprValue::Float(_) => format!("{value:?}"),
+                    ExprValue::String(s) => format!("string(len={})", s.len()),
+                    ExprValue::TruncatedString(_) => "string(truncated)".to_owned(),
+                    ExprValue::Composite(kind) => format!("composite({kind})"),
+                    ExprValue::Undefined(_) | ExprValue::TruncatedUndefined(_) => {
+                        "undefined".to_owned()
+                    }
+                };
+                format!("({value}, {count})")
+            })
+            .collect();
+        format!("[{}]", values.join(", "))
+    }
 
     if method != "GET" {
         return error(
@@ -1017,7 +1045,7 @@ fn diagnostics_bundle_route(
                         .as_deref()
                         .and_then(|source| source.get(expression.span.offset..expression.end))
                         .map(str::to_owned),
-                    outcome: format!("{:?}", expression.values),
+                    outcome: render_expression_values(&expression.values),
                 })
                 .collect(),
         })
@@ -1093,7 +1121,10 @@ fn diagnostics_bundle_route(
                 events,
                 attempts,
                 retries,
-                log_gaps: status["logGaps"].as_bool().unwrap_or(false),
+                log_gaps: status["logGaps"].as_bool().unwrap_or(false)
+                    || status["causality"]["evicted"].as_u64().unwrap_or(0) > 0
+                    || status["causality"]["resetGaps"].as_u64().unwrap_or(0) > 0
+                    || status["causality"]["truncated"].as_bool().unwrap_or(false),
             },
             rules: rules_section,
             indexes,

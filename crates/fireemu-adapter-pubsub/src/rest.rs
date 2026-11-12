@@ -5,11 +5,15 @@
 
 use std::collections::BTreeMap;
 
+use crate::connection::AcceptedConnection;
 use axum::body::{to_bytes, Body, Bytes};
 use axum::http::{Method, Request, StatusCode};
 use axum::response::Response;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use fireemu_core_pubsub::rest_negative_cache::{
+    ConnectionId, RestNegativeCache, RestOutcome, RestRequest, RestResource,
+};
 use fireemu_core_pubsub::subscription::{
     DeadLetterPolicy, ExpirationPolicy, PushConfig, RetryPolicy, DEFAULT_ACK_DEADLINE_SECONDS,
     DEFAULT_RETRY_MINIMUM_BACKOFF_SECONDS, MAX_RETRY_BACKOFF_SECONDS,
@@ -212,6 +216,9 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
     let query = request.uri().query().unwrap_or_default().to_owned();
+    let connection = connection_of(&request);
+    // The window runs from the arrival of the request, not from the end of its upload.
+    let started = handle.now();
     let body_result = if handle.paging_policy == crate::PagingPolicy::Strict {
         strict_body_bytes(request.into_body()).await
     } else {
@@ -239,7 +246,28 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
         }
     };
 
-    match dispatch(&method, &path, &query, &value, &body, &handle).await {
+    let negative_cache = negative_cache_probe(&handle, connection, started, &method, &path, &query);
+    if let Some(probe) = &negative_cache {
+        if probe.serves() {
+            return error_response(
+                RestError::not_found(format!(
+                    "Resource not found (resource={}).",
+                    probe.resource.id()
+                )),
+                handle.paging_policy,
+            );
+        }
+    }
+    let result = dispatch(&method, &path, &query, &value, &body, &handle).await;
+    if let Some(probe) = negative_cache {
+        probe.observe(match &result {
+            // `dispatch` only answers `Ok` for a 2xx.
+            Ok(_) => RestOutcome::Success,
+            Err(error) if error.status == StatusCode::NOT_FOUND => RestOutcome::NotFound,
+            _ => RestOutcome::Other,
+        });
+    }
+    match result {
         Ok((status, response, schema)) => {
             json_response(status, response, handle.paging_policy, schema)
         }
@@ -262,6 +290,78 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
             error_response(error, handle.paging_policy)
         }
     }
+}
+
+/// The connection a request arrived on, from the id the listener gave the socket when it accepted
+/// it. A request that did not come through that listener (an in-process call) shares one
+/// pseudo-connection.
+fn connection_of(request: &Request<Body>) -> ConnectionId {
+    request
+        .extensions()
+        .get::<AcceptedConnection>()
+        .map_or(ConnectionId::UNATTRIBUTED, |accepted| accepted.0)
+}
+
+/// One request the REST negative cache looks at: the connection and the resource its URL names,
+/// what the request is, and the instant it started on the virtual clock.
+struct NegativeCacheProbe {
+    cache: std::sync::Arc<std::sync::Mutex<RestNegativeCache>>,
+    connection: ConnectionId,
+    resource: RestResource,
+    request: RestRequest,
+    started: LogicalInstant,
+}
+
+impl NegativeCacheProbe {
+    fn serves(&self) -> bool {
+        self.cache.lock().expect("negative cache lock").serves(
+            self.connection,
+            &self.resource,
+            self.request,
+            self.started,
+        )
+    }
+
+    fn observe(self, outcome: RestOutcome) {
+        self.cache.lock().expect("negative cache lock").observe(
+            self.connection,
+            &self.resource,
+            self.request,
+            self.started,
+            outcome,
+        );
+    }
+}
+
+/// Reads a request as the negative cache needs it. `None` when the cache is off, or when the
+/// request is not a `GET`, `PATCH` or `DELETE` of a plain subscription URL without a query string
+/// (a topic, a snapshot, a collection, a `:verb`, a create, ...): those neither arm nor read the
+/// cache.
+fn negative_cache_probe(
+    handle: &PubSubHandle,
+    connection: ConnectionId,
+    started: LogicalInstant,
+    method: &Method,
+    path: &str,
+    query: &str,
+) -> Option<NegativeCacheProbe> {
+    let cache = handle.rest_negative_cache.clone()?;
+    if !query.is_empty() {
+        return None;
+    }
+    let request = match *method {
+        Method::GET => RestRequest::Get,
+        Method::PATCH => RestRequest::Patch,
+        Method::DELETE => RestRequest::Delete,
+        _ => return None,
+    };
+    Some(NegativeCacheProbe {
+        cache,
+        connection,
+        resource: RestResource::parse_path(path)?,
+        request,
+        started,
+    })
 }
 
 fn filter_error_details(message: &str) -> Option<Value> {

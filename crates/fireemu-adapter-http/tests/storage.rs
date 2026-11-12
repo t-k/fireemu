@@ -46,6 +46,69 @@ impl AtomicStorageEventSink for RefusingStorageEvents {
 /// The control token `state` gives every fixture, as a run's control surface holds it.
 const CONTROL_TOKEN: &str = "storage-test-control-token";
 
+#[cfg(unix)]
+#[test]
+fn spilled_and_memory_downloads_match_for_ranges_and_conditions() {
+    let root = std::env::temp_dir().join(format!("storage-http-spill-{}", std::process::id()));
+    let process = fireemu_core_storage::spill::ProcessSpill::create(&root).unwrap();
+    let memory = state(None);
+    let spilled = state(None);
+    spilled
+        .store
+        .lock()
+        .unwrap()
+        .set_spill(Some((process.spill_dir(), 0)));
+    let bucket = BucketName::try_new(BUCKET).unwrap();
+    let name = ObjectName::try_new("differential.bin").unwrap();
+    for s in [&memory, &spilled] {
+        s.store
+            .lock()
+            .unwrap()
+            .put(
+                &bucket,
+                &name,
+                b"0123456789".to_vec(),
+                NewMetadata::default(),
+                Precondition::default(),
+                START,
+            )
+            .unwrap();
+    }
+    assert!(std::fs::read_dir(process.path()).unwrap().count() > 1);
+    let object = format!("/storage/v1/b/{BUCKET}/o/differential.bin");
+    for (query, headers, expected) in [
+        ("alt=media", vec![], 200),
+        ("alt=media", vec![("range", "bytes=2-4")], 206),
+        ("alt=media", vec![("range", "bytes=-3")], 206),
+        ("alt=media", vec![("range", "bytes=10-")], 416),
+        ("alt=media&ifGenerationMatch=0", vec![], 412),
+        ("alt=media&ifGenerationNotMatch=0", vec![], 200),
+    ] {
+        let path = format!("{object}?{query}");
+        let a = handle(&memory, req("GET", &path, &headers, b""));
+        let b = handle(&spilled, req("GET", &path, &headers, b""));
+        assert_eq!(a.status, expected, "{path}");
+        assert_eq!(a.status, b.status, "{path}");
+        assert_eq!(a.headers, b.headers, "{path}");
+        assert_eq!(a.body, b.body, "{path}");
+    }
+    let generation = memory
+        .store
+        .lock()
+        .unwrap()
+        .get(&bucket, &name)
+        .unwrap()
+        .generation;
+    let path = format!("{object}?alt=media&ifGenerationNotMatch={generation}");
+    let a = handle(&memory, req("GET", &path, &[], b""));
+    let b = handle(&spilled, req("GET", &path, &[], b""));
+    assert_eq!(a.status, 304);
+    assert_eq!((a.status, a.headers, a.body), (b.status, b.headers, b.body));
+    drop(spilled);
+    drop(process);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 fn state(rules: Option<&str>) -> StorageState {
     state_with(rules, TokenAcceptance::Verified)
 }

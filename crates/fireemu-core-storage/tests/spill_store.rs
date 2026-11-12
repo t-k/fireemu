@@ -10,6 +10,96 @@ use fireemu_core_types::time::LogicalInstant;
 #[cfg(unix)]
 use std::fs;
 
+#[cfg(unix)]
+#[test]
+fn resumable_finalization_can_retry_after_spill_failure() {
+    let root = std::env::temp_dir().join(format!("spill-retry-{}", std::process::id()));
+    let process = ProcessSpill::create(&root).unwrap();
+    let bad = root.join("bad");
+    fs::write(&bad, b"x").unwrap();
+    let bucket = BucketName::try_new("example.appspot.com").unwrap();
+    let name = ObjectName::try_new("retry").unwrap();
+    let now = LogicalInstant::UNIX_EPOCH;
+    let mut store = StorageState::new(1);
+    let id = store
+        .begin_upload(
+            &bucket,
+            &name,
+            NewMetadata::default(),
+            Precondition::default(),
+            Some(4),
+            now,
+        )
+        .unwrap();
+    store.append_upload(&id, 0, b"data", now).unwrap();
+    store.set_spill(Some((SpillDir::new(&bad), 0)));
+    assert!(matches!(
+        store.finalize_upload(&id, now),
+        Err(StorageError::SpillFailed(_))
+    ));
+    assert!(store.get(&bucket, &name).is_none());
+    store.set_spill(Some((process.spill_dir(), 0)));
+    let object = store.finalize_upload(&id, now).unwrap();
+    assert_eq!(store.body_bytes(&object).unwrap().as_ref(), b"data");
+    drop(store);
+    drop(process);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn readers_keep_snapshot_bytes_during_delete_and_overwrite() {
+    let root = std::env::temp_dir().join(format!("spill-concurrent-{}", std::process::id()));
+    let process = ProcessSpill::create(&root).unwrap();
+    for spill in [false, true] {
+        let mut store = StorageState::new(1);
+        if spill {
+            store.set_spill(Some((process.spill_dir(), 0)));
+        }
+        let bucket = BucketName::try_new("example.appspot.com").unwrap();
+        let name = ObjectName::try_new("object").unwrap();
+        let now = LogicalInstant::UNIX_EPOCH;
+        let object = store
+            .put(
+                &bucket,
+                &name,
+                b"old".to_vec(),
+                NewMetadata::default(),
+                Precondition::default(),
+                now,
+            )
+            .unwrap();
+        let snapshot = store.clone();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        std::thread::scope(|scope| {
+            let ready = barrier.clone();
+            scope.spawn(move || {
+                ready.wait();
+                for _ in 0..100 {
+                    assert_eq!(snapshot.body_bytes(&object).unwrap().as_ref(), b"old");
+                }
+            });
+            barrier.wait();
+            store
+                .delete(&bucket, &name, Precondition::default(), now)
+                .unwrap();
+            let current = store
+                .put(
+                    &bucket,
+                    &name,
+                    b"new".to_vec(),
+                    NewMetadata::default(),
+                    Precondition::default(),
+                    now,
+                )
+                .unwrap();
+            assert_eq!(store.body_bytes(&current).unwrap().as_ref(), b"new");
+        });
+    }
+    drop(process);
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[cfg(not(unix))]
 #[test]
 fn process_spill_is_unsupported() {

@@ -105,12 +105,12 @@ fn sweep_requires_valid_identity_and_process_evidence() {
             _ => ProcessState::Absent,
         })
         .unwrap(),
-        2
+        1
     );
     assert!(!absent.exists());
-    assert!(!reused.exists());
     for path in [
         &same,
+        &reused,
         &unknown,
         &unknown_start,
         &missing,
@@ -122,6 +122,44 @@ fn sweep_requires_valid_identity_and_process_evidence() {
         assert!(path.exists());
     }
     assert!(fs::symlink_metadata(link).unwrap().file_type().is_symlink());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn live_directory_survives_different_timezone_and_locale() {
+    if let Some(root) = std::env::var_os("FIREEMU_SPILL_TEST_ROOT") {
+        let root = PathBuf::from(root);
+        let pid: u32 = std::env::var("FIREEMU_SPILL_TEST_PID")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let ProcessState::Running { start } = process_state(pid) else {
+            panic!("parent process start time is unavailable");
+        };
+        let marker =
+            fs::read_to_string(root.join(format!("fireemu-spill-{pid}/fireemu-owner"))).unwrap();
+        assert!(marker.lines().any(|line| line == format!("start {start}")));
+        assert_eq!(sweep_stale(&root, process_state).unwrap(), 0);
+        assert!(root.join(format!("fireemu-spill-{pid}")).exists());
+        return;
+    }
+    let root = root();
+    let process = ProcessSpill::create(&root).unwrap();
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "live_directory_survives_different_timezone_and_locale",
+        ])
+        .env("FIREEMU_SPILL_TEST_ROOT", &root)
+        .env("FIREEMU_SPILL_TEST_PID", std::process::id().to_string())
+        .env("TZ", "Pacific/Honolulu")
+        .env("LANG", "fr_FR.UTF-8")
+        .env_remove("LC_ALL")
+        .status()
+        .unwrap();
+    assert!(status.success());
+    assert!(process.path().exists());
+    drop(process);
     fs::remove_dir_all(root).unwrap();
 }
 

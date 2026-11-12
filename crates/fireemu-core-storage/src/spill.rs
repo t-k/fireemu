@@ -384,6 +384,8 @@ pub enum ProcessState {
 pub fn process_state(pid: u32) -> ProcessState {
     match std::process::Command::new("ps")
         .args(["-o", "lstart=", "-p", &pid.to_string()])
+        .env("LC_ALL", "C")
+        .env("TZ", "UTC")
         .output()
     {
         Ok(output) => match std::str::from_utf8(&output.stdout) {
@@ -467,7 +469,7 @@ fn read_marker(dir: &Path, pid: u32) -> Option<String> {
     Some(start.to_owned())
 }
 
-/// Removes directories with verified markers belonging to absent or reused processes.
+/// Removes directories with verified markers belonging to absent processes.
 #[cfg(unix)]
 pub fn sweep_stale(root: &Path, state: impl Fn(u32) -> ProcessState) -> io::Result<usize> {
     let entries = match fs::read_dir(root) {
@@ -509,11 +511,7 @@ pub fn sweep_stale(root: &Path, state: impl Fn(u32) -> ProcessState) -> io::Resu
         if start == "unknown" {
             continue;
         }
-        let gone = match state(pid) {
-            ProcessState::Absent => true,
-            ProcessState::Running { start: current } => !current.is_empty() && current != start,
-            ProcessState::Unknown => false,
-        };
+        let gone = matches!(state(pid), ProcessState::Absent);
         if gone && check_dir(&path, uid).is_ok() {
             fs::remove_dir_all(path)?;
             removed += 1;

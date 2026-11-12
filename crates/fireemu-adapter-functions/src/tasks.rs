@@ -1128,6 +1128,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn production_delivers_the_identity_token_a_task_asked_for_as_a_three_segment_bearer() {
         let body = json!({"task": {"httpRequest": {
             "url": "", "body": "e30=",

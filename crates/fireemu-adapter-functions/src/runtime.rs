@@ -286,6 +286,7 @@ pub struct PendingTaskInfo {
 
 /// Static runtime configuration.
 #[derive(Clone)]
+#[allow(clippy::struct_excessive_bools)] // Independent switches of the profile, not a state machine.
 pub struct FunctionsConfig {
     /// Project ID the functions belong to.
     pub project: String,
@@ -3990,6 +3991,7 @@ impl FunctionsRuntime {
     ///
     /// Backoff follows the explicit task-clock policy. Request and shutdown deadlines always
     /// use native time so a pinned test clock cannot strand transport or process cleanup.
+    #[allow(clippy::too_many_lines)] // One delivery loop: attempt, outcome, retry decision, backoff.
     async fn dispatch_task(
         self: &Arc<Self>,
         dispatch: &crate::task_scheduler::Dispatch,

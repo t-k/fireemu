@@ -532,14 +532,24 @@ pub(crate) fn check_bound_listeners(
         return Err(denial(&refused));
     }
     if !quiet {
-        for entry in inherited.iter().filter(|entry| {
-            matches!(entry.service, "hub" | "logging")
-                && entry.disposition == Disposition::KeptServiceNotStarted
-        }) {
-            eprintln!("warning: {}", stale_warning(entry));
+        for warning in bound_warnings(&inherited) {
+            eprintln!("warning: {warning}");
         }
     }
     Ok(())
+}
+
+/// The warnings the post-bind check adds: only for the best-effort listeners (the Hub and the
+/// Logging emulator), because the pre-start check already warned about every other service.
+fn bound_warnings(inherited: &[Inherited]) -> Vec<String> {
+    inherited
+        .iter()
+        .filter(|entry| {
+            matches!(entry.service, "hub" | "logging")
+                && entry.disposition == Disposition::KeptServiceNotStarted
+        })
+        .map(stale_warning)
+        .collect()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1423,6 +1433,31 @@ mod tests {
                 "unknown emulator variable: {name}"
             );
         }
+    }
+
+    #[test]
+    fn the_post_bind_check_warns_only_about_hub_and_logging() {
+        let started = BTreeSet::from(["hub"]);
+        let parent: Vec<(String, String)> = [
+            "FIREBASE_EMULATOR_HUB",
+            "FIREBASE_LOGGING_EMULATOR_HOST",
+            "PUBSUB_EMULATOR_HOST",
+            "DATA_CONNECT_EMULATOR_HOST",
+        ]
+        .into_iter()
+        .map(|name| (name.to_owned(), "localhost:1".to_owned()))
+        .collect();
+        let inherited = classify_inherited(&parent, &started, &[]);
+        let warnings = bound_warnings(&inherited);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].starts_with("FIREBASE_LOGGING_EMULATOR_HOST=localhost:1 "));
+        // An allowed best-effort variable is not warned about either.
+        let allowed = classify_inherited(
+            &parent,
+            &started,
+            &["FIREBASE_LOGGING_EMULATOR_HOST".to_owned()],
+        );
+        assert!(bound_warnings(&allowed).is_empty());
     }
 
     #[test]

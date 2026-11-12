@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Merges the outcomes of the shards of one cargo-mutants run into one summary.
 
-Usage: mutants-summary.py [--expected-shards N] [--mutants-result R] [--fail-on-missed] <shards-dir> <out-dir>
+Usage: mutants-summary.py [--expected-shards N] [--mutants-result R] [--fail-on-missed] [--survivors PATH] [--critical PATH] [--fail-on-new-critical] <shards-dir> <out-dir>
 
 <shards-dir> holds one directory per shard (`mutants-shard-K`, the downloaded artifact), each with
 the shard's `outcomes.json`. The summary counts the mutants by outcome (caught, missed, unviable,
@@ -10,6 +10,13 @@ timeout) and names every missed and every timed-out mutant. It writes `summary.j
 missing, a shard has no readable outcomes, or a baseline did not succeed (a baseline that fails
 makes every mutant look caught, so no result of that run is a result). Every reason is also printed
 on stderr, naming the shard.
+
+Survivor keys remove line and column numbers from raw mutant names and include a fingerprint of
+the removed source lines from the mutant diff. A missing or ambiguous diff produces `fp:none`,
+which is never accepted. Accepted keys and critical file patterns can be supplied with --survivors
+and --critical. With --fail-on-new-critical, new
+critical survivors exit 2; --fail-on-missed also exits 2 for any missed mutant. Untrusted runs and
+unreadable lists exit 1.
 
 A shard that held no mutant (more shards than mutants) is not a failure: cargo-mutants then writes
 no `outcomes.json` at all, only an empty `mutants.json` list, and the shard counts as zero mutants.
@@ -27,9 +34,12 @@ the shard job: anything but success is a problem.
 """
 
 import argparse
+import fnmatch
+import hashlib
 import json
 import re
 import sys
+from typing import Optional
 import unicodedata
 from collections import Counter
 from pathlib import Path
@@ -60,6 +70,66 @@ def clean(value, limit=MAX_NAME):
             out.append(char)
     cleaned = "".join(out)
     return cleaned if len(cleaned) <= limit else cleaned[: limit - 1] + "…"
+
+
+def survivor_key(raw_name: str) -> str:
+    """Remove the first line and column location from a raw mutant name."""
+    return re.sub(r"^(.*?):[0-9]+:[0-9]+: ", r"\1: ", raw_name, count=1, flags=re.DOTALL)
+
+
+def mutant_fingerprint(shard_dir: Path, raw_name: str) -> Optional[str]:
+    """Hash removed source lines from the matching cargo-mutants diff, without location metadata."""
+    match = re.match(r"^(.*?):([0-9]+):([0-9]+): (.*)$", raw_name, flags=re.DOTALL)
+    if match is None:
+        return None
+    file, line, column, description = match.groups()
+    filename = re.compile(rf"^{re.escape(file.replace('/', '__'))}_line_{line}_col_{column}(?:_[0-9]+)?\.diff$")
+    removed = []
+    try:
+        for path in sorted((shard_dir / "diff").iterdir()):
+            if not filename.fullmatch(path.name):
+                continue
+            lines = path.read_text().split("\n")
+            if len(lines) < 2 or lines[1] != f"+++ {description}":
+                continue
+            removed.append([line[1:] for line in lines if line.startswith("-") and not line.startswith("--- ")])
+    except (OSError, UnicodeError):
+        return None
+    if not removed or any(lines != removed[0] for lines in removed[1:]):
+        return None
+    return hashlib.sha256("\n".join(removed[0]).encode("utf-8")).hexdigest()[:16]
+
+
+def fingerprinted_key(raw_name: str, shard_dir: Path) -> str:
+    """Return a location-independent survivor key with its source fingerprint."""
+    fingerprint = mutant_fingerprint(shard_dir, raw_name)
+    return f"{survivor_key(raw_name)} [fp:{fingerprint or 'none'}]"
+
+
+def critical_pattern(line: str) -> str:
+    """The file pattern of a critical-list line: the path before any comment or ` @` function list."""
+    return line.split("#", 1)[0].split(" @", 1)[0].strip()
+
+
+def scoped_critical_regex(path: Path):
+    """A regex over mutant names for the scoped lines (`<path> @ <function> ...`) of the critical list,
+    in the form tools/ci/critical-selection.py prints; None when the list has no scoped line."""
+    alternatives = []
+    for raw in read_entries(path):
+        body = raw.split("#", 1)[0].strip()
+        if " @" not in body:
+            continue
+        file_part, _, names = body.partition(" @")
+        alt = "|".join(re.escape(name) for name in names.split())
+        head = re.escape(file_part.strip())
+        alternatives.append(f"^{head}:[0-9]+:[0-9]+:\\s.*(in|replace)\\s({alt})(\\s|$)")
+    return "(" + "|".join(alternatives) + ")" if alternatives else None
+
+
+def read_entries(path: Path):
+    """Read keys or patterns while preserving leading spaces."""
+    return [line for raw in path.read_text().splitlines()
+            if (line := raw.rstrip()) and not line.startswith("#")]
 
 
 def slice_size(total: int, shards: int, k: int) -> int:
@@ -157,7 +227,7 @@ def names_text(names, shown=5):
     return text + (f", … ({len(names)} in all)" if len(names) > shown else "") if names else "none"
 
 
-def merge(shards_dir: Path, expected, mutants_result=None):
+def merge(shards_dir: Path, expected, mutants_result=None, raw_missed=None, missed_shards=None):
     found = {}
     for entry in sorted(shards_dir.iterdir()) if shards_dir.is_dir() else []:
         match = SHARD_DIRECTORY.match(entry.name)
@@ -191,7 +261,7 @@ def merge(shards_dir: Path, expected, mutants_result=None):
         shard_problems = []
         shard_counts = {CAUGHT: 0, MISSED: 0, UNVIABLE: 0, TIMEOUT: 0}
         shard_other = {}
-        shard_missed, shard_timed_out = [], []
+        shard_missed, shard_timed_out, shard_raw_missed = [], [], []
         outcome_names = Counter()
         baseline_failed = False
         for outcome in outcomes:
@@ -221,6 +291,7 @@ def merge(shards_dir: Path, expected, mutants_result=None):
                 shard_other[key] = shard_other.get(key, 0) + 1
             if summary == MISSED:
                 shard_missed.append(name)
+                shard_raw_missed.append(mutant["name"])
             elif summary == TIMEOUT:
                 shard_timed_out.append(name)
         if not baseline_failed:
@@ -233,6 +304,10 @@ def merge(shards_dir: Path, expected, mutants_result=None):
         for key, value in shard_other.items():
             other[key] = other.get(key, 0) + value
         missed.extend(shard_missed)
+        if raw_missed is not None:
+            raw_missed.extend(shard_raw_missed)
+        if missed_shards is not None:
+            missed_shards.extend((name, directory) for name in shard_raw_missed)
         timed_out.extend(shard_timed_out)
     mutants_listed = sum(listed_sizes.values())
     complete = bool(found) and all(k in listed_sizes for k in found) and not missing
@@ -286,7 +361,12 @@ def markdown(summary):
         lines += ["", f"Other outcomes: {json.dumps(summary['other'], sort_keys=True)}"]
     for title, key in (("Missed mutants", "missed_mutants"), ("Timed-out mutants", "timeout_mutants")):
         if summary[key]:
-            lines += ["", f"### {title}", ""] + [f"- `{name}`" for name in summary[key]]
+            lines += ["", f"### {title}", ""] + [f"- `{clean(name)}`" for name in summary[key]]
+    if "new_survivors" in summary:
+        critical = set(summary["new_critical_survivors"])
+        lines += ["", "### New survivors", "", f"{summary['accepted_survivors']} accepted survivors."]
+        lines += [f"- `{clean(name)}`" + (" (critical)" if name in critical else "")
+                  for name in summary["new_survivors"]]
     if summary["problems"]:
         lines += ["", "### The run cannot be trusted", ""] + [f"- {p}" for p in summary["problems"]]
     return "\n".join(lines) + "\n"
@@ -307,8 +387,34 @@ def main(argv):
         default=None,
         help="the result of the job that ran the shards (needs.mutants.result); anything but success is a problem",
     )
+    parser.add_argument("--survivors", type=Path, help="file containing accepted survivor keys")
+    parser.add_argument("--critical", type=Path, help="file containing critical path patterns")
+    parser.add_argument("--fail-on-new-critical", action="store_true", help="exit 2 for new critical survivors")
     args = parser.parse_args(argv)
-    summary = merge(args.shards_dir, args.expected_shards, args.mutants_result)
+    try:
+        accepted = set(read_entries(args.survivors)) if args.survivors is not None else set()
+        lines = read_entries(args.critical) if args.critical is not None else []
+        critical = [critical_pattern(line) for line in lines if " @" not in line.split("#", 1)[0]]
+    except (OSError, UnicodeError) as error:
+        print(f"mutants-summary: cannot read survivor or critical list: {clean(str(error))}", file=sys.stderr)
+        return 1
+    missed_shards = []
+    summary = merge(args.shards_dir, args.expected_shards, args.mutants_result, missed_shards=missed_shards)
+    if args.survivors is not None or args.critical is not None or args.fail_on_new_critical:
+        keys = [fingerprinted_key(name, directory) for name, directory in missed_shards]
+        is_accepted = [not key.endswith(" [fp:none]") and key in accepted for key in keys]
+        summary["accepted_survivors"] = sum(is_accepted)
+        summary["new_survivors"] = sorted(key for key, accepted_key in zip(keys, is_accepted) if not accepted_key)
+        scoped = scoped_critical_regex(args.critical) if args.critical is not None else None
+        new_critical = set()
+        for key, (raw, _), accepted_key in zip(keys, missed_shards, is_accepted):
+            if accepted_key:
+                continue
+            file_part = key.split(": ", 1)[0]
+            whole_file = any(fnmatch.fnmatchcase(file_part, pattern) for pattern in critical)
+            if whole_file or (scoped is not None and re.search(scoped, raw)):
+                new_critical.add(key)
+        summary["new_critical_survivors"] = sorted(new_critical)
     args.out_dir.mkdir(parents=True, exist_ok=True)
     (args.out_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
     (args.out_dir / "summary.md").write_text(markdown(summary))
@@ -321,6 +427,11 @@ def main(argv):
         )
     if summary["problems"]:
         return 1
+    if args.fail_on_new_critical and summary["new_critical_survivors"]:
+        names = summary["new_critical_survivors"]
+        print(f"mutants-summary: {len(names)} new critical survivors: " + ", ".join(clean(name) for name in names),
+              file=sys.stderr)
+        return 2
     if args.fail_on_missed and summary["missed"]:
         print(f"mutants-summary: {summary['missed']} mutants were missed", file=sys.stderr)
         return 2

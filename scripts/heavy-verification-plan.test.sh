@@ -24,7 +24,9 @@ git_in "$work/src" checkout -q -b main
 git_in "$work/src" commit -q --allow-empty -m one
 one_sha=$(git_in "$work/src" rev-parse HEAD)
 # The second commit holds Rust (the nightly mutates a diff that has some) and the weekly rotation.
-mkdir -p "$work/src/crates/a/src" "$work/src/tools/ci"
+mkdir -p "$work/src/crates/a/src" "$work/src/crates/fireemu-adapter-http/src" "$work/src/crates/fireemu-core-auth/src" "$work/src/tools/ci"
+cp "$root/tools/ci/rotation-selection.py" "$work/src/tools/ci/rotation-selection.py"
+touch "$work/src/crates/fireemu-adapter-http/src/identity_toolkit.rs" "$work/src/crates/fireemu-adapter-http/src/store.rs" "$work/src/crates/fireemu-core-auth/src/lib.rs" "$work/src/crates/fireemu-core-auth/src/store.rs"
 echo 'fn main() {}' > "$work/src/crates/a/src/lib.rs"
 cat > "$work/src/tools/ci/mutation-weekly.txt" << 'LIST'
 # a comment line
@@ -68,19 +70,34 @@ git init -q "$work/fork"
 git_in "$work/fork" commit -q --allow-empty -m "a commit of a fork"
 fork_sha=$(git_in "$work/fork" rev-parse HEAD)
 
-# A `curl` that answers the list of workflow runs the nightly asks GitHub for: the runs named by
-# CURL_RUNS (SHA, conclusion, title) lines, or a failure when CURL_FAILS is set.
+# A `curl` that answers each requested page with the configured runs.
 mkdir -p "$work/bin"
 cat > "$work/bin/curl" << 'CURL'
 #!/usr/bin/env bash
 [[ -z ${CURL_FAILS-} ]] || exit 22
+url=${!#}
+runs=${CURL_RUNS-}
+if [[ $url != *'&page=1' ]]; then
+  if [[ $url == *'&page=2' ]]; then
+    [[ -z ${CURL_FAILS_PAGE2-} ]] || exit 22
+    runs=${CURL_RUNS_PAGE2-}
+  else
+    runs=""
+  fi
+fi
 printf '{"workflow_runs": ['
 sep=""
+if [[ $url == *'&page=1' ]]; then
+  for ((i=0; i<${CURL_PAGE1_FILLER:-0}; i++)); do
+    printf '%s{"head_sha":"0000000000000000000000000000000000000000","conclusion":"failure","display_title":"heavy-verification scheduled nightly"}' "$sep"
+    sep=","
+  done
+fi
 while read -r sha conclusion title; do
   [[ -n $sha ]] || continue
   printf '%s{"head_sha": "%s", "conclusion": "%s", "display_title": "%s"}' "$sep" "$sha" "$conclusion" "$title"
   sep=","
-done <<< "${CURL_RUNS-}"
+done <<< "$runs"
 printf ']}'
 CURL
 chmod +x "$work/bin/curl"
@@ -116,7 +133,7 @@ refuses() {
     flunk "refuses: ${*//$'\n'/ }"
   elif [[ -s $work/output ]]; then
     flunk "refuses without output: $*"
-  elif ! grep -qF -- "$expect" "$work/log"; then
+  elif ! grep -F -- "::error::" "$work/log" | grep -qF -- "$expect"; then
     flunk "refuses for another reason: ${*//$'\n'/ } (wanted '$expect', got: $(head -c 300 "$work/log"))"
   else
     pass "refuses: ${*//$'\n'/ }"
@@ -217,7 +234,7 @@ for locale in C.UTF-8 en_US.UTF-8; do
   nightly_title="heavy-verification scheduled nightly"
   # Rust changed since the last nightly (the commit before the one that added it): mutate that diff.
   CURL_RUNS="$one_sha success $nightly_title" scheduled "23 3 * * *" validate "" "" "" "" "" "" ""
-  if has job=mutants && has mode=nightly && has skip=false && has fail_on_missed=true && has "ref=$main_sha" && has "base=$one_sha" &&
+  if has job=mutants && has mode=nightly && has skip=false && has fail_on_new_critical=true && has "ref=$main_sha" && has "base=$one_sha" &&
     has total=8 && has package= && has files=; then
     pass "the nightly mutates the Rust diff since the last completed nightly and fails on a miss"
   else
@@ -226,38 +243,41 @@ for locale in C.UTF-8 en_US.UTF-8; do
   # No Rust since the last nightly: nothing to do.
   CURL_RUNS="$main_sha success $nightly_title" scheduled "23 3 * * *" validate "" "" "" "" "" "" ""
   if has skip=true && has "base=$main_sha"; then pass "the nightly skips a diff without Rust"; else flunk "the nightly skips a diff without Rust ($(cat "$work/output"))"; fi
-  # A nightly that failed moves the base as well (the diff must not grow until it times out); one that was
-  # cancelled, skipped or is not finished does not, and the newest completed one wins.
+  # Only a successful nightly moves the base.
   CURL_RUNS="$main_sha failure $nightly_title" scheduled "23 3 * * *" validate "" "" "" "" "" "" ""
-  if has skip=true && has "base=$main_sha"; then pass "a failed nightly moves the base"; else flunk "a failed nightly moves the base ($(cat "$work/output"))"; fi
+  if has skip=false && ! has "base=$main_sha"; then pass "a failed nightly does not move the base"; else flunk "a failed nightly does not move the base ($(cat "$work/output"))"; fi
   for conclusion in cancelled skipped timed_out null ""; do
     CURL_RUNS="$main_sha ${conclusion:-null} $nightly_title" scheduled "23 3 * * *" validate "" "" "" "" "" "" ""
     if has skip=false && ! has "base=$main_sha"; then pass "a nightly that ended ${conclusion:-null} does not move the base"; else flunk "a nightly that ended ${conclusion:-null} does not move the base ($(cat "$work/output"))"; fi
   done
-  CURL_RUNS="$(printf '%s cancelled %s\n%s failure %s\n%s success %s' "$main_sha" "$nightly_title" "$one_sha" "$nightly_title" "$main_sha" "$nightly_title")" scheduled "23 3 * * *" validate "" "" "" "" "" "" ""
+  CURL_RUNS="$(printf '%s cancelled %s\n%s success %s\n%s success %s' "$main_sha" "$nightly_title" "$one_sha" "$nightly_title" "$main_sha" "$nightly_title")" scheduled "23 3 * * *" validate "" "" "" "" "" "" "" ""
   if has skip=false && has "base=$one_sha"; then pass "the newest nightly that completed is the base, skipping a cancelled one"; else flunk "the newest nightly that completed is the base ($(cat "$work/output"))"; fi
   # Another workflow run, a run that is not a nightly and a commit this branch does not contain are not the base.
   CURL_RUNS="$main_sha success heavy-verification scheduled weekly" scheduled "23 3 * * *" validate "" "" "" "" "" "" ""
   if has skip=false && ! has "base=$main_sha"; then pass "a weekly run is not the last nightly"; else flunk "a weekly run is not the last nightly ($(cat "$work/output"))"; fi
   CURL_RUNS="$fork_sha success $nightly_title" scheduled "23 3 * * *" validate "" "" "" "" "" "" ""
   if has skip=false && ! has "base=$fork_sha"; then pass "a nightly commit outside the history is not the base"; else flunk "a nightly commit outside the history is not the base ($(cat "$work/output"))"; fi
-  # No answer from GitHub: 24 hours back, which here reaches before the first commit.
-  CURL_FAILS=1 scheduled "23 3 * * *" validate "" "" "" "" "" "" ""
-  if has skip=false && has "ref=$main_sha" && ! has "base=$main_sha"; then pass "without an answer the nightly falls back to 24 hours"; else flunk "without an answer the nightly falls back to 24 hours ($(cat "$work/output"))"; fi
+  # An unreadable history must not move the base or produce output.
+  CURL_FAILS=1 EXPECT="cannot read the run history" scheduled "23 3 * * *" refuses "" "" "" "" "" "" ""
+  CURL_PAGE1_FILLER=100 CURL_FAILS_PAGE2=1 EXPECT="cannot read the run history" scheduled "23 3 * * *" refuses "" "" "" "" "" "" ""
+  CURL_PAGE1_FILLER=100 CURL_RUNS_PAGE2="$one_sha success $nightly_title" scheduled "23 3 * * *" validate "" "" "" "" "" "" ""
+  if has "base=$one_sha"; then pass "a successful nightly on page 2 is the base"; else flunk "a successful nightly on page 2 is the base ($(cat "$work/output"))"; fi
+  CURL_RUNS="$main_sha failure $nightly_title" scheduled "23 3 * * *" validate "" "" "" "" "" "" ""
+  if has skip=false && has "ref=$main_sha" && has "base=$one_sha"; then pass "a complete history without success falls back to 24 hours"; else flunk "a complete history without success falls back to 24 hours ($(cat "$work/output"))"; fi
   # The weekly: the line of the ISO week, whole, and only reporting.
   week=$((10#$(date -u +%V)))
   mapfile -t listed < <(sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$work/src/tools/ci/mutation-weekly.txt")
   read -r -a chosen <<< "${listed[$((week % ${#listed[@]}))]}"
   scheduled "41 4 * * 6" validate "" "" "" "" "" "" ""
-  if has job=mutants && has mode=weekly && has skip=false && has fail_on_missed=false && has total=16 && has "package=${chosen[0]}" &&
-    has "files=${chosen[*]:1}" && has base=; then
+  if has job=mutants && has mode=weekly && has skip=false && has fail_on_new_critical=false && has total=16 && has "package=${chosen[0]}" &&
+    has "files=${chosen[*]:1}" && has base= && grep -qE '^regex=.+$' "$work/output"; then
     pass "the weekly takes the line of the ISO week and only reports"
   else
     flunk "the weekly takes the line of the ISO week ($(cat "$work/output"))"
   fi
   # A dispatch of the weekly names the line by package, from a branch; the first line of a package wins.
   validate weekly work/my-branch fireemu-adapter-http main 4 "" ""
-  if has "package=fireemu-adapter-http" && has "files=crates/fireemu-adapter-http/src/identity_toolkit.rs" && has total=4; then
+  if has "package=fireemu-adapter-http" && has "files=crates/fireemu-adapter-http/src/identity_toolkit.rs" && has total=4 && has fail_on_new_critical=false; then
     pass "a dispatched weekly takes the named package's line"
   else
     flunk "a dispatched weekly takes the named package's line ($(cat "$work/output"))"

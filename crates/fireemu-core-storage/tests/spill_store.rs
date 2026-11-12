@@ -1,11 +1,27 @@
 //! Committed object spill storage.
 
+#[cfg(unix)]
 use fireemu_core_storage::name::{BucketName, ObjectName};
 use fireemu_core_storage::spill::{ProcessSpill, SpillDir};
+#[cfg(unix)]
 use fireemu_core_storage::store::{NewMetadata, Precondition, StorageError, StorageState};
+#[cfg(unix)]
 use fireemu_core_types::time::LogicalInstant;
+#[cfg(unix)]
 use std::fs;
 
+#[cfg(not(unix))]
+#[test]
+fn process_spill_is_unsupported() {
+    let root = std::env::temp_dir().join("spill-store-unsupported");
+    let Err(error) = ProcessSpill::create(&root) else {
+        panic!("process spill must be refused");
+    };
+    assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+    assert_eq!(error.to_string(), "process spill is unsupported");
+}
+
+#[cfg(unix)]
 #[test]
 #[allow(clippy::too_many_lines)]
 fn spill_lifecycle_and_failure() {
@@ -147,6 +163,7 @@ fn spill_lifecycle_and_failure() {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[cfg(unix)]
 proptest::proptest! {
     #![proptest_config(proptest::test_runner::Config { cases: 64, failure_persistence: None, ..proptest::test_runner::Config::default() })]
     #[test]
@@ -190,6 +207,7 @@ proptest::proptest! {
     }
 }
 
+#[cfg(unix)]
 fn compare_results<T: std::fmt::Debug + PartialEq>(
     a: &Result<T, StorageError>,
     b: &Result<T, StorageError>,
@@ -200,6 +218,7 @@ fn compare_results<T: std::fmt::Debug + PartialEq>(
     }
 }
 
+#[cfg(unix)]
 fn version_bodies(
     store: &StorageState,
     buckets: &[BucketName; 2],
@@ -221,6 +240,7 @@ fn version_bodies(
         .collect()
 }
 
+#[cfg(unix)]
 fn compare_spill_state(
     memory: &StorageState,
     spilled: &StorageState,
@@ -262,6 +282,7 @@ fn compare_spill_state(
     }
 }
 
+#[cfg(unix)]
 proptest::proptest! {
     #![proptest_config(proptest::test_runner::Config { cases: 64, failure_persistence: None, ..proptest::test_runner::Config::default() })]
     #[test]
@@ -412,6 +433,7 @@ proptest::proptest! {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn spilled_read_failure_and_generation_delete() {
     let root = std::env::temp_dir().join(format!("spill-store-read-{}", std::process::id()));
@@ -449,6 +471,7 @@ fn spilled_read_failure_and_generation_delete() {
 }
 
 /// The spill files in a process directory; the owner marker is not one of them.
+#[cfg(unix)]
 fn spill_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     fs::read_dir(dir)
         .unwrap()
@@ -461,6 +484,7 @@ fn spill_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
         .collect()
 }
 
+#[cfg(unix)]
 #[test]
 fn a_spilled_body_is_shared_with_a_snapshot_and_not_with_a_copy() {
     let root = std::env::temp_dir().join(format!("spill-shared-{}", std::process::id()));
@@ -501,6 +525,7 @@ fn a_spilled_body_is_shared_with_a_snapshot_and_not_with_a_copy() {
     let _ = fs::remove_dir(&root);
 }
 
+#[cfg(unix)]
 #[test]
 fn an_upload_spills_at_exactly_the_threshold_and_not_below() {
     let root = std::env::temp_dir().join(format!("spill-threshold-{}", std::process::id()));
@@ -541,6 +566,7 @@ fn a_spill_directory_debug_output_names_the_type_and_not_the_path() {
     assert!(!text.contains("does-not-appear"), "{text}");
 }
 
+#[cfg(unix)]
 #[test]
 fn imported_objects_spill_and_preserve_metadata_and_bytes() {
     use fireemu_core_storage::store::ImportedObject;

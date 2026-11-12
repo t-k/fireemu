@@ -4215,19 +4215,33 @@ mod config_reload_tests {
                 String::new(),
                 String::new(),
             )
-            .unwrap()
         };
-        let state = build(&cfg);
+        let state = build(&cfg).unwrap();
         assert!(!path.exists());
         drop(state);
         cfg.storage_spill_object_bytes = Some(1);
-        let state = build(&cfg);
-        assert!(path.is_dir());
-        drop(state);
-        assert!(!path.exists());
-        std::fs::remove_dir(spill_root()).unwrap();
+        #[cfg(unix)]
+        {
+            let state = build(&cfg).unwrap();
+            assert!(path.is_dir());
+            drop(state);
+            assert!(!path.exists());
+            std::fs::remove_dir(spill_root()).unwrap();
+        }
+        #[cfg(not(unix))]
+        {
+            let Err(error) = build(&cfg) else {
+                panic!("enabling process spill must be refused");
+            };
+            assert_eq!(
+                error,
+                "cannot create Storage spill directory: process spill is unsupported"
+            );
+            assert!(!path.exists());
+        }
     }
 
+    #[cfg(unix)]
     #[test]
     fn storage_spill_directory_is_released_at_shutdown_while_the_state_lives() {
         use fireemu_core_types::determinism::SplitMix64;

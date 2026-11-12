@@ -26,9 +26,11 @@ fn sdk_modules() -> PathBuf {
 const CODEBASE: &str = r"
 const { onCustomEventPublished } = require('firebase-functions/v2/eventarc');
 const { onRequest } = require('firebase-functions/v2/https');
-let received = 0;
-exports.onThingDone = onCustomEventPublished('com.example.thing.done', () => { received += 1; });
-exports.received = onRequest((_request, response) => response.json({ received }));
+const fs = require('node:fs');
+const path = require('node:path');
+const deliveries = path.join(__dirname, 'deliveries.txt');
+exports.onThingDone = onCustomEventPublished('com.example.thing.done', () => { fs.appendFileSync(deliveries, '1\n'); });
+exports.received = onRequest((_request, response) => response.json({ received: fs.readFileSync(deliveries, 'utf8').split('\n').length - 1 }));
 ";
 
 /// Publishes once through the Admin SDK with the fake `owner` credential and once with no credential
@@ -110,6 +112,7 @@ fn the_admin_sdk_publishes_without_a_google_credential_unless_production_exact()
         ),
         ("emulator", r#""profile":"emulator""#, "delivered"),
     ] {
+        std::fs::write(dir.join("deliveries.txt"), "").unwrap();
         let path = dir.join(format!("{name}.json"));
         std::fs::write(
             &path,

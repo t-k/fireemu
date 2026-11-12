@@ -6806,6 +6806,216 @@ fn lines_of(path: &Path) -> Vec<String> {
         .collect()
 }
 
+async fn held_lazy_units(
+    dir: &Path,
+    names: &[&str],
+    timeout: Duration,
+) -> (Vec<CodebaseSpec>, tokio::net::TcpListener) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut units = lazy_units(dir, names).await;
+    for unit in &mut units {
+        let spec = unit.spawn.as_mut().unwrap();
+        spec.hello_timeout = timeout;
+        spec.env.push((
+            "FIREEMU_FAKE_HELLO_BARRIER".to_owned(),
+            listener.local_addr().unwrap().to_string(),
+        ));
+    }
+    (units, listener)
+}
+
+async fn accept_hello(listener: &tokio::net::TcpListener) -> tokio::net::TcpStream {
+    tokio::time::timeout(Duration::from_secs(20), listener.accept())
+        .await
+        .expect("runner did not reach the hello barrier")
+        .unwrap()
+        .0
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_event_producers_wait_for_one_cold_start() {
+    use tokio::io::AsyncWriteExt;
+
+    let dir = lazy_dir("concurrent-start");
+    let (mut units, listener) = held_lazy_units(&dir, &["onJob"], RUNNER_HELLO_TIMEOUT).await;
+    units[0].manifest.functions[0].generation = FunctionGeneration::Second;
+    units[0].manifest.functions[0].concurrency = Some(1);
+    let runtime = runtime_of_units(units);
+    runtime.publish("jobs", &[json!({"data": "QQ=="})]).unwrap();
+    let mut gate = accept_hello(&listener).await;
+    let mut producers = Vec::new();
+    let ready = Arc::new(tokio::sync::Barrier::new(4));
+    for data in ["Qg==", "Qw==", "RA=="] {
+        let runtime = runtime.clone();
+        let ready = ready.clone();
+        producers.push(tokio::spawn(async move {
+            ready.wait().await;
+            runtime.publish("jobs", &[json!({"data": data})]).unwrap();
+        }));
+    }
+    ready.wait().await;
+    for producer in producers {
+        producer.await.unwrap();
+    }
+    runtime.publish("jobs", &[json!({"data": "RQ=="})]).unwrap();
+    assert!(lines_of(&dir.join("onJob.frames")).is_empty());
+    assert_eq!(lines_of(&dir.join("onJob.starts")).len(), 1);
+    gate.write_all(b"R").await.unwrap();
+    runtime.await_idle(Duration::from_secs(20)).await.unwrap();
+    let frames = lines_of(&dir.join("onJob.frames"));
+    assert_eq!(frames.len(), 5);
+    for data in ["QQ==", "Qg==", "Qw==", "RA==", "RQ=="] {
+        assert_eq!(
+            frames.iter().filter(|frame| frame.contains(data)).count(),
+            1
+        );
+    }
+    assert!(frames.first().unwrap().contains("QQ=="));
+    assert!(frames.last().unwrap().contains("RQ=="));
+    assert_eq!(
+        runtime
+            .history()
+            .iter()
+            .filter(|r| r.function == "onJob" && r.outcome == "ok")
+            .count(),
+        5
+    );
+    assert_eq!(lines_of(&dir.join("onJob.starts")).len(), 1);
+    let runner = runtime.runner_for("onJob");
+    runtime.shutdown().await;
+    assert!(!runner.is_alive());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn http_and_event_start_their_isolated_runners_concurrently() {
+    use tokio::io::AsyncWriteExt;
+
+    let dir = lazy_dir("http-event-start");
+    let (units, listener) = held_lazy_units(&dir, &["echo", "onJob"], RUNNER_HELLO_TIMEOUT).await;
+    let runtime = runtime_of_units(units);
+    let target = runtime
+        .http_target("demo-app", "us-central1", "echo")
+        .unwrap();
+    let request = {
+        let runtime = runtime.clone();
+        tokio::spawn(async move { runtime.invoke_http(&target, "GET", "/race", &[], &[]).await })
+    };
+    let mut first = accept_hello(&listener).await;
+    runtime.publish("jobs", &[json!({"data": "QQ=="})]).unwrap();
+    let mut second = accept_hello(&listener).await;
+    assert!(!request.is_finished());
+    assert!(lines_of(&dir.join("onJob.frames")).is_empty());
+    assert_eq!(lines_of(&dir.join("echo.starts")).len(), 1);
+    assert_eq!(lines_of(&dir.join("onJob.starts")).len(), 1);
+    first.write_all(b"R").await.unwrap();
+    second.write_all(b"R").await.unwrap();
+    assert_eq!(request.await.unwrap().unwrap().status, 200);
+    runtime.await_idle(Duration::from_secs(20)).await.unwrap();
+    assert_eq!(
+        runtime
+            .history()
+            .iter()
+            .filter(|r| r.function == "echo" && r.outcome == "http 200")
+            .count(),
+        1
+    );
+    assert_eq!(lines_of(&dir.join("onJob.frames")).len(), 1);
+    assert_eq!(
+        runtime
+            .history()
+            .iter()
+            .filter(|r| r.function == "onJob" && r.outcome == "ok")
+            .count(),
+        1
+    );
+    assert_eq!(lines_of(&dir.join("echo.starts")).len(), 1);
+    assert_eq!(lines_of(&dir.join("onJob.starts")).len(), 1);
+    let runners = [runtime.runner_for("echo"), runtime.runner_for("onJob")];
+    runtime.shutdown().await;
+    assert!(runners.iter().all(|runner| !runner.is_alive()));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cold_start_timeout_kills_the_attempt_and_recovers() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let dir = lazy_dir("start-timeout");
+    let (units, listener) = held_lazy_units(&dir, &["echo"], Duration::from_secs(2)).await;
+    let runtime = runtime_of_units(units);
+    let target = runtime
+        .http_target("demo-app", "us-central1", "echo")
+        .unwrap();
+    let request = {
+        let runtime = runtime.clone();
+        tokio::spawn(async move {
+            runtime
+                .invoke_http(&target, "GET", "/timeout", &[], &[])
+                .await
+        })
+    };
+    let mut timed_out = accept_hello(&listener).await;
+    let mut byte = [0];
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(10), timed_out.read(&mut byte))
+            .await
+            .unwrap()
+            .unwrap(),
+        0
+    );
+    let mut retry = accept_hello(&listener).await;
+    assert_eq!(lines_of(&dir.join("echo.starts")).len(), 2);
+    retry.write_all(b"R").await.unwrap();
+    assert_eq!(request.await.unwrap().unwrap().status, 200);
+    assert_eq!(
+        runtime
+            .history()
+            .iter()
+            .filter(|r| r.function == "echo" && r.outcome == "http 200")
+            .count(),
+        1
+    );
+    assert_eq!(lines_of(&dir.join("echo.starts")).len(), 2);
+    let runner = runtime.runner_for("echo");
+    runtime.shutdown().await;
+    assert!(!runner.is_alive());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn failed_cold_start_retries_and_delivers_the_event_once() {
+    use tokio::io::AsyncWriteExt;
+
+    let dir = lazy_dir("start-failure");
+    let (units, listener) = held_lazy_units(&dir, &["onJob"], RUNNER_HELLO_TIMEOUT).await;
+    let runtime = runtime_of_units(units);
+    runtime.publish("jobs", &[json!({"data": "QQ=="})]).unwrap();
+    let mut failed = accept_hello(&listener).await;
+    failed.write_all(b"F").await.unwrap();
+    let mut retry = accept_hello(&listener).await;
+    assert_eq!(lines_of(&dir.join("onJob.starts")).len(), 2);
+    assert!(lines_of(&dir.join("onJob.frames")).is_empty());
+    retry.write_all(b"R").await.unwrap();
+    runtime.await_idle(Duration::from_secs(20)).await.unwrap();
+    let frames = lines_of(&dir.join("onJob.frames"));
+    assert_eq!(frames.len(), 1);
+    assert!(frames[0].contains("QQ=="));
+    assert_eq!(
+        runtime
+            .history()
+            .iter()
+            .filter(|r| r.function == "onJob" && r.outcome == "ok")
+            .count(),
+        1
+    );
+    assert_eq!(lines_of(&dir.join("onJob.starts")).len(), 2);
+    let runner = runtime.runner_for("onJob");
+    runtime.shutdown().await;
+    assert!(!runner.is_alive());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[tokio::test]
 async fn an_unstarted_runner_is_down_without_being_dead_and_stops_quietly() {
     let runner = Runner::unstarted("[functions:api]");

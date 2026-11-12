@@ -18,6 +18,8 @@ Two recordings of the observation packet `PUBSUB-NEGCACHE` on a disposable Pub/S
 | A create whose body `name` equals the URL name does not clear the entry. | N4 |
 | The entry serves for at least 10.2 s from the start of the arming request. | N2a |
 
+Expiry uses the daemon’s logical clock. If the clock is frozen, advance it past the 10.35-second window, use another connection, or disable the cache to recover from a cached 404.
+
 ## Not linked to `productionExact`
 
 The link (owner line 2482) waits for a follow-up observation that settles the open questions below; until then `pubsub.restNegativeCache = "production"` is an explicit opt-in and `productionExact` leaves it off.

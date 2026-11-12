@@ -28,4 +28,4 @@ If the default port is busy, `up` starts without the UI; check the startup outpu
 - **Alerts:** publish Firebase alerts to functions that listen for them.
 - **Rules:** the newest 100 traced Firestore Security Rules decisions, with bounded expression results. Tracing starts with the UI or the first control-API read; a new ruleset clears the history. See [Security Rules](../security-rules/) for diagnostic limits.
 - **App Check:** registered apps and debug tokens.
-- **Runtime:** the virtual clock. Move it forward, or backwards with **Allow moving backwards**.
+- **Runtime:** the virtual clock. Move it forward, or backwards with **Allow moving backwards**. Under **Fault plan**, select a recipe for retrying a Functions event, duplicate delivery, delaying or timing out an attempt, or failing the first attempts, and enter its parameters. **Fill plan** puts the plan in the JSON editor; it does not install it. Review or edit the JSON and choose **Install** to apply it to the selected session. A parseable plan also offers copyable `fireemu/testing` and control API snippets for installing the same plan from a test; **Clear** removes the installed plan.

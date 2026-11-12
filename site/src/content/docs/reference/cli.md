@@ -236,6 +236,7 @@ options: every option of `up` (listed under up above); only --config and --fireb
 - Sources distinguish explicit values, defaults, `productionExact`, derived values, and unset keys.
 - When the runtime does not expose a value, the command uses its explicit file value, its schema default (marked `default (schema)`), or `(unset)` (`null` with source `unset` in JSON).
 - A key the configuration accepts but the daemon does not read (for example `bind`, `limits.catalog`, `firestore.textSearch.*`, `rules.staticLimitChecks`, `auth.enabled` and `trace.*`) has the source `accepted, no effect`: its value is shown as written, or `(unset)`, never as if it were in effect, and a configuration that sets one prints a `note:` line at start-up.
+- Secret-bearing values are masked as `[redacted]` in text and JSON: `pubsub.authentication.localBearerToken`, each `auth.apiKeys` value, `auth.customTokenSigners`, OIDC providers' `clientSecret` and App Check apps' `debugTokenSha256` entries. Other fields remain visible and nulls remain null.
 - `firebaseJson` shows the Firebase configuration file actually selected, including one chosen with `--firebase-json`.
 
 ## config lint
@@ -255,7 +256,7 @@ fireemu config lint --deny-ineffective --allow bind --allow 'firestore.textSearc
 - `--allow <key>` names a setting that may be present although it has no effect, for example a key you keep for a later release. `prefix.*` covers every key below `prefix`. The option can be repeated. Allowed settings are still listed, marked `allowed`, and do not fail the check.
 - `--allow-file <path>` reads allow-list entries from a file, one per line. The file must be UTF-8; a byte order mark and CRLF line endings are accepted, and any other encoding is a usage error (exit code 2). Blank lines and `#` comments (whole-line or trailing) are ignored. Use it when the list is long or should be reviewed in version control.
 - An entry that names no configuration key (a typo, or a table such as `trace` instead of `trace.*`) is a usage error with exit code 2, so a misspelt entry cannot silently allow nothing.
-- `--json` prints `config` (the file checked, or `null`), `ineffective` (each setting with `key`, `note` and `allowed`) and `denied` (the keys that fail under `--deny-ineffective`).
+- `--json` prints `config` (the file checked, or `null`), `ineffective` (each setting with `key`, `note` and `allowed`) and `denied` (the keys that fail under `--deny-ineffective`). It reports keys and notes, not configuration values.
 - Only the canonical configuration (`fireemu.toml` or `fireemu.json`) is checked. When none is found, the command says so and exits 0.
 
 ## config schema

@@ -34,22 +34,22 @@ These keys of the `hosting` object are honored:
 
 | Key | Behaviour |
 |---|---|
-| `public` | The directory served. Required. Files are opened through a retained handle to that directory; a symbolic link that leaves it, a nonregular file and a request path with a backslash, a colon or `..` are refused (answered as not found). |
+| `public` | The directory served. Required. Files are opened through a retained handle to that directory; a symbolic link that leaves it, a nonregular file and unsafe paths are refused. Under `strict`, eligible dot-segment paths redirect to their normalized path before file lookup; see [Profiles](#profiles). |
 | `ignore` | Glob patterns of files that are absent on every route, matched the way `firebase-tools` matches them when it chooses the files to deploy. `**/firebase-debug.log`, `**/firebase-debug.*.log` and `.firebase/*` are always ignored, because `firebase deploy` never uploads them. |
 | `redirects` | Checked in order before any file is served. A rule has `source`, `glob` or `regex`, a `destination` and a `type` (default 301). `:name` captures in a `source` fill the same names in the `destination`. The query string is kept. |
 | `rewrites` | Used when no file matches. `source`, `glob` or `regex` choose the request; the target is a `destination` file, a `function`, or a `run` service (see [Rewrites to functions](#rewrites-to-functions)). The first matching rule wins. |
-| `headers` | Rules with `source`, `glob` or `regex` and a `headers` list of `key` and `value`. They are added to responses for files and rewrites. |
+| `headers` | Rules with `source`, `glob` or `regex` and a `headers` list of `key` and `value`. They are added to responses for files and rewrites, subject to the profile-specific rules below; `strict` ignores a configured `Content-Encoding`. |
 | `cleanUrls` | `/about.html` redirects (301) to `/about`, and `/about` serves `about.html`. |
 | `trailingSlash` | `true` adds a trailing slash to directory URLs, `false` removes it (301), and unset leaves a directory URL without a slash redirecting to the one with it unless `cleanUrls` is on. |
 | `i18n` | `{ "root": "/locales" }` (any spelling of the slashes: `locales`, `/locales/`) serves `locales/<language>_<country>/…`, `locales/ALL_<country>/…`, `locales/<language>_ALL/…` and `locales/<language>/…` before the plain path, chosen from `Accept-Language` and the `X-Country-Code` header, or from the `firebase-language-override` and `firebase-country-override` cookies. |
 
 Behaviour of a request, in order:
 
-1. Requests for `/__/firebase/init.json` and `/__/firebase/init.js` are answered first: `init.json` holds the project ID and a non-secret local API key (`fireemu-local-only`), and `init.js?useEmulator=true` also points the Firebase SDKs at the emulators of this run (Authentication, Firestore, Functions, Storage and the Realtime Database, when they run). Under `emulator` they take precedence over a catch-all redirect; under `strict` they are answered after the redirects, as production answered (see [Profiles](#profiles)).
+1. Requests for `/__/firebase/init.json` and `/__/firebase/init.js` are reserved routes: `init.json` holds the project ID and a non-secret local API key (`fireemu-local-only`), and `init.js?useEmulator=true` also points the Firebase SDKs at the emulators of this run (Authentication, Firestore, Functions, Storage and the Realtime Database, when they run). Under `emulator` they take precedence over a catch-all redirect; under `strict` they are answered after the redirects, as production answered (see [Profiles](#profiles)).
 2. A matching entry of `redirects` answers with its status and a `Location`.
-3. A file is served when one matches, including `index.html` for a directory; `HEAD` is answered with the headers only. Responses carry `ETag`, `Last-Modified` and `Content-Length`, and the body is streamed from the open file. The `Content-Type` comes from the extension (compared without regard to case) in the table of `mime-types` 2.1.35 over `mime-db` 1.52.0, which is what the `firebase-tools` emulator uses, including its charsets (`application/javascript; charset=utf-8`, `text/css; charset=utf-8`, `image/svg+xml` without one). A compressible type also gets `Vary: Accept-Encoding`, as the emulator's compression does.
+3. A file is served when one matches, including `index.html` for a directory; `HEAD` is answered with the headers only. Identity bodies are streamed from the open file; under `strict`, eligible files may instead be buffered and served as gzip. Headers and content types depend on the profile: `emulator` uses the `mime-types` table and adds `Vary: Accept-Encoding` for compressible types, while `strict` uses the production-shaped headers and types described below.
 4. A matching entry of `rewrites` answers: a `destination` file is served with 200 (a rewrite to `/404.html` answers 404), and a `function` or `run` rule is forwarded to the local Functions runtime.
-5. Otherwise `404.html` from the public directory is served with status 404 or, without one, a built-in "Cannot GET" page.
+5. Otherwise `404.html` from the public directory is served with status 404 or, without one, a built-in page: a short fireemu stand-in under `strict`, and a "Cannot GET" page under `emulator`.
 
 `/__/firebase/<version>/<file>` (the hosted Firebase SDK scripts) is answered with 503, because Fireemu never downloads them: use a bundled SDK or a copy you serve yourself.
 
@@ -116,7 +116,7 @@ Some strict answers come from a reading of the recordings, not from an observati
 - App Hosting. `--only apphosting` is refused as deferred; see [Limitations](../../compatibility/limitations/).
 - Keys other than those in the table above are not acted on. `appAssociation: "AUTO"` generates the two association documents under `strict` only; a file you place in `public` is served like any other.
 - The hosted SDK scripts under `/__/firebase/<version>/`, deployed Cloud Run services and deployed functions (no live fallback).
-- A file with no extension, or an extension that `mime-types` does not know, is served as `application/octet-stream`. The `firebase-tools` emulator sends the literal text `false` as its `Content-Type` there, and production's behaviour was not recorded. The `Content-Type` of a custom header rule replaces the one Fireemu chooses.
+- Under `emulator`, a file with no extension or an unknown extension is served as `application/octet-stream`. Under `strict`, it is `text/plain; charset=utf-8`, or `text/html; charset=UTF-8` when compressed. The `Content-Type` of a custom header rule replaces the one Fireemu chooses.
 
 ## Changes in v0.47.0
 

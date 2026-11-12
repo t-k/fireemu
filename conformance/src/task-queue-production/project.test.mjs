@@ -27,7 +27,7 @@ test("a mask keeps the form of a time and of an id, never its value", () => {
   assert.equal(maskText("2026-11-11T09:01:37Z"), "TIME(f0,Z)");
   assert.equal(maskText("2026-11-11T09:01:37.5-08:00"), "TIME(f1,offset)");
   assert.equal(maskText("2026-11-11T09:01:37.500Z", { messageTimes: true }), "TIME(Z)");
-  assert.equal(maskText("1789000000.123456"), "UNIX(f6)");
+  assert.equal(maskText("1234567890.123456"), "UNIX(f6)");
   assert.equal(maskText("tasks/1234567890123456789"), "tasks/ID(19)");
   assert.equal(
     maskText("projects/fireemu-oracle-abc/queues/tqdefab12cd"),
@@ -105,7 +105,7 @@ test("headers keep every name sorted, the fixed values and the forms of the othe
     {
       "x-cloudtasks-queuename": "tqdefab12cd",
       "x-cloudtasks-taskname": "1234567890123456789",
-      "x-cloudtasks-tasketa": "1789000000.123456",
+      "x-cloudtasks-tasketa": "1234567890.123456",
       "x-cloudtasks-taskretrycount": "2",
       "content-length": "17",
       "content-type": "application/json",

@@ -34,7 +34,7 @@ const HEADERS = {
   "x-cloudtasks-taskname": "task-1",
   "x-cloudtasks-taskretrycount": "0",
   "x-cloudtasks-taskexecutioncount": "0",
-  "x-cloudtasks-tasketa": "1793788668.938251",
+  "x-cloudtasks-tasketa": "1234567890.938251",
   authorization: "Bearer secret.token.value",
   host: "internal.example",
   traceparent: "00-secret-trace",
@@ -128,7 +128,7 @@ test("a delivery prints a start frame before it works and an end frame after, an
     queueName: "tqretry" + SUFFIX,
     retryCount: 0,
     executionCount: 0,
-    scheduledTime: "1793788668.938251",
+    scheduledTime: "1234567890.938251",
     previousResponse: null,
     retryReason: null,
     hasAuth: false,
@@ -142,7 +142,7 @@ test("the request is described by name, with a value only for the headers that a
   assert.equal(request.path, "/");
   assert.deepEqual(request.headers.authorization, { scheme: "Bearer", segments: 3 });
   assert.equal(request.headers["user-agent"], "Google-Cloud-Tasks");
-  assert.equal(request.headers["x-cloudtasks-tasketa"], "1793788668.938251");
+  assert.equal(request.headers["x-cloudtasks-tasketa"], "1234567890.938251");
   assert.equal(request.headers["content-type"], "application/json");
   assert.equal(request.headers.host, null);
   assert.equal(request.headers.traceparent, null);

@@ -422,7 +422,7 @@
     "crates/fireemu-adapter-support/src/api_error.rs": "7583bb46a26daf2faa0e4f812c6e182a19fef23fed70baa4a3b5f6b24d3e9b01",
     "crates/fireemu-adapter-support/src/body.rs": "82fd961a9528a3bed69b4972cc0a8b282521b0f1420b54fbda89cffdf60d0ef4",
     "crates/fireemu-adapter-support/src/connection.rs": "874b2518d40ba40896c5a6eb3417372bbe54ad7686887548e0c08f9d735efe70",
-    "crates/fireemu-adapter-support/src/diagnostics/bundle.rs": "a0a2fedc19c9b0a3ec2156db89c1e3982e1fa385f50f2c68cdf8eeeb21bcab97",
+    "crates/fireemu-adapter-support/src/diagnostics/bundle.rs": "fbaf9ca6b6d89f7b8579f9a0b10f974a8db4c3ba020e13faf046d9a87825ad86",
     "crates/fireemu-adapter-support/src/diagnostics/html.rs": "bc6b5b237956d6e809f34fe8217ee43aa14b3047f6764c937016104a448c6e45",
     "crates/fireemu-adapter-support/src/diagnostics/mod.rs": "6f5ccc4189435b82dbd027ef34059c5da341a3973deb83e94c24264f2fff88b2",
     "crates/fireemu-adapter-support/src/diagnostics/redact.rs": "d94efddade221ac101faf0000296fd8ab4581df4a2ad0f6f562e46ca870aab5b",

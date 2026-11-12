@@ -211,6 +211,7 @@ const CONFIG_OPTIONS: &[OptionSpec] = &[
     opt(&["--deny-ineffective"], Value::None, "lint only: exit 1 when the configuration sets a key that is accepted but has no effect and no --allow entry covers it. Default: the report is informational and the exit code is 0."),
     opt(&["--allow"], Value::Required("<key>"), "lint only: a key (or prefix.* for every key below prefix) that may be set although it has no effect, for example a key kept for a later release. May be repeated. Default: none."),
     opt(&["--allow-file"], Value::Required("<path>"), "lint only: read --allow entries from a UTF-8 file (a byte order mark and CRLF line endings are accepted), one per line; blank lines and # comments are ignored."),
+    opt(&["--out"], Value::Required("<path>"), "`config schema` only: write the schema to this file, replacing a regular file atomically; a symbolic link is refused. Default: print it to standard output."),
 ];
 
 const EXPORT_OPTIONS: &[OptionSpec] = &[
@@ -290,7 +291,7 @@ impl Topic {
     const fn summary(self) -> &'static str {
         match self {
             Self::Init => "create fireemu.toml in the current directory",
-            Self::Config => "show every configuration key with its value and source, or lint for keys with no effect",
+            Self::Config => "show every configuration key with its value and source, lint for keys with no effect, or print the configuration schema",
             Self::Up => {
                 "start the emulators and keep them running until Ctrl-C (alias: emulators:start)"
             }
@@ -314,7 +315,7 @@ impl Topic {
     const fn synopsis(self) -> &'static str {
         match self {
             Self::Init => "  fireemu init [options]\n",
-            Self::Config => "  fireemu config show [--config <path>] [--firebase-json <path>] [--json]\n  fireemu config lint [--config <path>] [--firebase-json <path>] [--json] [--deny-ineffective] [--allow <key>]... [--allow-file <path>]\n",
+            Self::Config => "  fireemu config show [--config <path>] [--firebase-json <path>] [--json]\n  fireemu config lint [--config <path>] [--firebase-json <path>] [--json] [--deny-ineffective] [--allow <key>]... [--allow-file <path>]\n  fireemu config schema [--out <path>]\n",
             Self::Up => "  fireemu up [options]\n  fireemu emulators:start [options]\n",
             Self::Exec => "  fireemu exec [options] \"shell script\"\n  fireemu exec [options] -- <command...>\n  fireemu emulators:exec [options] \"shell script\"\n  fireemu emulators:exec [options] -- <command...>\n",
             Self::Export => "  fireemu emulators:export <dir> [options]\n",
@@ -325,7 +326,7 @@ impl Topic {
 
     const fn description(self) -> &'static str {
         match self {
-            Self::Config => "Loads the configuration files and defaults as up does, without the command-line overrides of up (--project, --only, the port flags), and without starting the emulators. Prints every schema leaf in schema order. Missing values are (unset), or null in JSON with source unset; values unavailable from the runtime use explicit file values or defaults marked default (schema).\n\n`config lint` loads the configuration the same way (a configuration the daemon refuses fails with the same message) and lists the keys it sets that the daemon accepts but does not read, with the note `up` prints for each. With --deny-ineffective it exits 1 when any such key is not covered by --allow or --allow-file, so a CI job can fail on a setting that does nothing. Allowed keys are listed and do not fail.",
+            Self::Config => "Loads the configuration files and defaults as up does, without the command-line overrides of up (--project, --only, the port flags), and without starting the emulators. Prints every schema leaf in schema order. Missing values are (unset), or null in JSON with source unset; values unavailable from the runtime use explicit file values or defaults marked default (schema).\n\n`config lint` loads the configuration the same way (a configuration the daemon refuses fails with the same message) and lists the keys it sets that the daemon accepts but does not read, with the note `up` prints for each. With --deny-ineffective it exits 1 when any such key is not covered by --allow or --allow-file, so a CI job can fail on a setting that does nothing. Allowed keys are listed and do not fail.\n\n`config schema` prints the JSON Schema this binary validates configuration with, byte for byte, offline, for an editor or a tool that must see the schema of the installed version. `fireemu init` of a released binary writes the schema URL of its release into the files it generates (a build from source writes the main location).",
             Self::Init => "Creates fireemu.toml in the current directory and prints the command to start with it. It never overwrites an existing file unless --force is given. An existing fireemu.json must be removed before creating fireemu.toml.",
             Self::Up => "Serves the selected emulators (Firestore, Auth, Storage and App Check; Functions when a codebase is configured, and with it Eventarc and Cloud Tasks; Pub/Sub when configured; the Realtime Database when configured) plus the control API, the Emulator Hub and the UI on loopback until Ctrl-C.",
             Self::Exec => "Starts the same emulators as `up`, runs the command with the emulator host environment variables (FIRESTORE_EMULATOR_HOST, FIREBASE_AUTH_EMULATOR_HOST, and so on) once every listener is bound, stops everything when the command exits, and exits with the command's status. On Unix, a command ended by signal n gives 128 + n, and SIGINT and SIGTERM are forwarded to it.\n\nWith \"shell script\" (the official form) the script is run by the system shell. With `--` the command is run as exactly that program and argv, without a shell. Everything after `--` belongs to the command, including --help; a `--help` inside the script text is script text.",
@@ -560,11 +561,9 @@ mod tests {
 
     #[test]
     fn the_init_export_and_doctor_tables_match_their_parsers() {
-        assert_table_matches_arms(
-            "config show",
-            CONFIG_OPTIONS,
-            &arm_flags(include_str!("main.rs"), "config_command"),
-        );
+        let mut config_arms = arm_flags(include_str!("main.rs"), "config_command");
+        config_arms.extend(arm_flags(include_str!("main.rs"), "config_schema_command"));
+        assert_table_matches_arms("config", CONFIG_OPTIONS, &config_arms);
         assert_table_matches_arms(
             "init",
             INIT_OPTIONS,

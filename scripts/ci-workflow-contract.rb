@@ -4,6 +4,7 @@ require "json"
 require "yaml"
 require "rbconfig"
 require_relative "actions-security-contract"
+require_relative "release-marker-contract"
 
 ROOT = File.expand_path("..", __dir__)
 ActionsSecurityContract.check!(ROOT)
@@ -161,6 +162,9 @@ end
   assert(cached.empty?, "release #{job} must not restore a cache")
 end
 release_build = release.dig("jobs", "build")
+# Only the binary the release workflow publishes may carry FIREEMU_RELEASE_BUILD=1 (see the module).
+ReleaseMarkerContract.check!(ROOT)
+raise "Release marker regression fixtures failed" unless system(RbConfig.ruby, File.join(__dir__, "release-marker-contract.test.rb"))
 release_build_runs = release_build.fetch("steps").map { |step| step["run"] }.compact.join("\n")
 assert(!release_build_runs.include?("cargo nextest"), "release platform builds must not duplicate the workspace test suite")
 assert(release.dig("jobs", "publish", "needs").include?("test"), "release publish must depend on the dedicated test job")
@@ -335,6 +339,9 @@ package_runs = jobs.fetch("package").fetch("steps").map { |step| step["run"] }.c
 types_consumer_command = "node --test npm/scripts/types-consumer.test.mjs"
 assert(package_runs.include?(types_consumer_command), "package CI must type-check actual packed public subpaths")
 assert(package_runs.index("pnpm -C ui install --frozen-lockfile") < package_runs.index(types_consumer_command), "type consumers must use the installed pinned UI TypeScript compiler")
+types_exports_command = "node --test npm/scripts/types-exports.test.mjs"
+assert(package_runs.include?(types_exports_command), "package CI must check that the declared exports match the runtime exports")
+assert(package_runs.index("pnpm -C ui install --frozen-lockfile") < package_runs.index(types_exports_command), "the export parity test must use the installed pinned UI TypeScript compiler")
 release_source = File.read(File.join(ROOT, ".github", "workflows", "release.yml"))
 assert(!release_source.include?("NPM_TOKEN"), "release publish must authenticate through Trusted Publishing")
 assert(!release_source.include?("NODE_AUTH_TOKEN"), "release publish must not inject a registry token")

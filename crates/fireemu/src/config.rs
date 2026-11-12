@@ -7833,8 +7833,17 @@ mod tests {
             let error = read("strict", bad.clone()).unwrap_err();
             assert!(error.0.contains("storage.signedUrlKeys"), "{bad}: {error}");
         }
-        let many: Vec<String> = (0..33).map(|i| format!("k{i}.pem")).collect();
-        assert!(read("strict", json!(many)).is_err());
+        let limit = fireemu_adapter_http::storage_signature::MAX_KEYS;
+        let at_limit: Vec<String> = (0..limit).map(|i| format!("k{i}.pem")).collect();
+        assert_eq!(
+            read("strict", json!(at_limit))
+                .unwrap()
+                .storage_signed_url_keys
+                .len(),
+            limit
+        );
+        let over: Vec<String> = (0..=limit).map(|i| format!("k{i}.pem")).collect();
+        assert!(read("strict", json!(over)).is_err());
     }
 
     #[test]

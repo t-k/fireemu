@@ -8,10 +8,23 @@ require_relative "release-marker-contract"
 
 ROOT = File.expand_path("..", __dir__)
 ActionsSecurityContract.check!(ROOT)
+raise "Heavy verification contract failed" unless system(RbConfig.ruby, File.join(__dir__, "heavy-verification-contract.rb"))
 raise "Actions security regression fixtures failed" unless system(RbConfig.ruby, File.join(__dir__, "actions-security-contract.test.rb"))
 
 def assert(condition, message)
   raise message unless condition
+end
+
+tracked_files = IO.popen(["git", "-C", ROOT, "ls-files", "-z"], &:read).split("\0")
+assert($?.success?, "cannot list tracked files")
+raise "critical-selection.py --check failed" unless system("python3", File.join(ROOT, "tools/ci/critical-selection.py"), "--check", File.join(ROOT, "tools/ci/mutation-critical.txt"), ROOT)
+regex = IO.popen(["python3", File.join(ROOT, "tools/ci/critical-selection.py"), "--regex", File.join(ROOT, "tools/ci/mutation-critical.txt")], &:read).to_s.strip
+assert(!regex.empty? && !regex.match?(/\s/), "the critical selection must be one regex without spaces")
+File.readlines(File.join(ROOT, "tools/ci/mutation-survivors.txt"), chomp: true).each do |line|
+  next if line.strip.empty? || line.lstrip.start_with?("#")
+  match = /\A(.+?): (.+)\z/.match(line)
+  assert(match && !line.match?(/:\d+:\d+:/), "invalid survivor key: #{line}")
+  assert(tracked_files.include?(match[1]) && File.file?(File.join(ROOT, match[1])), "survivor path does not exist: #{match[1]}")
 end
 
 def load_workflow(name)

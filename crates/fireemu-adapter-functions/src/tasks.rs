@@ -47,6 +47,19 @@ pub struct Task {
     pub schedule_time: Option<String>,
     /// The abort deadline, in seconds; `dispatchDeadline` without its trailing `s`, else 60.
     pub dispatch_deadline_seconds: u64,
+    /// `httpRequest.oidcToken`: the service account and audience the task names. Cloud Tasks delivers an
+    /// `Authorization: Bearer` OIDC token for them; the strict profile delivers an emulator-issued token of the same
+    /// shape.
+    pub oidc: Option<TaskOidc>,
+}
+
+/// The identity a task asks Cloud Tasks to deliver as (`httpRequest.oidcToken`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskOidc {
+    /// `serviceAccountEmail`.
+    pub service_account_email: String,
+    /// `audience`; the task's URL when the task names none.
+    pub audience: String,
 }
 
 impl Task {
@@ -231,6 +244,20 @@ pub fn accept(
         .and_then(Value::as_str)
         .and_then(|d| d.trim_end_matches('s').parse::<u64>().ok())
         .unwrap_or(60);
+    let oidc = http
+        .get("oidcToken")
+        .and_then(Value::as_object)
+        .and_then(|token| {
+            let email = token.get("serviceAccountEmail")?.as_str()?;
+            let audience = token
+                .get("audience")
+                .and_then(Value::as_str)
+                .filter(|audience| !audience.is_empty());
+            Some(TaskOidc {
+                service_account_email: email.to_owned(),
+                audience: audience.map_or_else(|| url.clone(), str::to_owned),
+            })
+        });
     Ok(Task {
         name,
         url,
@@ -242,7 +269,38 @@ pub fn accept(
             .and_then(Value::as_str)
             .map(str::to_owned),
         dispatch_deadline_seconds,
+        oidc,
     })
+}
+
+/// The `Authorization` value of a strict delivery for a task that named an `oidcToken`: `Bearer` and a three segment
+/// token with the claims of the identity token Cloud Tasks signs for a service account (`iss`, `aud`, `sub`, `email`,
+/// `email_verified`, `iat`, `exp`). The emulator issues it unsigned (`alg: none`, an empty third segment): it has
+/// no key Google verifies, so only the scheme and the three segments are production's, never the signature or the values.
+#[must_use]
+pub fn oidc_authorization(oidc: &TaskOidc, now_millis: u64) -> String {
+    let issued = now_millis / 1000;
+    let subject = oidc
+        .service_account_email
+        .bytes()
+        .fold(1_u64, |hash, byte| {
+            hash.wrapping_mul(1_099_511_628_211)
+                .wrapping_add(u64::from(byte))
+        })
+        % 10_000_000_000_000_000_000;
+    let claims = json!({
+        "aud": oidc.audience,
+        "email": oidc.service_account_email,
+        "email_verified": true,
+        "exp": issued + 3600,
+        "iat": issued,
+        "iss": "https://accounts.google.com",
+        "sub": format!("{subject:020}"),
+    });
+    format!(
+        "Bearer {}",
+        fireemu_core_auth::jwt::encode_payload_with(&claims.to_string(), None)
+    )
 }
 
 /// The response the Admin SDK expects from a successful enqueue.
@@ -322,6 +380,18 @@ fn service_owned(name: &str) -> bool {
             .any(|prefix| name.starts_with(prefix))
 }
 
+/// Marks a strict dispatch carrying the daemon-issued identity token; public invoke entry points remove caller-supplied copies.
+pub const TASK_IDENTITY_HEADER: &str = "x-fireemu-task-identity";
+
+/// Removes caller-supplied task identity markers while preserving the other headers.
+pub fn without_task_identity(headers: &[(String, String)]) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .filter(|(name, _)| !name.eq_ignore_ascii_case(TASK_IDENTITY_HEADER))
+        .cloned()
+        .collect()
+}
+
 /// The headers one dispatch carries (`taskQueue.js:192`).
 ///
 /// `attempt` is 1-based, so the first delivery reports `X-CloudTasks-TaskRetryCount: 0`.
@@ -373,6 +443,14 @@ pub fn dispatch_headers(
     ];
     if matches!(shape, DispatchShape::Production { .. }) {
         out.push(("User-Agent".to_owned(), "Google-Cloud-Tasks".to_owned()));
+        // The task's own Authorization header is replaced by the identity token it asked for.
+        if let Some(oidc) = &task.oidc {
+            out.push((
+                "Authorization".to_owned(),
+                oidc_authorization(oidc, now_millis),
+            ));
+            out.push((TASK_IDENTITY_HEADER.to_owned(), "1".to_owned()));
+        }
     }
     if let Some(status) = previous_response {
         out.push((
@@ -380,13 +458,36 @@ pub fn dispatch_headers(
             status.to_string(),
         ));
     }
+    // Production sends an empty retry reason on every retry (recorded on five of the six attempts of one task, and on the
+    // retry after a timeout).
+    if attempt > 1 && matches!(shape, DispatchShape::Production { .. }) {
+        out.push(("X-CloudTasks-TaskRetryReason".to_owned(), String::new()));
+    }
+    let mut forged = Vec::new();
     for (k, v) in &task.headers {
+        if k.eq_ignore_ascii_case(TASK_IDENTITY_HEADER) {
+            continue;
+        }
+        // The identity token the task asked for replaces any Authorization header of its own.
+        if matches!(shape, DispatchShape::Production { .. })
+            && task.oidc.is_some()
+            && k.eq_ignore_ascii_case("authorization")
+        {
+            continue;
+        }
         if matches!(shape, DispatchShape::Production { .. }) && service_owned(k) {
+            // A task's own `X-CloudTasks-*` header reaches the function in front of the service's (recorded: a task that
+            // set `X-CloudTasks-TaskName` was delivered as one header whose value was both, the task's first); the other
+            // service-owned names are dropped or replaced.
+            if k.to_ascii_lowercase().starts_with("x-cloudtasks-") {
+                forged.push((k.clone(), v.clone()));
+            }
             continue;
         }
         out.retain(|(existing, _)| !existing.eq_ignore_ascii_case(k));
         out.push((k.clone(), v.clone()));
     }
+    out.splice(0..0, forged);
     out
 }
 
@@ -419,9 +520,40 @@ fn decode_base64(text: &str) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{accept, dispatch_headers, queue_key, route, DispatchShape, Route};
+    use super::{
+        accept, dispatch_headers, oidc_authorization, queue_key, route, without_task_identity,
+        DispatchShape, Route, Task, TaskOidc, TASK_IDENTITY_HEADER,
+    };
     use fireemu_core_functions::manifest::TaskRetryConfig;
     use serde_json::json;
+    use serde_json::Value;
+
+    #[test]
+    fn task_identity_filter_removes_mixed_case_and_preserves_order() {
+        let headers = vec![
+            ("first".into(), "a".into()),
+            ("X-Fireemu-Task-Identity".into(), "1".into()),
+            ("second".into(), "b".into()),
+            (TASK_IDENTITY_HEADER.into(), "yes".into()),
+        ];
+        assert_eq!(
+            without_task_identity(&headers),
+            vec![("first".into(), "a".into()), ("second".into(), "b".into())]
+        );
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn task_identity_filter_preserves_other_headers(entries in proptest::collection::vec((proptest::bool::ANY, "[a-z]{0,12}", "[a-z]{0,12}"), 0..40)) {
+            let headers: Vec<(String, String)> = entries.into_iter().map(|(marker, name, value)| {
+                (if marker { "X-Fireemu-Task-Identity".to_owned() } else { name }, value)
+            }).collect();
+            let result = without_task_identity(&headers);
+            proptest::prop_assert!(result.iter().all(|(name, _)| !name.eq_ignore_ascii_case(TASK_IDENTITY_HEADER)));
+            let expected: Vec<_> = headers.into_iter().filter(|(name, _)| !name.eq_ignore_ascii_case(TASK_IDENTITY_HEADER)).collect();
+            proptest::prop_assert_eq!(result, expected);
+        }
+    }
 
     /// Standard base64 with padding.
     fn b64(bytes: &[u8]) -> String {
@@ -806,8 +938,8 @@ mod tests {
     /// `X-AppEngine-*` as ignored or replaced (HttpRequest.headers). Its request-header guide says
     /// the `X-CloudTasks-*` names are replaced by the service's own values. Only the user agent
     /// was recorded (the create answer echoed `Google-Cloud-Tasks`); the `X-CloudTasks-*`
-    /// replacement, the dropped `X-Google-*` and the names without a delivery (`TaskRetryReason`)
-    /// are UNRECORDED and follow the documentation.
+    /// replacement and the dropped `X-Google-*` follow the documentation and the recording of 2026-11-11 (a task's own
+    /// `X-CloudTasks-*` header reaches the function in front of the service's).
     #[test]
     fn the_production_shape_keeps_the_service_headers_whatever_the_task_sets_and_the_official_shape_does_not(
     ) {
@@ -832,15 +964,28 @@ mod tests {
                 1_700_000_000_123,
                 DispatchShape::Production { queue: "q" },
             );
-            assert_eq!(
-                count(&production, name),
-                1,
-                "{name}: one header of that name in production"
-            );
-            assert!(
-                production.iter().all(|(_, v)| v != value),
-                "{name}: the task's value is not delivered in production"
-            );
+            if name.to_ascii_lowercase().starts_with("x-cloudtasks-") {
+                // Recorded: the task's header reaches the function in front of the service's, so the function sees
+                // both (Node joins them as `<task's>, <service's>`).
+                let values: Vec<&str> = production
+                    .iter()
+                    .filter(|(n, _)| n.eq_ignore_ascii_case(name))
+                    .map(|(_, v)| v.as_str())
+                    .collect();
+                assert_eq!(values.len(), 2, "{name}: the task's and the service's");
+                assert_eq!(values[0], value, "{name}: the task's value comes first");
+                assert_ne!(values[1], value, "{name}: the service's value follows");
+            } else {
+                assert_eq!(
+                    count(&production, name),
+                    1,
+                    "{name}: one header of that name in production"
+                );
+                assert!(
+                    production.iter().all(|(_, v)| v != value),
+                    "{name}: the task's value is not delivered in production"
+                );
+            }
             assert_eq!(header(&production, "X-Custom"), Some("kept"), "{name}");
             let official = dispatch_headers(
                 &task,
@@ -881,13 +1026,18 @@ mod tests {
             1_700_000_000_123,
             DispatchShape::Production { queue: "q" },
         );
+        // The service's value is the last of the header's lines (a task's own comes in front of it).
+        let last = |name: &str| {
+            headers
+                .iter()
+                .rev()
+                .find(|(n, _)| n.eq_ignore_ascii_case(name))
+                .map(|(_, v)| v.as_str())
+        };
         assert_eq!(header(&headers, "User-Agent"), Some("Google-Cloud-Tasks"));
-        assert_eq!(header(&headers, "X-CloudTasks-QueueName"), Some("q"));
-        assert_eq!(
-            header(&headers, "X-CloudTasks-TaskETA"),
-            Some("1700000000.123000")
-        );
-        assert_eq!(header(&headers, "X-CloudTasks-TaskRetryCount"), Some("2"));
+        assert_eq!(last("X-CloudTasks-QueueName"), Some("q"));
+        assert_eq!(last("X-CloudTasks-TaskETA"), Some("1700000000.123000"));
+        assert_eq!(last("X-CloudTasks-TaskRetryCount"), Some("2"));
     }
 
     /// UNRECORDED: the documentation lists `X-CloudTasks-TaskPreviousResponse` as present only after
@@ -904,7 +1054,12 @@ mod tests {
             1,
             DispatchShape::Production { queue: "q" },
         );
-        assert_eq!(header(&first, "X-CloudTasks-TaskPreviousResponse"), None);
+        // Only the task's own header is there (the service sends none on a first delivery).
+        assert_eq!(
+            header(&first, "X-CloudTasks-TaskPreviousResponse"),
+            Some("500")
+        );
+        assert_eq!(count(&first, "X-CloudTasks-TaskPreviousResponse"), 1);
         let retried = dispatch_headers(
             &task,
             "k",
@@ -914,9 +1069,15 @@ mod tests {
             1,
             DispatchShape::Production { queue: "q" },
         );
+        let previous: Vec<&str> = retried
+            .iter()
+            .filter(|(n, _)| n.eq_ignore_ascii_case("X-CloudTasks-TaskPreviousResponse"))
+            .map(|(_, v)| v.as_str())
+            .collect();
         assert_eq!(
-            header(&retried, "X-CloudTasks-TaskPreviousResponse"),
-            Some("503")
+            previous,
+            ["500", "503"],
+            "the task's value in front of the service's"
         );
         let official = dispatch_headers(&task, "k", 1, 0, None, 1, DispatchShape::Official);
         assert_eq!(
@@ -972,5 +1133,183 @@ mod tests {
         };
         assert!(!budgeted.exhausted(9, 4_000));
         assert!(budgeted.exhausted(9, 6_000));
+    }
+
+    #[test]
+    fn production_sends_an_empty_retry_reason_from_the_second_delivery_on_and_the_official_emulator_never(
+    ) {
+        let task = accept(
+            "demo",
+            "us-central1",
+            "onJob",
+            "http://127.0.0.1:5001/demo/us-central1/onJob",
+            &enqueue_body(),
+            7,
+        )
+        .expect("accepted");
+        let reason = |attempt: u32, shape: DispatchShape<'_>| {
+            dispatch_headers(
+                &task,
+                "queue:demo-us-central1-onJob",
+                attempt,
+                attempt - 1,
+                None,
+                1_700_000_000_000,
+                shape,
+            )
+            .into_iter()
+            .find(|(k, _)| k == "X-CloudTasks-TaskRetryReason")
+            .map(|(_, v)| v)
+        };
+        let production = || DispatchShape::Production { queue: "onJob" };
+        assert_eq!(reason(1, production()), None);
+        assert_eq!(reason(2, production()), Some(String::new()));
+        assert_eq!(reason(3, production()), Some(String::new()));
+        for attempt in 1..=3 {
+            assert_eq!(reason(attempt, DispatchShape::Official), None, "{attempt}");
+        }
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn production_delivers_the_identity_token_a_task_asked_for_as_a_three_segment_bearer() {
+        let body = json!({"task": {"httpRequest": {
+            "url": "", "body": "e30=",
+            "headers": {"Authorization": "Bearer forged", "X-Own": "1", "X-Fireemu-Task-Identity": "1"},
+            "oidcToken": {"serviceAccountEmail": "sa@example.test", "audience": "https://aud.example.test"},
+        }}});
+        let task = accept(
+            "demo",
+            "us-central1",
+            "onJob",
+            "http://127.0.0.1:5001/demo/us-central1/onJob",
+            &body,
+            7,
+        )
+        .expect("accepted");
+        assert_eq!(
+            task.oidc,
+            Some(TaskOidc {
+                service_account_email: "sa@example.test".to_owned(),
+                audience: "https://aud.example.test".to_owned()
+            })
+        );
+        let headers = |shape: DispatchShape<'_>, task: &Task| {
+            dispatch_headers(
+                task,
+                "queue:demo-us-central1-onJob",
+                1,
+                0,
+                None,
+                1_700_000_000_000,
+                shape,
+            )
+        };
+        let production = headers(DispatchShape::Production { queue: "onJob" }, &task);
+        assert_eq!(
+            production
+                .iter()
+                .filter(|(k, _)| k.eq_ignore_ascii_case(TASK_IDENTITY_HEADER))
+                .map(|(_, v)| v.as_str())
+                .collect::<Vec<_>>(),
+            ["1"]
+        );
+        let authorization: Vec<&str> = production
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(authorization.len(), 1, "the task's own header is replaced");
+        let token = authorization[0].strip_prefix("Bearer ").expect("a Bearer");
+        assert_eq!(token.split('.').count(), 3);
+        let claims = fireemu_core_auth::jwt::decode_unsigned(token).expect("decodes");
+        assert_eq!(claims.sub().map(str::len), Some(20));
+        // The subject is a stable number of the identity: not zero, the same for the same account, another for another one.
+        let subject = |email: &str| {
+            let other = TaskOidc {
+                service_account_email: email.to_owned(),
+                audience: "a".to_owned(),
+            };
+            let token = oidc_authorization(&other, 1_700_000_000_000);
+            let payload = fireemu_core_auth::jwt::base64url_decode(
+                token
+                    .strip_prefix("Bearer ")
+                    .unwrap()
+                    .split('.')
+                    .nth(1)
+                    .unwrap(),
+            )
+            .unwrap();
+            serde_json::from_slice::<Value>(&payload).unwrap()["sub"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        assert_eq!(subject("sa@example.test"), subject("sa@example.test"));
+        assert_ne!(subject("sa@example.test"), subject("other@example.test"));
+        assert_ne!(subject("sa@example.test"), "0".repeat(20));
+        assert!(subject("sa@example.test")
+            .bytes()
+            .all(|b| b.is_ascii_digit()));
+        assert!(
+            subject("sa@example.test")
+                .chars()
+                .take(10)
+                .any(|c| c != '0'),
+            "a hash, not a small number"
+        );
+        let payload =
+            fireemu_core_auth::jwt::base64url_decode(token.split('.').nth(1).unwrap()).unwrap();
+        let payload: Value = serde_json::from_slice(&payload).unwrap();
+        assert_eq!(payload["aud"], "https://aud.example.test");
+        assert_eq!(payload["email"], "sa@example.test");
+        assert_eq!(payload["iss"], "https://accounts.google.com");
+        assert_eq!(payload["iat"], 1_700_000_000_u64);
+        assert_eq!(payload["exp"], 1_700_003_600_u64);
+        assert!(production.iter().any(|(k, v)| k == "X-Own" && v == "1"));
+        // The official emulator keeps the task's own header and adds none.
+        let official = headers(DispatchShape::Official, &task);
+        assert!(!official
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case(TASK_IDENTITY_HEADER)));
+        let official: Vec<&str> = official
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(official, ["Bearer forged"]);
+        // A task that named no identity gets no Authorization header from Cloud Tasks.
+        let mut anonymous = task.clone();
+        anonymous.oidc = None;
+        anonymous.headers.remove("Authorization");
+        anonymous
+            .headers
+            .insert("X-Fireemu-Task-Identity".to_owned(), "1".to_owned());
+        let production = headers(DispatchShape::Production { queue: "onJob" }, &anonymous);
+        assert!(!production
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("authorization")));
+        assert!(!production
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case(TASK_IDENTITY_HEADER)));
+        let official_anonymous = headers(DispatchShape::Official, &anonymous);
+        assert!(!official_anonymous
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case(TASK_IDENTITY_HEADER)));
+        // No audience: the URL.
+        let body = json!({"task": {"httpRequest": {"url": "", "body": "e30=", "oidcToken": {"serviceAccountEmail": "sa@example.test"}}}});
+        let task = accept(
+            "demo",
+            "us-central1",
+            "onJob",
+            "http://127.0.0.1:5001/demo/us-central1/onJob",
+            &body,
+            8,
+        )
+        .unwrap();
+        assert_eq!(
+            task.oidc.unwrap().audience,
+            "http://127.0.0.1:5001/demo/us-central1/onJob"
+        );
     }
 }

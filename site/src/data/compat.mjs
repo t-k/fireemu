@@ -142,6 +142,11 @@ export const AREAS = {
 		title: 'Scheduled functions',
 		covers: 'Schedule grammars, time zones and daylight saving time, delivery to v1 and v2 functions, retries, deadlines and overlap.',
 	},
+	'TASK-QUEUE-FUNCTIONS': {
+		product: 'Cloud Functions',
+		title: 'Task queue functions',
+		covers: 'Node.js v2 onTaskDispatched functions and their Cloud Tasks queues: createTask answers and refusals, task names and deduplication, schedule times and dispatch deadlines, the request a function receives, retries and backoff, and concurrency limits. Rate limits, queue settings and the end of the name reuse window are not compared.',
+	},
 	PUBSUB: {
 		product: 'Cloud Pub/Sub',
 		title: 'Pub/Sub',
@@ -179,7 +184,7 @@ export function productSurfaceRows(contract) {
 }
 
 const AREA_STATUS = { COMPAT_VERIFIED: 'Verified against production', IN_PROGRESS: 'In progress', IMPLEMENTING: 'In progress' };
-const CONDITION_STATUSES = new Set(['VERIFIED', 'KNOWN_DIFFERENCE_APPROVED', 'UNVERIFIED', 'PRODUCTION_RECORDED', 'OPEN', 'NOT_COMPARED']);
+const CONDITION_STATUSES = new Set(['VERIFIED', 'KNOWN_DIFFERENCE_APPROVED', 'UNVERIFIED', 'PRODUCTION_RECORDED', 'OPEN', 'NOT_COMPARED', 'PLANNED']);
 
 function differenceTexts(record) {
 	const texts = [];

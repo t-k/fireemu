@@ -1,0 +1,1924 @@
+{
+  "kind": "task-queue-comparison-v1",
+  "schemaVersion": 1,
+  "left": {
+    "alias": "pass-1",
+    "corpusSha256": "899fd699884992c7f96f8437d749237f16bbeafcc75ee5d41683373a741579e9"
+  },
+  "right": {
+    "alias": "pass-2",
+    "corpusSha256": "899fd699884992c7f96f8437d749237f16bbeafcc75ee5d41683373a741579e9"
+  },
+  "tolerance": {
+    "gapMs": 1500,
+    "firstMs": 1500
+  },
+  "layoutRules": [
+    {
+      "id": "volatile-edge-header",
+      "what": "x-client-data is added to some deliveries by the front end and not to others (names set of one delivery, 16 or 17 names)",
+      "rows": 6
+    },
+    {
+      "id": "eta-digits",
+      "what": "X-CloudTasks-TaskETA is a Unix time with three to seven fractional digits (a float printed without trailing zeros)",
+      "rows": 50
+    },
+    {
+      "id": "numeric-id-length",
+      "what": "a generated task id is a decimal number of 19 or 20 digits",
+      "rows": 5
+    }
+  ],
+  "knownDifferences": [
+    {
+      "id": "KD-OBSERVATION-WINDOW",
+      "cases": ["window-six"],
+      "part": "deliveries",
+      "ruling": 16,
+      "what": "A queue that retries a hundred times is observed for as long as the run lasts (45 and 44 attempts in the two recordings, 20 in the committed replay), so the deliveries of the two sides are compared up to the shorter side, which must hold at least 18 attempts: the first eleven gaps follow the declared schedule and the gaps from the twelfth on are 4, 8 and 10 s in production and in strict under productionExact. Which gaps follow after the last one observed, and how the growth depends on the declared maxBackoff, are not recorded.",
+      "paths": [],
+      "window": {
+        "minAttempts": 18
+      },
+      "rows": 1
+    }
+  ],
+  "properties": [
+    {
+      "id": "conc1-max-overlap",
+      "what": "a queue with maxConcurrentDispatches 1 runs one delivery at a time",
+      "left": 1,
+      "right": 1,
+      "verdict": "MATCH"
+    },
+    {
+      "id": "conc2-max-overlap",
+      "what": "a queue with maxConcurrentDispatches 2 runs two deliveries at a time, and does run two",
+      "left": 2,
+      "right": 2,
+      "verdict": "MATCH"
+    }
+  ],
+  "summary": {
+    "structure": {
+      "MATCH_LAYOUT": 31,
+      "KNOWN_DIFFERENCE": 1,
+      "MATCH": 90
+    },
+    "admission": {
+      "MATCH": 121,
+      "MATCH_LAYOUT": 1
+    },
+    "deliveries": {
+      "MATCH_LAYOUT": 31,
+      "KNOWN_DIFFERENCE": 1,
+      "MATCH": 90
+    },
+    "timing": {
+      "WITHIN": 105,
+      "NOT_COMPARED": 17
+    }
+  },
+  "rows": [
+    {
+      "case": "retry-ladder",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "retry-exhaust",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "limit-two",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "window-six",
+      "structure": "KNOWN_DIFFERENCE",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "KNOWN_DIFFERENCE",
+          "knownDifferences": ["KD-OBSERVATION-WINDOW"]
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      },
+      "observationWindow": {
+        "attempts": {
+          "left": 45,
+          "right": 44
+        },
+        "compared": 44
+      }
+    },
+    {
+      "case": "dead-15",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "conc1-a",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "conc1-b",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "conc1-c",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "conc1-d",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "conc2-a",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "conc2-b",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "conc2-c",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "conc2-d",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "conc2-e",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "rate-a",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "rate-b",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "rate-c",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "rate-d",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "rate-e",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "rate-f",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "rate-g",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "rate-h",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "NOT_COMPARED"
+      }
+    },
+    {
+      "case": "env-default",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "env-named",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "env-headers",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "env-utf8",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "env-unordered",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "env-minimal",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "env-large",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "env-view-full",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "sch-past",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "sch-now",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "sch-20s",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "sch-nanos",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "sch-offset",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "sch-30d-less",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "sch-30d-more",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "sch-31d",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "sch-year-9999",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "sch-text",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "sch-no-zone",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "sch-leap-second",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "err-no-task",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "err-no-http",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "err-unknown-field",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "err-queue-missing",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "id-space",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "id-slash",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "id-empty",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "id-dot",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "id-punct-ok",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "id-500",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "id-501",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "id-other-queue",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "id-other-project",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "dl-14s",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "dl-15s",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "dl-1800s",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "dl-1801s",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "dl-fraction",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "dl-bare",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "dl-negative",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "dl-zero",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "size-1000k",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "size-1100k",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-01",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-02",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-03",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-04",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-05",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-06",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-07",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-08",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-09",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-10",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-11",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-12",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-13",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-14",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-15",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-16",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-17",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-18",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-19",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-20",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-21",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-22",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH_LAYOUT"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-23",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-24",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-25",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-26",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-27",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-28",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-29",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-30",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-31",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-32",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-33",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-34",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-35",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "pw-36",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "dup-first",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "dup-sched",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "dup-sched-again",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "get-dup-sched",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "del-dup-sched",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "del-dup-sched-again",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "dup-sched-after-delete",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "dup-other-queue",
+      "structure": "MATCH_LAYOUT",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH_LAYOUT"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "del-missing",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "dup-first-after-done",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "get-dup-first",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "del-dup-first",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "queue-tqdef",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "queue-tqretry",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "queue-tqlimit",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "queue-tqwindow",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "queue-tqconc1",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "queue-tqconc2",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "queue-tqrate",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "queue-tqdead",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    },
+    {
+      "case": "queue-absent",
+      "structure": "MATCH",
+      "parts": {
+        "admission": {
+          "verdict": "MATCH"
+        },
+        "deliveries": {
+          "verdict": "MATCH"
+        }
+      },
+      "timing": {
+        "verdict": "WITHIN"
+      }
+    }
+  ],
+  "digest": "aac42ebc8e2e483d0cd2aa7bcf3ed6041ec947d506693cbbee0aead86c4cea06"
+}

@@ -3375,6 +3375,68 @@ fn fresh_nonce() -> u64 {
     }
 }
 
+/// The configuration's defaults for what the discovered manifest does not declare: the scheduler's time zone and,
+/// under `functions.taskRetryDefaults` `production`, a task queue's `maxAttempts`.
+fn apply_config_defaults(manifest_json: &mut serde_json::Value, cfg: &RuntimeConfig) {
+    if let Some(tz) = &cfg.scheduler_default_time_zone {
+        apply_default_time_zone(manifest_json, tz);
+    }
+    if cfg.functions_task_retry_defaults == crate::config::TaskRetryDefaults::Production {
+        apply_task_retry_defaults(manifest_json);
+    }
+}
+
+/// The scheduler's rule for a finished task's name, from `functions.taskNameReuse`.
+fn task_name_reuse(
+    mode: crate::config::TaskNameReuse,
+) -> fireemu_adapter_functions::tasks_production::NameReuse {
+    use crate::config::TaskNameReuse;
+    use fireemu_adapter_functions::tasks_production::NameReuse;
+    match mode {
+        TaskNameReuse::Retained => NameReuse::Retained,
+        TaskNameReuse::Immediate => NameReuse::Immediate,
+        // Production keeps a name for about an hour (documented; its expiry was not observed).
+        TaskNameReuse::Production => NameReuse::Window(std::time::Duration::from_secs(3600)),
+    }
+}
+
+/// The `maxAttempts` Cloud Tasks gave a queue whose function declared none: the default queue read back in both
+/// TASK-QUEUE-FUNCTIONS recordings (2026-11-11) had `maxAttempts` 100, `minBackoff` 0.100 s, `maxBackoff` 3600 s and
+/// `maxDoublings` 16, so only the number of attempts differs from the official emulator's defaults.
+const PRODUCTION_TASK_MAX_ATTEMPTS: u64 = 100;
+
+/// Fills `retryConfig.maxAttempts` of every task queue function that does not declare it (`functions.taskRetryDefaults`
+/// `production`). A declared value, `0` included, is kept.
+fn apply_task_retry_defaults(manifest: &mut serde_json::Value) {
+    let Some(functions) = manifest
+        .get_mut("functions")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    for function in functions {
+        let Some(trigger) = function.get_mut("trigger") else {
+            continue;
+        };
+        if trigger.get("type").and_then(serde_json::Value::as_str) != Some("tasks") {
+            continue;
+        }
+        if !trigger
+            .get("retryConfig")
+            .is_some_and(serde_json::Value::is_object)
+        {
+            trigger["retryConfig"] = serde_json::json!({});
+        }
+        let retry = &mut trigger["retryConfig"];
+        if retry
+            .get("maxAttempts")
+            .is_none_or(serde_json::Value::is_null)
+        {
+            retry["maxAttempts"] = serde_json::json!(PRODUCTION_TASK_MAX_ATTEMPTS);
+        }
+    }
+}
+
 /// The runtime configuration of the Functions backend for this run: the project, the location, the
 /// limits and, by profile, how events are named and shaped.
 fn functions_config(
@@ -3403,6 +3465,13 @@ fn functions_config(
         // Cloud Tasks holds a task until its scheduleTime; the official emulator dispatches at
         // once, so only the strict profile waits.
         honour_task_schedule_time: cfg.profile == CompatibilityProfile::Strict,
+        // How long a finished task's name is refused, and the dispatch deadline of a task that names none:
+        // development defaults by profile and `productionExact`, each overridable by its own key
+        // (`functions.taskNameReuse`, `functions.taskDispatchDeadlineSeconds`).
+        task_default_deadline_seconds: cfg.functions_task_dispatch_deadline_seconds,
+        task_retry_production_gaps: cfg.functions_task_retry_backoff
+            == crate::config::TaskRetryBackoff::Production,
+        task_name_reuse: task_name_reuse(cfg.functions_task_name_reuse),
         clock_start_pinned: cfg.clock_start_pinned,
         subscription_naming: subscription_naming(cfg.profile),
         auth_context: auth_context_naming(cfg.profile),
@@ -4554,9 +4623,7 @@ async fn start_codebase(
                 .ok_or_else(|| "the functions runner did not discover a manifest".to_owned())?,
         };
         let mut manifest_json = manifest_json;
-        if let Some(tz) = &cfg.scheduler_default_time_zone {
-            apply_default_time_zone(&mut manifest_json, tz);
-        }
+        apply_config_defaults(&mut manifest_json, cfg);
         let mut manifest = manifest_for_profile(cfg.profile, &manifest_json, cfg.clock_start)?;
         // Before anything is served: every export the runner could not serve is either named in a
         // refusal or printed, one line each.
@@ -16211,6 +16278,211 @@ exit 0
         }
     }
 
+    /// The development defaults of the Cloud Tasks queue follow the profile, `productionExact` restores production's,
+    /// and an explicit key wins over both.
+    #[test]
+    fn the_task_defaults_follow_the_profile_and_production_exact_restores_production() {
+        use fireemu_adapter_functions::tasks_production::NameReuse;
+        let hour = std::time::Duration::from_secs(3600);
+        for (json, reuse, deadline) in [
+            (
+                json!({"schemaVersion": 1, "profile": "strict"}),
+                NameReuse::Immediate,
+                60,
+            ),
+            (
+                json!({"schemaVersion": 1, "profile": "strict", "productionExact": false}),
+                NameReuse::Immediate,
+                60,
+            ),
+            (
+                json!({"schemaVersion": 1, "profile": "strict", "productionExact": true}),
+                NameReuse::Window(hour),
+                600,
+            ),
+            (
+                json!({"schemaVersion": 1, "profile": "emulator"}),
+                NameReuse::Retained,
+                60,
+            ),
+            // An explicit key wins over productionExact, key by key.
+            (
+                json!({"schemaVersion": 1, "profile": "strict", "productionExact": true,
+                       "functions": {"taskNameReuse": "immediate", "taskDispatchDeadlineSeconds": 90}}),
+                NameReuse::Immediate,
+                90,
+            ),
+            (
+                json!({"schemaVersion": 1, "profile": "strict", "productionExact": true,
+                       "functions": {"taskNameReuse": "retained"}}),
+                NameReuse::Retained,
+                600,
+            ),
+            (
+                json!({"schemaVersion": 1, "profile": "strict",
+                       "functions": {"taskNameReuse": "production", "taskDispatchDeadlineSeconds": 600}}),
+                NameReuse::Window(hour),
+                600,
+            ),
+            (
+                json!({"schemaVersion": 1, "profile": "emulator", "functions": {"taskNameReuse": "immediate"}}),
+                NameReuse::Immediate,
+                60,
+            ),
+        ] {
+            let cfg = crate::config::RuntimeConfig::from_json(&json).unwrap();
+            let config = super::functions_config(&cfg, None, "s");
+            assert_eq!(config.task_name_reuse, reuse, "{json}");
+            assert_eq!(config.task_default_deadline_seconds, deadline, "{json}");
+        }
+    }
+
+    /// The retry defaults and the time zone are applied by the configuration, each by its own key.
+    #[test]
+    fn the_configuration_applies_its_manifest_defaults_by_key() {
+        let manifest = || {
+            json!({"functions": [
+                {"name": "queue", "trigger": {"type": "tasks"}},
+                {"name": "job", "trigger": {"type": "schedule", "schedule": "every 5 minutes"}},
+            ]})
+        };
+        for (config, attempts, zone) in [
+            (
+                json!({"schemaVersion": 1, "profile": "strict"}),
+                json!(null),
+                json!(null),
+            ),
+            (
+                json!({"schemaVersion": 1, "profile": "strict", "productionExact": true}),
+                json!(100),
+                json!(null),
+            ),
+            (
+                json!({"schemaVersion": 1, "profile": "strict", "productionExact": true,
+                       "functions": {"taskRetryDefaults": "emulated"}}),
+                json!(null),
+                json!(null),
+            ),
+            (
+                json!({"schemaVersion": 1, "profile": "strict", "functions": {"taskRetryDefaults": "production"},
+                       "scheduler": {"defaultTimeZone": "Asia/Tokyo"}}),
+                json!(100),
+                json!("Asia/Tokyo"),
+            ),
+            (
+                json!({"schemaVersion": 1, "profile": "emulator", "scheduler": {"defaultTimeZone": "Asia/Tokyo"}}),
+                json!(null),
+                json!("Asia/Tokyo"),
+            ),
+        ] {
+            let cfg = crate::config::RuntimeConfig::from_json(&config).unwrap();
+            let mut document = manifest();
+            super::apply_config_defaults(&mut document, &cfg);
+            assert_eq!(
+                document["functions"][0]["trigger"]["retryConfig"]["maxAttempts"], attempts,
+                "{config}"
+            );
+            assert_eq!(
+                document["functions"][1]["trigger"]["timeZone"], zone,
+                "{config}"
+            );
+        }
+    }
+
+    /// `functions.taskRetryBackoff` reaches the runtime as the flag the dispatch reads, by profile, `productionExact` and its own key.
+    #[test]
+    fn the_retry_gaps_follow_production_under_production_exact_unless_the_key_says_declared() {
+        for (config, production_gaps) in [
+            (json!({"schemaVersion": 1, "profile": "strict"}), false),
+            (
+                json!({"schemaVersion": 1, "profile": "strict", "productionExact": true}),
+                true,
+            ),
+            (
+                json!({"schemaVersion": 1, "profile": "strict", "productionExact": true,
+                       "functions": {"taskRetryBackoff": "declared"}}),
+                false,
+            ),
+            (
+                json!({"schemaVersion": 1, "profile": "strict", "functions": {"taskRetryBackoff": "production"}}),
+                true,
+            ),
+            (json!({"schemaVersion": 1, "profile": "emulator"}), false),
+        ] {
+            let cfg = crate::config::RuntimeConfig::from_json(&config).unwrap();
+            assert_eq!(
+                super::functions_config(&cfg, None, "s").task_retry_production_gaps,
+                production_gaps,
+                "{config}"
+            );
+        }
+    }
+
+    /// `functions.taskRetryDefaults` `production` fills `maxAttempts` of a task queue function that does not declare it
+    /// and nothing else: a declared value (zero included), a null, another trigger type and the other retry fields stay.
+    #[test]
+    fn production_retry_defaults_fill_only_a_missing_max_attempts_of_a_task_queue() {
+        let mut manifest = json!({"functions": [
+            {"name": "none", "trigger": {"type": "tasks"}},
+            {"name": "empty", "trigger": {"type": "tasks", "retryConfig": {}}},
+            {"name": "null", "trigger": {"type": "tasks", "retryConfig": null}},
+            {"name": "nulled", "trigger": {"type": "tasks", "retryConfig": {"maxAttempts": null, "minBackoffSeconds": 1}}},
+            {"name": "partial", "trigger": {"type": "tasks", "retryConfig": {"maxRetrySeconds": 6, "maxDoublings": 1}}},
+            {"name": "declared", "trigger": {"type": "tasks", "retryConfig": {"maxAttempts": 2}}},
+            {"name": "zero", "trigger": {"type": "tasks", "retryConfig": {"maxAttempts": 0}}},
+            {"name": "http", "trigger": {"type": "http"}},
+            {"name": "bare"},
+        ]});
+        super::apply_task_retry_defaults(&mut manifest);
+        let attempts = |name: &str| {
+            manifest["functions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|f| f["name"] == name)
+                .unwrap()["trigger"]["retryConfig"]["maxAttempts"]
+                .clone()
+        };
+        for name in ["none", "empty", "null", "nulled", "partial"] {
+            assert_eq!(attempts(name), json!(100), "{name}");
+        }
+        assert_eq!(attempts("declared"), json!(2));
+        assert_eq!(attempts("zero"), json!(0));
+        assert_eq!(
+            manifest["functions"][3]["trigger"]["retryConfig"]["minBackoffSeconds"],
+            json!(1)
+        );
+        assert_eq!(
+            manifest["functions"][4]["trigger"]["retryConfig"]["maxRetrySeconds"],
+            json!(6)
+        );
+        assert!(manifest["functions"][7]["trigger"]
+            .get("retryConfig")
+            .is_none());
+        assert!(manifest["functions"][8].get("trigger").is_none());
+        // The result parses to production's defaults and keeps the official ones for the other fields.
+        let parsed = parse_manifest(&json!({"functions": [{
+            "name": "queue", "entryPoint": "queue", "region": "us-central1",
+            "trigger": manifest["functions"][0]["trigger"].clone(),
+        }]}))
+        .unwrap();
+        let fireemu_core_functions::manifest::Trigger::TaskQueue { retry, .. } =
+            parsed.functions[0].trigger
+        else {
+            panic!("a task queue")
+        };
+        assert_eq!(
+            (
+                retry.max_attempts,
+                retry.min_backoff_millis,
+                retry.max_backoff_millis,
+                retry.max_doublings,
+                retry.max_retry_millis
+            ),
+            (100, 100, 3_600_000, 16, None)
+        );
+    }
+
     proptest::proptest! {
         /// E4: a pinned seed ignores the nonce, an unpinned start ignores the seed.
         #[test]
@@ -16496,6 +16768,9 @@ exit 0
                 clock_policy:
                     fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default(),
                 honour_task_schedule_time: false,
+                task_name_reuse: fireemu_adapter_functions::tasks_production::NameReuse::Retained,
+                task_default_deadline_seconds: 60,
+                task_retry_production_gaps: false,
                 clock_start_pinned: false,
                 subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
                 ),

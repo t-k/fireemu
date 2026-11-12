@@ -1351,6 +1351,16 @@ pub struct RuntimeConfig {
     pub database_default_access: DatabaseDefaultAccess,
     /// `functions.authBlockingToken`: the Auth blocking function token mode.
     pub functions_auth_blocking_token: AuthBlockingToken,
+    /// `functions.taskNameReuse`: how long a Cloud Tasks queue keeps the name of a finished task.
+    pub functions_task_name_reuse: TaskNameReuse,
+    /// `functions.taskDispatchDeadlineSeconds`: the dispatch deadline of a task that names none
+    /// (strict profile).
+    pub functions_task_dispatch_deadline_seconds: u64,
+    /// `functions.taskRetryDefaults`: the retry settings of a task queue function that declares
+    /// none, or only some.
+    pub functions_task_retry_defaults: TaskRetryDefaults,
+    /// `functions.taskRetryBackoff`: whether a retry's gap grows past the declared maximum backoff after repeated failures.
+    pub functions_task_retry_backoff: TaskRetryBackoff,
     /// `hosting.cacheControl`: whether strict adds Hosting production's default
     /// `Cache-Control: max-age=3600` to deployed files.
     pub hosting_cache_control: HostingCacheControl,
@@ -1586,6 +1596,124 @@ impl AuthBlockingToken {
     pub const fn as_config_str(self) -> &'static str {
         match self {
             Self::Emulated => "emulated",
+            Self::Production => "production",
+        }
+    }
+}
+
+/// `functions.taskNameReuse`: how long a task queue keeps the name of a task that finished, was dropped or
+/// was deleted, and refuses a new task of that name.
+///
+/// The official emulator keeps every name for the life of the process (`retained`, the `emulator` profile's
+/// default). Production keeps a name for about an hour (`production`: 3600 seconds, as documented; the expiry
+/// was not observed in the two TASK-QUEUE-FUNCTIONS recordings, only the refusal inside the window). The
+/// `strict` profile's development default frees a name at once (`immediate`), so a test that enqueues the same
+/// id again is not refused; `productionExact` selects `production`, which requires the strict profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TaskNameReuse {
+    /// A finished name stays taken for the life of the process.
+    Retained,
+    /// A finished name is free at once.
+    #[default]
+    Immediate,
+    /// A finished name is refused for 3600 seconds ("existed too recently").
+    Production,
+}
+
+impl TaskNameReuse {
+    /// Parses the configuration spelling.
+    #[must_use]
+    pub fn parse_config(text: &str) -> Option<Self> {
+        match text {
+            "retained" => Some(Self::Retained),
+            "immediate" => Some(Self::Immediate),
+            "production" => Some(Self::Production),
+            _ => None,
+        }
+    }
+
+    /// The configuration spelling.
+    #[must_use]
+    pub const fn as_config_str(self) -> &'static str {
+        match self {
+            Self::Retained => "retained",
+            Self::Immediate => "immediate",
+            Self::Production => "production",
+        }
+    }
+}
+
+/// `functions.taskRetryDefaults`: the retry settings a task queue function gets for each field it does not
+/// declare.
+///
+/// `emulated` is the official emulator's default (3 attempts; a 0.1 s minimum backoff, 3600 s maximum
+/// backoff and 16 doublings). `production` is what Cloud Tasks gave a function that declared no retry
+/// options in both TASK-QUEUE-FUNCTIONS recordings (queue read-back of the default queue: `maxAttempts` 100,
+/// `minBackoff` 0.100 s, `maxBackoff` 3600 s, `maxDoublings` 16, no `maxRetryDuration`, 2026-11-11), which differs
+/// from the emulated default only in the number of attempts. It requires the strict profile and is selected by
+/// `productionExact`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TaskRetryDefaults {
+    /// The official emulator's defaults.
+    #[default]
+    Emulated,
+    /// Production's defaults.
+    Production,
+}
+
+impl TaskRetryDefaults {
+    /// Parses the configuration spelling.
+    #[must_use]
+    pub fn parse_config(text: &str) -> Option<Self> {
+        match text {
+            "emulated" => Some(Self::Emulated),
+            "production" => Some(Self::Production),
+            _ => None,
+        }
+    }
+
+    /// The configuration spelling.
+    #[must_use]
+    pub const fn as_config_str(self) -> &'static str {
+        match self {
+            Self::Emulated => "emulated",
+            Self::Production => "production",
+        }
+    }
+}
+
+/// `functions.taskRetryBackoff`: the gap between the retries of a task that keeps failing.
+///
+/// `declared` retries at the gaps the queue declares (`minBackoff`, doubling to `maxBackoff`), as the official emulator does.
+/// `production` follows what Cloud Tasks did in both TASK-QUEUE-FUNCTIONS recordings (2026-11-11) for a queue with `maxBackoff`
+/// 2 s and 100 attempts: from the twelfth gap on, the gaps grew past the declared maximum to 4 s (gaps 12 to 14), 8 s (15 and
+/// 16) and 10 s (17 on), in both runs. How that growth depends on the declared maximum backoff is not recorded, so
+/// `production` never retries sooner than the declared gap. It requires the strict profile and is selected by `productionExact`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TaskRetryBackoff {
+    /// The gaps the queue declares.
+    #[default]
+    Declared,
+    /// The gaps production showed after repeated failures.
+    Production,
+}
+
+impl TaskRetryBackoff {
+    /// Parses the configuration spelling.
+    #[must_use]
+    pub fn parse_config(text: &str) -> Option<Self> {
+        match text {
+            "declared" => Some(Self::Declared),
+            "production" => Some(Self::Production),
+            _ => None,
+        }
+    }
+
+    /// The configuration spelling.
+    #[must_use]
+    pub const fn as_config_str(self) -> &'static str {
+        match self {
+            Self::Declared => "declared",
             Self::Production => "production",
         }
     }
@@ -1963,6 +2091,10 @@ impl Default for RuntimeConfig {
             hosting_cache_control: HostingCacheControl::None,
             hosting_client_country: HostingClientCountry::Honoured,
             functions_auth_blocking_token: AuthBlockingToken::Emulated,
+            functions_task_name_reuse: TaskNameReuse::Immediate,
+            functions_task_dispatch_deadline_seconds: 60,
+            functions_task_retry_defaults: TaskRetryDefaults::Emulated,
+            functions_task_retry_backoff: TaskRetryBackoff::Declared,
             database_rules: Vec::new(),
             database_rules_resolved: Vec::new(),
             pubsub_push_minimum_redelivery_interval_millis:
@@ -2203,6 +2335,10 @@ impl RuntimeConfig {
                     Value::Null
                 } else if schema["type"] == "boolean" {
                     json!(text == "true")
+                } else if schema["type"] == "integer" {
+                    // A development default is recorded as text; an integer key shows its number.
+                    text.parse::<u64>()
+                        .map_or_else(|_| json!(text), |number| json!(number))
                 } else {
                     json!(text)
                 };
@@ -2555,13 +2691,17 @@ pub(crate) const SCHEDULER_KEYS: [&str; 5] = [
 ];
 
 /// The keys of the `functions` section.
-pub(crate) const FUNCTIONS_KEYS: [&str; 7] = [
+pub(crate) const FUNCTIONS_KEYS: [&str; 11] = [
     "manifest",
     "source",
     "runner",
     "maxGlobalConcurrency",
     "unservedTriggers",
     "authBlockingToken",
+    "taskNameReuse",
+    "taskDispatchDeadlineSeconds",
+    "taskRetryDefaults",
+    "taskRetryBackoff",
     "clock",
 ];
 
@@ -4678,6 +4818,13 @@ impl RuntimeConfig {
         self.implicit_database_creation = profile.implicit_database_creation();
         self.refuse_without_ruleset = profile.refuse_without_ruleset();
         self.end_user_transactions = profile.end_user_transactions();
+        // The official emulator keeps a finished task's name forever; the strict profile's development
+        // default frees it at once (`productionExact` selects production's window).
+        self.functions_task_name_reuse = if profile == CompatibilityProfile::Strict {
+            TaskNameReuse::Immediate
+        } else {
+            TaskNameReuse::Retained
+        };
         self.app_check.debug_tokens = if profile == CompatibilityProfile::Strict {
             AppCheckDebugTokens::Any
         } else {
@@ -4740,6 +4887,24 @@ impl RuntimeConfig {
         } else {
             AuthBlockingToken::Emulated
         };
+        self.functions_task_name_reuse = if exact {
+            TaskNameReuse::Production
+        } else if self.profile == CompatibilityProfile::Strict {
+            TaskNameReuse::Immediate
+        } else {
+            TaskNameReuse::Retained
+        };
+        self.functions_task_dispatch_deadline_seconds = if exact { 600 } else { 60 };
+        self.functions_task_retry_defaults = if exact {
+            TaskRetryDefaults::Production
+        } else {
+            TaskRetryDefaults::Emulated
+        };
+        self.functions_task_retry_backoff = if exact {
+            TaskRetryBackoff::Production
+        } else {
+            TaskRetryBackoff::Declared
+        };
         self.hosting_cache_control = if exact {
             HostingCacheControl::Production
         } else {
@@ -4763,6 +4928,7 @@ impl RuntimeConfig {
     fn record_development_defaults(&mut self, input: &Value) {
         use fireemu_adapter_functions::eventarc_strict::EventarcAuthentication;
         use fireemu_adapter_http::identity_toolkit::TenantIdFormat;
+        let task_deadline = self.functions_task_dispatch_deadline_seconds.to_string();
         let values = [
             (
                 "auth.allowUnsignedCustomTokens",
@@ -4859,6 +5025,22 @@ impl RuntimeConfig {
                     fireemu_adapter_http::storage::UndeclaredBuckets::Warn => "warn",
                     fireemu_adapter_http::storage::UndeclaredBuckets::Refuse => "refuse",
                 },
+            ),
+            (
+                "functions.taskNameReuse",
+                self.functions_task_name_reuse.as_config_str(),
+            ),
+            (
+                "functions.taskDispatchDeadlineSeconds",
+                task_deadline.as_str(),
+            ),
+            (
+                "functions.taskRetryDefaults",
+                self.functions_task_retry_defaults.as_config_str(),
+            ),
+            (
+                "functions.taskRetryBackoff",
+                self.functions_task_retry_backoff.as_config_str(),
             ),
         ];
         self.development_defaults = values
@@ -5491,6 +5673,88 @@ impl RuntimeConfig {
         Ok(())
     }
 
+    /// `functions.taskNameReuse`, `functions.taskDispatchDeadlineSeconds` and `functions.taskRetryDefaults`, read after
+    /// `productionExact` so that an explicit key wins over it.
+    fn parse_task_queue_defaults(
+        f: &serde_json::Map<String, Value>,
+        cfg: &mut Self,
+    ) -> Result<(), ConfigError> {
+        if let Some(value) = f.get("taskNameReuse") {
+            let mode = value
+                .as_str()
+                .and_then(TaskNameReuse::parse_config)
+                .ok_or_else(|| {
+                    ConfigError(
+                        "functions.taskNameReuse must be \"retained\", \"immediate\" or \"production\""
+                            .to_owned(),
+                    )
+                })?;
+            if mode == TaskNameReuse::Production && cfg.profile != CompatibilityProfile::Strict {
+                return Err(ConfigError(
+                    "functions.taskNameReuse \"production\" requires the strict profile".to_owned(),
+                ));
+            }
+            cfg.functions_task_name_reuse = mode;
+        }
+        if let Some(value) = f.get("taskDispatchDeadlineSeconds") {
+            // Cloud Tasks takes a dispatch deadline between 15 seconds and 30 minutes.
+            let seconds = value
+                .as_u64()
+                .filter(|seconds| (15..=1800).contains(seconds))
+                .ok_or_else(|| {
+                    ConfigError(
+                        "functions.taskDispatchDeadlineSeconds must be an integer from 15 to 1800"
+                            .to_owned(),
+                    )
+                })?;
+            if cfg.profile != CompatibilityProfile::Strict {
+                return Err(ConfigError(
+                    "functions.taskDispatchDeadlineSeconds requires the strict profile (the emulator profile keeps the official emulator's deadline)"
+                        .to_owned(),
+                ));
+            }
+            cfg.functions_task_dispatch_deadline_seconds = seconds;
+        }
+        if let Some(value) = f.get("taskRetryDefaults") {
+            let mode = value
+                .as_str()
+                .and_then(TaskRetryDefaults::parse_config)
+                .ok_or_else(|| {
+                    ConfigError(
+                        "functions.taskRetryDefaults must be \"emulated\" or \"production\""
+                            .to_owned(),
+                    )
+                })?;
+            if mode == TaskRetryDefaults::Production && cfg.profile != CompatibilityProfile::Strict
+            {
+                return Err(ConfigError(
+                    "functions.taskRetryDefaults \"production\" requires the strict profile"
+                        .to_owned(),
+                ));
+            }
+            cfg.functions_task_retry_defaults = mode;
+        }
+        if let Some(value) = f.get("taskRetryBackoff") {
+            let mode = value
+                .as_str()
+                .and_then(TaskRetryBackoff::parse_config)
+                .ok_or_else(|| {
+                    ConfigError(
+                        "functions.taskRetryBackoff must be \"declared\" or \"production\""
+                            .to_owned(),
+                    )
+                })?;
+            if mode == TaskRetryBackoff::Production && cfg.profile != CompatibilityProfile::Strict {
+                return Err(ConfigError(
+                    "functions.taskRetryBackoff \"production\" requires the strict profile"
+                        .to_owned(),
+                ));
+            }
+            cfg.functions_task_retry_backoff = mode;
+        }
+        Ok(())
+    }
+
     fn parse_functions(
         f: &serde_json::Map<String, Value>,
         cfg: &mut Self,
@@ -5519,6 +5783,7 @@ impl RuntimeConfig {
             }
             cfg.functions_auth_blocking_token = mode;
         }
+        Self::parse_task_queue_defaults(f, cfg)?;
         if let Some(value) = f.get("clock") {
             let modes = value
                 .as_object()
@@ -7463,6 +7728,22 @@ mod tests {
                     json!(cfg.functions_auth_blocking_token.as_config_str()),
                 ),
                 (
+                    "functions.taskNameReuse",
+                    json!(cfg.functions_task_name_reuse.as_config_str()),
+                ),
+                (
+                    "functions.taskDispatchDeadlineSeconds",
+                    json!(cfg.functions_task_dispatch_deadline_seconds),
+                ),
+                (
+                    "functions.taskRetryDefaults",
+                    json!(cfg.functions_task_retry_defaults.as_config_str()),
+                ),
+                (
+                    "functions.taskRetryBackoff",
+                    json!(cfg.functions_task_retry_backoff.as_config_str()),
+                ),
+                (
                     "functions.clock.date",
                     json!(if cfg.functions_clock.date_virtual {
                         "virtual"
@@ -7512,13 +7793,20 @@ mod tests {
                     }
                     ("pubsub.deadLetterAuthorization", true) => json!("iam"),
                     ("database.defaultAccess", true) => json!("locked"),
-                    ("hosting.clientCountry", true) => json!("ignored"),
                     (
-                        "functions.authBlockingToken"
-                        | "eventarc.authentication"
-                        | "hosting.cacheControl",
+                        "hosting.cacheControl"
+                        | "functions.taskNameReuse"
+                        | "functions.taskRetryDefaults"
+                        | "functions.taskRetryBackoff",
                         true,
                     ) => json!("production"),
+                    ("hosting.clientCountry", true) => json!("ignored"),
+                    // The official emulator keeps every finished name; the strict profile frees it.
+                    ("functions.taskNameReuse", _) if profile == "emulator" => json!("retained"),
+                    ("functions.taskDispatchDeadlineSeconds", true) => json!(600),
+                    ("functions.authBlockingToken" | "eventarc.authentication", true) => {
+                        json!("production")
+                    }
                     // The key only matters to the strict profile; the emulator profile
                     // runs the query (Report is its inert value).
                     ("firestore.missingIndexes", _) if profile == "emulator" => json!("report"),
@@ -11482,6 +11770,207 @@ mod tests {
         );
     }
 
+    /// `functions.taskNameReuse`, `functions.taskDispatchDeadlineSeconds` and `functions.taskRetryDefaults`:
+    /// the profile and `productionExact` pick the value, and an explicit key wins over both.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn task_queue_defaults_follow_profile_exact_and_explicit_precedence() {
+        let value_of = |cfg: &RuntimeConfig, key: &str| -> (Value, Value) {
+            let entry = cfg
+                .development_defaults
+                .iter()
+                .find(|entry| entry["key"] == key)
+                .unwrap_or_else(|| panic!("no development default for {key}"));
+            (entry["value"].clone(), entry["source"].clone())
+        };
+        for profile in ["emulator", "strict"] {
+            for exact in [None, Some(true), Some(false)] {
+                let base = {
+                    let mut input = json!({"schemaVersion": 1, "profile": profile});
+                    if let Some(exact) = exact {
+                        input["productionExact"] = json!(exact);
+                    }
+                    input
+                };
+                if profile == "emulator" && exact == Some(true) {
+                    assert!(RuntimeConfig::from_json(&base).is_err());
+                    continue;
+                }
+                let strict = profile == "strict";
+                let exact = exact == Some(true);
+                // The value without a key: the profile's development default, or production's under productionExact.
+                let reuse_default = if exact {
+                    "production"
+                } else if strict {
+                    "immediate"
+                } else {
+                    "retained"
+                };
+                let cfg = RuntimeConfig::from_json(&base).unwrap();
+                assert_eq!(cfg.functions_task_name_reuse.as_config_str(), reuse_default);
+                assert_eq!(
+                    cfg.functions_task_dispatch_deadline_seconds,
+                    if exact { 600 } else { 60 }
+                );
+                assert_eq!(
+                    cfg.functions_task_retry_defaults.as_config_str(),
+                    if exact { "production" } else { "emulated" }
+                );
+                assert_eq!(
+                    cfg.functions_task_retry_backoff.as_config_str(),
+                    if exact { "production" } else { "declared" }
+                );
+                let source = if exact { "productionExact" } else { "default" };
+                assert_eq!(
+                    value_of(&cfg, "functions.taskNameReuse"),
+                    (json!(reuse_default), json!(source))
+                );
+                // An explicit key wins over productionExact and over the profile.
+                for reuse in ["retained", "immediate", "production"] {
+                    let mut input = base.clone();
+                    input["functions"] = json!({"taskNameReuse": reuse});
+                    let parsed = RuntimeConfig::from_json(&input);
+                    if !strict && reuse == "production" {
+                        assert!(parsed.is_err(), "{input}");
+                        continue;
+                    }
+                    let cfg = parsed.unwrap();
+                    assert_eq!(
+                        cfg.functions_task_name_reuse.as_config_str(),
+                        reuse,
+                        "{input}"
+                    );
+                    assert_eq!(
+                        value_of(&cfg, "functions.taskNameReuse"),
+                        (json!(reuse), json!("explicit"))
+                    );
+                }
+                for seconds in [15_u64, 60, 600, 1800] {
+                    let mut input = base.clone();
+                    input["functions"] = json!({"taskDispatchDeadlineSeconds": seconds});
+                    let parsed = RuntimeConfig::from_json(&input);
+                    if !strict {
+                        assert!(parsed.is_err(), "{input}");
+                        continue;
+                    }
+                    let cfg = parsed.unwrap();
+                    assert_eq!(
+                        cfg.functions_task_dispatch_deadline_seconds, seconds,
+                        "{input}"
+                    );
+                    assert_eq!(
+                        value_of(&cfg, "functions.taskDispatchDeadlineSeconds"),
+                        (json!(seconds.to_string()), json!("explicit"))
+                    );
+                }
+                for mode in ["declared", "production"] {
+                    let mut input = base.clone();
+                    input["functions"] = json!({"taskRetryBackoff": mode});
+                    let parsed = RuntimeConfig::from_json(&input);
+                    if !strict && mode == "production" {
+                        assert!(parsed.is_err(), "{input}");
+                        continue;
+                    }
+                    let cfg = parsed.unwrap();
+                    assert_eq!(
+                        cfg.functions_task_retry_backoff.as_config_str(),
+                        mode,
+                        "{input}"
+                    );
+                    assert_eq!(
+                        value_of(&cfg, "functions.taskRetryBackoff"),
+                        (json!(mode), json!("explicit"))
+                    );
+                }
+                for mode in ["emulated", "production"] {
+                    let mut input = base.clone();
+                    input["functions"] = json!({"taskRetryDefaults": mode});
+                    let parsed = RuntimeConfig::from_json(&input);
+                    if !strict && mode == "production" {
+                        assert!(parsed.is_err(), "{input}");
+                        continue;
+                    }
+                    let cfg = parsed.unwrap();
+                    assert_eq!(
+                        cfg.functions_task_retry_defaults.as_config_str(),
+                        mode,
+                        "{input}"
+                    );
+                    assert_eq!(
+                        value_of(&cfg, "functions.taskRetryDefaults"),
+                        (json!(mode), json!("explicit"))
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn task_queue_defaults_reject_invalid_values() {
+        let invalid = |functions: Value| {
+            RuntimeConfig::from_json(&json!({"schemaVersion": 1, "functions": functions}))
+                .unwrap_err()
+                .0
+        };
+        for value in [
+            json!("forever"),
+            json!(""),
+            json!(1),
+            json!(null),
+            json!(true),
+        ] {
+            assert_eq!(
+                invalid(json!({"taskNameReuse": value})),
+                "functions.taskNameReuse must be \"retained\", \"immediate\" or \"production\""
+            );
+            assert_eq!(
+                invalid(json!({"taskRetryDefaults": value})),
+                "functions.taskRetryDefaults must be \"emulated\" or \"production\""
+            );
+        }
+        for value in [
+            json!(14),
+            json!(1801),
+            json!(0),
+            json!(-1),
+            json!(60.5),
+            json!("60"),
+            json!(null),
+            json!(true),
+        ] {
+            assert_eq!(
+                invalid(json!({"taskDispatchDeadlineSeconds": value})),
+                "functions.taskDispatchDeadlineSeconds must be an integer from 15 to 1800",
+                "{value}"
+            );
+        }
+        assert_eq!(
+            invalid(json!({"taskRetryBackoff": "fast"})),
+            "functions.taskRetryBackoff must be \"declared\" or \"production\""
+        );
+        let emulator = |functions: Value| {
+            RuntimeConfig::from_json(
+                &json!({"schemaVersion": 1, "profile": "emulator", "functions": functions}),
+            )
+            .unwrap_err()
+            .0
+        };
+        assert_eq!(
+            emulator(json!({"taskNameReuse": "production"})),
+            "functions.taskNameReuse \"production\" requires the strict profile"
+        );
+        assert_eq!(
+            emulator(json!({"taskRetryDefaults": "production"})),
+            "functions.taskRetryDefaults \"production\" requires the strict profile"
+        );
+        assert_eq!(
+            emulator(json!({"taskRetryBackoff": "production"})),
+            "functions.taskRetryBackoff \"production\" requires the strict profile"
+        );
+        assert!(emulator(json!({"taskDispatchDeadlineSeconds": 60}))
+            .starts_with("functions.taskDispatchDeadlineSeconds requires the strict profile"));
+    }
+
     #[test]
     fn rest_negative_cache_validates_profile_and_values() {
         for (input, error) in [
@@ -11557,6 +12046,9 @@ mod tests {
             "pubsub.deadLetterAuthorization",
             "appCheck.debugTokens",
             "functions.authBlockingToken",
+            "functions.taskNameReuse",
+            "functions.taskRetryDefaults",
+            "functions.taskRetryBackoff",
         ];
         let defaults = [
             "true",
@@ -11568,6 +12060,9 @@ mod tests {
             "implicit",
             "any",
             "emulated",
+            "immediate",
+            "emulated",
+            "declared",
         ];
         let production = [
             "false",
@@ -11578,6 +12073,9 @@ mod tests {
             "generated",
             "iam",
             "registered",
+            "production",
+            "production",
+            "production",
             "production",
         ];
         for exact in [None, Some(false), Some(true)] {

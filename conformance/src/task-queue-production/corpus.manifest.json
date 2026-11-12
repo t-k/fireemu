@@ -1,0 +1,1592 @@
+{
+  "schemaVersion": 1,
+  "steps": [
+    {
+      "key": "retry-ladder",
+      "kind": "create",
+      "role": "tqretry",
+      "groups": ["retry-on-status", "retry-backoff-schedule", "dispatch-envelope-headers"],
+      "id": "retry-ladder",
+      "script": [
+        {
+          "status": "internal"
+        },
+        {
+          "status": "resource-exhausted"
+        },
+        {
+          "status": "unavailable"
+        },
+        {
+          "status": "invalid-argument"
+        },
+        {
+          "status": "not-found"
+        },
+        {
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "key": "retry-exhaust",
+      "kind": "create",
+      "role": "tqretry",
+      "groups": ["retry-limits", "retry-backoff-schedule"],
+      "id": "retry-exhaust",
+      "script": [
+        {
+          "status": "internal"
+        }
+      ]
+    },
+    {
+      "key": "limit-two",
+      "kind": "create",
+      "role": "tqlimit",
+      "groups": ["retry-limits"],
+      "id": "limit-two",
+      "script": [
+        {
+          "status": "internal"
+        }
+      ]
+    },
+    {
+      "key": "window-six",
+      "kind": "create",
+      "role": "tqwindow",
+      "groups": ["retry-limits"],
+      "id": "window-six",
+      "script": [
+        {
+          "status": "internal"
+        }
+      ]
+    },
+    {
+      "key": "dead-15",
+      "kind": "create",
+      "role": "tqdead",
+      "groups": ["dispatch-deadline", "retry-on-status"],
+      "id": "dead-15",
+      "deadline": "15s",
+      "script": [
+        {
+          "status": "ok",
+          "sleepMs": 20000
+        },
+        {
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "key": "conc1-a",
+      "kind": "create",
+      "role": "tqconc1",
+      "groups": ["max-concurrent-dispatches"],
+      "id": "conc1-a",
+      "script": [
+        {
+          "status": "ok",
+          "sleepMs": 3000
+        }
+      ]
+    },
+    {
+      "key": "conc1-b",
+      "kind": "create",
+      "role": "tqconc1",
+      "groups": ["max-concurrent-dispatches"],
+      "id": "conc1-b",
+      "script": [
+        {
+          "status": "ok",
+          "sleepMs": 3000
+        }
+      ]
+    },
+    {
+      "key": "conc1-c",
+      "kind": "create",
+      "role": "tqconc1",
+      "groups": ["max-concurrent-dispatches"],
+      "id": "conc1-c",
+      "script": [
+        {
+          "status": "ok",
+          "sleepMs": 3000
+        }
+      ]
+    },
+    {
+      "key": "conc1-d",
+      "kind": "create",
+      "role": "tqconc1",
+      "groups": ["max-concurrent-dispatches"],
+      "id": "conc1-d",
+      "script": [
+        {
+          "status": "ok",
+          "sleepMs": 3000
+        }
+      ]
+    },
+    {
+      "key": "conc2-a",
+      "kind": "create",
+      "role": "tqconc2",
+      "groups": ["max-concurrent-dispatches"],
+      "id": "conc2-a",
+      "script": [
+        {
+          "status": "ok",
+          "sleepMs": 3000
+        }
+      ]
+    },
+    {
+      "key": "conc2-b",
+      "kind": "create",
+      "role": "tqconc2",
+      "groups": ["max-concurrent-dispatches"],
+      "id": "conc2-b",
+      "script": [
+        {
+          "status": "ok",
+          "sleepMs": 3000
+        }
+      ]
+    },
+    {
+      "key": "conc2-c",
+      "kind": "create",
+      "role": "tqconc2",
+      "groups": ["max-concurrent-dispatches"],
+      "id": "conc2-c",
+      "script": [
+        {
+          "status": "ok",
+          "sleepMs": 3000
+        }
+      ]
+    },
+    {
+      "key": "conc2-d",
+      "kind": "create",
+      "role": "tqconc2",
+      "groups": ["max-concurrent-dispatches"],
+      "id": "conc2-d",
+      "script": [
+        {
+          "status": "ok",
+          "sleepMs": 3000
+        }
+      ]
+    },
+    {
+      "key": "conc2-e",
+      "kind": "create",
+      "role": "tqconc2",
+      "groups": ["max-concurrent-dispatches"],
+      "id": "conc2-e",
+      "script": [
+        {
+          "status": "ok",
+          "sleepMs": 3000
+        }
+      ]
+    },
+    {
+      "key": "rate-a",
+      "kind": "create",
+      "role": "tqrate",
+      "groups": ["max-dispatches-per-second"],
+      "id": "rate-a"
+    },
+    {
+      "key": "rate-b",
+      "kind": "create",
+      "role": "tqrate",
+      "groups": ["max-dispatches-per-second"],
+      "id": "rate-b"
+    },
+    {
+      "key": "rate-c",
+      "kind": "create",
+      "role": "tqrate",
+      "groups": ["max-dispatches-per-second"],
+      "id": "rate-c"
+    },
+    {
+      "key": "rate-d",
+      "kind": "create",
+      "role": "tqrate",
+      "groups": ["max-dispatches-per-second"],
+      "id": "rate-d"
+    },
+    {
+      "key": "rate-e",
+      "kind": "create",
+      "role": "tqrate",
+      "groups": ["max-dispatches-per-second"],
+      "id": "rate-e"
+    },
+    {
+      "key": "rate-f",
+      "kind": "create",
+      "role": "tqrate",
+      "groups": ["max-dispatches-per-second"],
+      "id": "rate-f"
+    },
+    {
+      "key": "rate-g",
+      "kind": "create",
+      "role": "tqrate",
+      "groups": ["max-dispatches-per-second"],
+      "id": "rate-g"
+    },
+    {
+      "key": "rate-h",
+      "kind": "create",
+      "role": "tqrate",
+      "groups": ["max-dispatches-per-second"],
+      "id": "rate-h"
+    },
+    {
+      "key": "env-default",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-answer-shape",
+        "dispatch-envelope-headers",
+        "dispatch-envelope-body",
+        "task-name-generation"
+      ]
+    },
+    {
+      "key": "env-named",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["create-answer-shape", "dispatch-envelope-headers"],
+      "id": "env-named"
+    },
+    {
+      "key": "env-headers",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["dispatch-envelope-headers", "body-and-header-limits"],
+      "id": "env-headers",
+      "headers": {
+        "X-Fireemu-Probe": "kept",
+        "User-Agent": "fireemu-probe",
+        "X-CloudTasks-TaskName": "forged",
+        "X-Google-Probe": "g",
+        "X-AppEngine-Probe": "a",
+        "Authorization": "Bearer not-a-token"
+      }
+    },
+    {
+      "key": "env-utf8",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["dispatch-envelope-body"],
+      "id": "env-utf8",
+      "bodyText": "{\"data\":{\"run\":\"${run}\",\"case\":\"env-utf8\",\"label\":\"\\u00e9\\u3042 éあ😀\"}}"
+    },
+    {
+      "key": "env-unordered",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["dispatch-envelope-body"],
+      "id": "env-unordered",
+      "bodyText": "{ \"data\" : { \"z\": 1, \"run\": \"${run}\", \"case\": \"env-unordered\", \"a\": [ 3, 2, 1 ] } }"
+    },
+    {
+      "key": "env-minimal",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["dispatch-envelope-body"],
+      "id": "env-minimal",
+      "bodyText": "{\"data\":{\"run\":\"${run}\",\"case\":\"env-minimal\"}}"
+    },
+    {
+      "key": "env-large",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["dispatch-envelope-body", "body-and-header-limits"],
+      "id": "env-large",
+      "padBytes": 100000
+    },
+    {
+      "key": "env-view-full",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["create-answer-shape"],
+      "id": "env-view-full",
+      "responseView": "FULL"
+    },
+    {
+      "key": "sch-past",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["schedule-time-boundaries", "schedule-delay-and-eta"],
+      "id": "sch-past",
+      "schedule": {
+        "offsetSeconds": -3600
+      }
+    },
+    {
+      "key": "sch-now",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["schedule-time-boundaries"],
+      "id": "sch-now",
+      "schedule": {
+        "offsetSeconds": 0
+      }
+    },
+    {
+      "key": "sch-20s",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["schedule-delay-and-eta"],
+      "id": "sch-20s",
+      "schedule": {
+        "offsetSeconds": 20
+      }
+    },
+    {
+      "key": "sch-nanos",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["schedule-time-boundaries"],
+      "id": "sch-nanos",
+      "schedule": {
+        "offsetSeconds": 5,
+        "form": "nanos"
+      }
+    },
+    {
+      "key": "sch-offset",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["schedule-time-boundaries"],
+      "id": "sch-offset",
+      "schedule": {
+        "offsetSeconds": 5,
+        "form": "offset"
+      }
+    },
+    {
+      "key": "sch-30d-less",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["schedule-time-boundaries"],
+      "id": "sch-30d-less",
+      "schedule": {
+        "offsetSeconds": 2588400
+      }
+    },
+    {
+      "key": "sch-30d-more",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["schedule-time-boundaries"],
+      "id": "sch-30d-more",
+      "schedule": {
+        "offsetSeconds": 2595600
+      }
+    },
+    {
+      "key": "sch-31d",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["schedule-time-boundaries"],
+      "id": "sch-31d",
+      "schedule": {
+        "offsetSeconds": 2678400
+      }
+    },
+    {
+      "key": "sch-year-9999",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["schedule-time-boundaries"],
+      "id": "sch-year-9999",
+      "schedule": {
+        "raw": "9999-12-31T23:59:59Z"
+      }
+    },
+    {
+      "key": "sch-text",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["schedule-time-boundaries"],
+      "id": "sch-text",
+      "schedule": {
+        "raw": "tomorrow"
+      }
+    },
+    {
+      "key": "sch-no-zone",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["schedule-time-boundaries"],
+      "id": "sch-no-zone",
+      "schedule": {
+        "raw": "2026-11-12T00:00:00"
+      }
+    },
+    {
+      "key": "sch-leap-second",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["schedule-time-boundaries"],
+      "id": "sch-leap-second",
+      "schedule": {
+        "raw": "2026-12-31T23:59:60Z"
+      }
+    },
+    {
+      "key": "err-no-task",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["create-errors-shape"],
+      "omit": "task"
+    },
+    {
+      "key": "err-no-http",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["create-errors-shape"],
+      "emptyRequest": true
+    },
+    {
+      "key": "err-unknown-field",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["create-errors-shape"],
+      "id": "err-unknown-field",
+      "extraTaskKey": "fireemuUnknownField"
+    },
+    {
+      "key": "err-queue-missing",
+      "kind": "create",
+      "role": "tqnone",
+      "groups": ["create-errors-shape"],
+      "id": "err-queue-missing"
+    },
+    {
+      "key": "id-space",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["task-id-validation"],
+      "name": "${queue}/tasks/${marker}-a b"
+    },
+    {
+      "key": "id-slash",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["task-id-validation"],
+      "name": "${queue}/tasks/${marker}-a/b"
+    },
+    {
+      "key": "id-empty",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["task-id-validation"],
+      "name": "${queue}/tasks/"
+    },
+    {
+      "key": "id-dot",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["task-id-validation"],
+      "id": "id.dot"
+    },
+    {
+      "key": "id-punct-ok",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["task-id-validation"],
+      "id": "id_ok-1"
+    },
+    {
+      "key": "id-500",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["task-id-validation"],
+      "id": "id-500",
+      "idPad": 500
+    },
+    {
+      "key": "id-501",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["task-id-validation"],
+      "id": "id-501",
+      "idPad": 501
+    },
+    {
+      "key": "id-other-queue",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["task-id-validation"],
+      "name": "${queue:tqconc1}/tasks/${marker}-id-other-queue"
+    },
+    {
+      "key": "id-other-project",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["task-id-validation"],
+      "name": "projects/tq-not-this-project/locations/us-central1/queues/${fn}/tasks/${marker}-id-other-project"
+    },
+    {
+      "key": "dl-14s",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["dispatch-deadline"],
+      "id": "dl-14s",
+      "deadline": "14s"
+    },
+    {
+      "key": "dl-15s",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["dispatch-deadline"],
+      "id": "dl-15s",
+      "deadline": "15s"
+    },
+    {
+      "key": "dl-1800s",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["dispatch-deadline"],
+      "id": "dl-1800s",
+      "deadline": "1800s"
+    },
+    {
+      "key": "dl-1801s",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["dispatch-deadline"],
+      "id": "dl-1801s",
+      "deadline": "1801s"
+    },
+    {
+      "key": "dl-fraction",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["dispatch-deadline"],
+      "id": "dl-fraction",
+      "deadline": "15.5s"
+    },
+    {
+      "key": "dl-bare",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["dispatch-deadline"],
+      "id": "dl-bare",
+      "deadline": "30"
+    },
+    {
+      "key": "dl-negative",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["dispatch-deadline"],
+      "id": "dl-negative",
+      "deadline": "-1s"
+    },
+    {
+      "key": "dl-zero",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["dispatch-deadline"],
+      "id": "dl-zero",
+      "deadline": "0s"
+    },
+    {
+      "key": "size-1000k",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["body-and-header-limits"],
+      "id": "size-1000k",
+      "padBytes": 1000000
+    },
+    {
+      "key": "size-1100k",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["body-and-header-limits"],
+      "id": "size-1100k",
+      "padBytes": 1100000
+    },
+    {
+      "key": "pw-01",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "pair": {
+        "id": "none",
+        "schedule": "none",
+        "deadline": "none",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-02",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-02",
+      "idPad": 500,
+      "schedule": {
+        "offsetSeconds": 2588400
+      },
+      "deadline": "1800s",
+      "padBytes": 100000,
+      "pair": {
+        "id": "max500",
+        "schedule": "limit29d",
+        "deadline": "d1800",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-03",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-03",
+      "idPad": 501,
+      "schedule": {
+        "raw": "tomorrow"
+      },
+      "deadline": "30",
+      "pair": {
+        "id": "over501",
+        "schedule": "malformed",
+        "deadline": "malformed",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-04",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-04",
+      "schedule": {
+        "offsetSeconds": 2678400
+      },
+      "padBytes": 100000,
+      "pair": {
+        "id": "plain",
+        "schedule": "over31d",
+        "deadline": "none",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-05",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "name": "${queue}/tasks/${marker}-pw-05 b",
+      "schedule": {
+        "offsetSeconds": 5
+      },
+      "padBytes": 100000,
+      "pair": {
+        "id": "badchar",
+        "schedule": "near",
+        "deadline": "none",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-06",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "name": "${queue}/tasks/${marker}-pw-06 b",
+      "schedule": {
+        "offsetSeconds": 2678400
+      },
+      "deadline": "15s",
+      "pair": {
+        "id": "badchar",
+        "schedule": "over31d",
+        "deadline": "d15",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-07",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "schedule": {
+        "offsetSeconds": -3600
+      },
+      "deadline": "30",
+      "padBytes": 100000,
+      "pair": {
+        "id": "none",
+        "schedule": "past",
+        "deadline": "malformed",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-08",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-08",
+      "idPad": 501,
+      "deadline": "15s",
+      "padBytes": 100000,
+      "pair": {
+        "id": "over501",
+        "schedule": "none",
+        "deadline": "d15",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-09",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-09",
+      "schedule": {
+        "offsetSeconds": -3600
+      },
+      "deadline": "1800s",
+      "pair": {
+        "id": "plain",
+        "schedule": "past",
+        "deadline": "d1800",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-10",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-10",
+      "idPad": 500,
+      "schedule": {
+        "raw": "tomorrow"
+      },
+      "padBytes": 100000,
+      "pair": {
+        "id": "max500",
+        "schedule": "malformed",
+        "deadline": "none",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-11",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-11",
+      "idPad": 501,
+      "schedule": {
+        "offsetSeconds": 2678400
+      },
+      "deadline": "1800s",
+      "pair": {
+        "id": "over501",
+        "schedule": "over31d",
+        "deadline": "d1800",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-12",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-12",
+      "idPad": 500,
+      "schedule": {
+        "offsetSeconds": 2678400
+      },
+      "deadline": "14s",
+      "pair": {
+        "id": "max500",
+        "schedule": "over31d",
+        "deadline": "d14",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-13",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "schedule": {
+        "raw": "tomorrow"
+      },
+      "deadline": "1801s",
+      "padBytes": 100000,
+      "pair": {
+        "id": "none",
+        "schedule": "malformed",
+        "deadline": "d1801",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-14",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-14",
+      "idPad": 501,
+      "schedule": {
+        "offsetSeconds": 5
+      },
+      "deadline": "1801s",
+      "pair": {
+        "id": "over501",
+        "schedule": "near",
+        "deadline": "d1801",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-15",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-15",
+      "schedule": {
+        "raw": "tomorrow"
+      },
+      "deadline": "15s",
+      "padBytes": 100000,
+      "pair": {
+        "id": "plain",
+        "schedule": "malformed",
+        "deadline": "d15",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-16",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-16",
+      "schedule": {
+        "offsetSeconds": 2588400
+      },
+      "deadline": "30",
+      "pair": {
+        "id": "plain",
+        "schedule": "limit29d",
+        "deadline": "malformed",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-17",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-17",
+      "schedule": {
+        "offsetSeconds": 2678400
+      },
+      "deadline": "1801s",
+      "padBytes": 100000,
+      "pair": {
+        "id": "plain",
+        "schedule": "over31d",
+        "deadline": "d1801",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-18",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-18",
+      "schedule": {
+        "offsetSeconds": 5
+      },
+      "deadline": "14s",
+      "padBytes": 100000,
+      "pair": {
+        "id": "plain",
+        "schedule": "near",
+        "deadline": "d14",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-19",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "schedule": {
+        "offsetSeconds": 2588400
+      },
+      "deadline": "15s",
+      "padBytes": 100000,
+      "pair": {
+        "id": "none",
+        "schedule": "limit29d",
+        "deadline": "d15",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-20",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-20",
+      "idPad": 500,
+      "schedule": {
+        "offsetSeconds": 5
+      },
+      "deadline": "30",
+      "padBytes": 100000,
+      "pair": {
+        "id": "max500",
+        "schedule": "near",
+        "deadline": "malformed",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-21",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "name": "${queue}/tasks/${marker}-pw-21 b",
+      "schedule": {
+        "raw": "tomorrow"
+      },
+      "deadline": "1800s",
+      "pair": {
+        "id": "badchar",
+        "schedule": "malformed",
+        "deadline": "d1800",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-22",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "schedule": {
+        "offsetSeconds": 5
+      },
+      "deadline": "1800s",
+      "padBytes": 100000,
+      "pair": {
+        "id": "none",
+        "schedule": "near",
+        "deadline": "d1800",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-23",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "name": "${queue}/tasks/${marker}-pw-23 b",
+      "schedule": {
+        "offsetSeconds": 2588400
+      },
+      "deadline": "1801s",
+      "padBytes": 100000,
+      "pair": {
+        "id": "badchar",
+        "schedule": "limit29d",
+        "deadline": "d1801",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-24",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-24",
+      "idPad": 501,
+      "schedule": {
+        "offsetSeconds": 2588400
+      },
+      "padBytes": 100000,
+      "pair": {
+        "id": "over501",
+        "schedule": "limit29d",
+        "deadline": "none",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-25",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "name": "${queue}/tasks/${marker}-pw-25 b",
+      "deadline": "30",
+      "pair": {
+        "id": "badchar",
+        "schedule": "none",
+        "deadline": "malformed",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-26",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-26",
+      "idPad": 500,
+      "schedule": {
+        "offsetSeconds": 5
+      },
+      "deadline": "15s",
+      "padBytes": 100000,
+      "pair": {
+        "id": "max500",
+        "schedule": "near",
+        "deadline": "d15",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-27",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "name": "${queue}/tasks/${marker}-pw-27 b",
+      "deadline": "14s",
+      "pair": {
+        "id": "badchar",
+        "schedule": "none",
+        "deadline": "d14",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-28",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-28",
+      "idPad": 500,
+      "deadline": "1801s",
+      "pair": {
+        "id": "max500",
+        "schedule": "none",
+        "deadline": "d1801",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-29",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "schedule": {
+        "offsetSeconds": 2678400
+      },
+      "deadline": "30",
+      "pair": {
+        "id": "none",
+        "schedule": "over31d",
+        "deadline": "malformed",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-30",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-30",
+      "idPad": 501,
+      "schedule": {
+        "offsetSeconds": -3600
+      },
+      "deadline": "14s",
+      "pair": {
+        "id": "over501",
+        "schedule": "past",
+        "deadline": "d14",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-31",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "name": "${queue}/tasks/${marker}-pw-31 b",
+      "schedule": {
+        "offsetSeconds": -3600
+      },
+      "deadline": "15s",
+      "padBytes": 100000,
+      "pair": {
+        "id": "badchar",
+        "schedule": "past",
+        "deadline": "d15",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-32",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "schedule": {
+        "offsetSeconds": 2588400
+      },
+      "deadline": "14s",
+      "pair": {
+        "id": "none",
+        "schedule": "limit29d",
+        "deadline": "d14",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-33",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "name": "${queue}/tasks/${marker}-pw-33 b",
+      "schedule": {
+        "raw": "tomorrow"
+      },
+      "deadline": "14s",
+      "pair": {
+        "id": "badchar",
+        "schedule": "malformed",
+        "deadline": "d14",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-34",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-34",
+      "idPad": 500,
+      "schedule": {
+        "offsetSeconds": -3600
+      },
+      "deadline": "1801s",
+      "pair": {
+        "id": "max500",
+        "schedule": "past",
+        "deadline": "d1801",
+        "body": "small"
+      }
+    },
+    {
+      "key": "pw-35",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "schedule": {
+        "offsetSeconds": -3600
+      },
+      "padBytes": 100000,
+      "pair": {
+        "id": "none",
+        "schedule": "past",
+        "deadline": "none",
+        "body": "large100k"
+      }
+    },
+    {
+      "key": "pw-36",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": [
+        "create-errors-shape",
+        "task-id-validation",
+        "schedule-time-boundaries",
+        "dispatch-deadline"
+      ],
+      "id": "pw-36",
+      "deadline": "1800s",
+      "pair": {
+        "id": "plain",
+        "schedule": "none",
+        "deadline": "d1800",
+        "body": "small"
+      }
+    },
+    {
+      "key": "dup-first",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["dedup-after-completion", "dedup-live"],
+      "id": "dup-first"
+    },
+    {
+      "key": "dup-sched",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["dedup-live"],
+      "id": "dup-sched",
+      "schedule": {
+        "offsetSeconds": 300
+      }
+    },
+    {
+      "key": "dup-sched-again",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["dedup-live"],
+      "id": "dup-sched",
+      "schedule": {
+        "offsetSeconds": 300
+      }
+    },
+    {
+      "key": "get-dup-sched",
+      "kind": "get-task",
+      "role": "tqdef",
+      "groups": ["dedup-live", "delete-task"],
+      "id": "dup-sched"
+    },
+    {
+      "key": "del-dup-sched",
+      "kind": "delete",
+      "role": "tqdef",
+      "groups": ["delete-task", "dedup-live"],
+      "id": "dup-sched"
+    },
+    {
+      "key": "del-dup-sched-again",
+      "kind": "delete",
+      "role": "tqdef",
+      "groups": ["delete-task"],
+      "id": "dup-sched"
+    },
+    {
+      "key": "dup-sched-after-delete",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["dedup-after-completion"],
+      "id": "dup-sched",
+      "schedule": {
+        "offsetSeconds": 300
+      }
+    },
+    {
+      "key": "dup-other-queue",
+      "kind": "create",
+      "role": "tqconc1",
+      "groups": ["dedup-live"],
+      "id": "dup-sched"
+    },
+    {
+      "key": "del-missing",
+      "kind": "delete",
+      "role": "tqdef",
+      "groups": ["delete-task"],
+      "id": "never-created"
+    },
+    {
+      "key": "dup-first-after-done",
+      "kind": "create",
+      "role": "tqdef",
+      "groups": ["dedup-after-completion"],
+      "id": "dup-first",
+      "pauseBefore": 25
+    },
+    {
+      "key": "get-dup-first",
+      "kind": "get-task",
+      "role": "tqdef",
+      "groups": ["dedup-after-completion", "delete-task"],
+      "id": "dup-first"
+    },
+    {
+      "key": "del-dup-first",
+      "kind": "delete",
+      "role": "tqdef",
+      "groups": ["delete-task"],
+      "id": "dup-first"
+    },
+    {
+      "key": "queue-tqdef",
+      "kind": "get-queue",
+      "role": "tqdef",
+      "groups": ["queue-config-mapping"]
+    },
+    {
+      "key": "queue-tqretry",
+      "kind": "get-queue",
+      "role": "tqretry",
+      "groups": ["queue-config-mapping"]
+    },
+    {
+      "key": "queue-tqlimit",
+      "kind": "get-queue",
+      "role": "tqlimit",
+      "groups": ["queue-config-mapping"]
+    },
+    {
+      "key": "queue-tqwindow",
+      "kind": "get-queue",
+      "role": "tqwindow",
+      "groups": ["queue-config-mapping"]
+    },
+    {
+      "key": "queue-tqconc1",
+      "kind": "get-queue",
+      "role": "tqconc1",
+      "groups": ["queue-config-mapping"]
+    },
+    {
+      "key": "queue-tqconc2",
+      "kind": "get-queue",
+      "role": "tqconc2",
+      "groups": ["queue-config-mapping"]
+    },
+    {
+      "key": "queue-tqrate",
+      "kind": "get-queue",
+      "role": "tqrate",
+      "groups": ["queue-config-mapping"]
+    },
+    {
+      "key": "queue-tqdead",
+      "kind": "get-queue",
+      "role": "tqdead",
+      "groups": ["queue-config-mapping"]
+    },
+    {
+      "key": "queue-absent",
+      "kind": "get-queue",
+      "role": "tqnone",
+      "groups": ["create-errors-shape"]
+    }
+  ],
+  "conditions": [
+    "TASK-QUEUE-FUNCTIONS/create-answer-shape",
+    "TASK-QUEUE-FUNCTIONS/create-errors-shape",
+    "TASK-QUEUE-FUNCTIONS/task-id-validation",
+    "TASK-QUEUE-FUNCTIONS/dedup-live",
+    "TASK-QUEUE-FUNCTIONS/dedup-after-completion",
+    "TASK-QUEUE-FUNCTIONS/dedup-window-expiry",
+    "TASK-QUEUE-FUNCTIONS/schedule-time-boundaries",
+    "TASK-QUEUE-FUNCTIONS/schedule-delay-and-eta",
+    "TASK-QUEUE-FUNCTIONS/dispatch-deadline",
+    "TASK-QUEUE-FUNCTIONS/body-and-header-limits",
+    "TASK-QUEUE-FUNCTIONS/dispatch-envelope-headers",
+    "TASK-QUEUE-FUNCTIONS/dispatch-envelope-body",
+    "TASK-QUEUE-FUNCTIONS/task-name-generation",
+    "TASK-QUEUE-FUNCTIONS/queue-config-mapping",
+    "TASK-QUEUE-FUNCTIONS/retry-on-status",
+    "TASK-QUEUE-FUNCTIONS/retry-backoff-schedule",
+    "TASK-QUEUE-FUNCTIONS/retry-limits",
+    "TASK-QUEUE-FUNCTIONS/max-concurrent-dispatches",
+    "TASK-QUEUE-FUNCTIONS/max-dispatches-per-second",
+    "TASK-QUEUE-FUNCTIONS/delete-task",
+    "TASK-QUEUE-FUNCTIONS/local-controls",
+    "TASK-QUEUE-FUNCTIONS/final-artifact-regression",
+    "TASK-QUEUE-FUNCTIONS/closure-review"
+  ],
+  "corpusSha256": "899fd699884992c7f96f8437d749237f16bbeafcc75ee5d41683373a741579e9"
+}

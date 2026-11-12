@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "source": "functions",
+    "codebase": "task-queue",
+    "runtime": "nodejs22"
+  }
+}

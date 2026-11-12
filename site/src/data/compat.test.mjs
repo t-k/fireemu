@@ -218,3 +218,26 @@ test('Hosting implementation conditions remain unverified in production', () => 
 	assert.equal(row.verified, 0);
 	assert.equal(verifiedAreaCount([record]), 0);
 });
+
+test('the task queue area is listed, at either status, with PLANNED and NOT_COMPARED conditions allowed', () => {
+	for (const parentStatus of ['IMPLEMENTING', 'COMPAT_VERIFIED']) {
+		const [row] = productionAreaRows([
+			{
+				parent: 'TASK-QUEUE-FUNCTIONS',
+				parentStatus,
+				conditions: [
+					{ conditionId: 'TASK-QUEUE-FUNCTIONS/create-answer-shape', status: 'VERIFIED' },
+					{ conditionId: 'TASK-QUEUE-FUNCTIONS/dedup-window-expiry', status: 'NOT_COMPARED' },
+					{ conditionId: 'TASK-QUEUE-FUNCTIONS/closure-review', status: 'PLANNED' },
+				],
+			},
+		]);
+		assert.equal(row.product, 'Cloud Functions');
+		assert.equal(row.title, 'Task queue functions');
+		assert.equal(row.total, 3);
+		assert.equal(row.verified, 1);
+		assert.deepEqual(row.conditions.map((c) => c.status), ['VERIFIED', 'NOT_COMPARED', 'PLANNED']);
+	}
+	assert.equal(verifiedAreaCount([{ parent: 'TASK-QUEUE-FUNCTIONS', parentStatus: 'IMPLEMENTING', conditions: [] }]), 0);
+	assert.equal(verifiedAreaCount([{ parent: 'TASK-QUEUE-FUNCTIONS', parentStatus: 'COMPAT_VERIFIED', conditions: [] }]), 1);
+});

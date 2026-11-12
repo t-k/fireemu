@@ -27,6 +27,7 @@ import { blockingFailure } from "./blocking-error.mjs";
 import { blockingEvent, loadIdentityParsers, portedIdentityParsers } from "./blocking-event.mjs";
 import { blockingResult } from "./blocking-response.mjs";
 import { boundLogMessage, createInvocationLogger } from "./log-context.mjs";
+import { installTaskAuthEnvironment, runWithTaskAuth, takeTaskIdentityMarker } from "./task-auth.mjs";
 import { invocationFailure } from "./invocation-error.mjs";
 import { InvocationBudget, readFrames } from "./protocol.mjs";
 import { deliverSchedule, v1ScheduleContext } from "./schedule-delivery.mjs";
@@ -356,6 +357,7 @@ startupTrace('argv parsed');
 const sourceDir = resolve(args.source);
 startupTrace('source resolved');
 process.env.FUNCTIONS_EMULATOR = process.env.FUNCTIONS_EMULATOR || "true";
+installTaskAuthEnvironment();
 process.env.FUNCTION_TARGET = process.env.FUNCTION_TARGET || "";
 process.env.FUNCTION_SIGNATURE_TYPE = process.env.FUNCTION_SIGNATURE_TYPE || "";
 process.env.K_SERVICE = process.env.K_SERVICE || "";
@@ -1402,6 +1404,7 @@ async function makeHttpServer(functions, manifest) {
       strict: strictProfile(),
       nonCallableHttp: spec.trigger?.type === "http" && spec.trigger.callable !== true,
     });
+    const taskIdentity = takeTaskIdentityMarker(req);
     // Without App Check a callable that could consume a token never sees one, whichever path
     // the request took here (spec 13.4; app-check-token.mjs).
     if (withholdsAppCheckToken(spec, process.env)) removeAppCheckToken(req);
@@ -1468,6 +1471,9 @@ async function makeHttpServer(functions, manifest) {
             const payload = blockingResult(value, spec.trigger.eventType, HttpsErrors[0]);
             if (lifetime.canStart()) res.status(200).json(payload);
           }
+        } else if (taskIdentity && strictProfile() && spec.trigger?.type === "tasks") {
+          // In the strict profile, the daemon marker hides only the SDK's request.auth read.
+          await runWithTaskAuth(() => fn(req, res));
         } else {
           await fn(req, res);
         }

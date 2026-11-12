@@ -2,7 +2,14 @@ import "./record/isolation.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { NOT_COMPARED, conditionEvidence, countsOf } from "./closure-evidence.mjs";
+import {
+  NOT_COMPARED,
+  REGRESSION,
+  conditionEvidence,
+  countsOf,
+  repositoryRegressionHolds,
+  repositoryTestExists,
+} from "./closure-evidence.mjs";
 
 const row = (key, structure = "MATCH", timing = "WITHIN", parts = {}) => ({
   case: key,
@@ -84,13 +91,70 @@ test("a row of a case the condition does not name does not count against it", ()
   assert.equal(conditionEvidence(condition(), docs, evidence).status, "VERIFIED");
 });
 
-test("a condition that is not production parity stays planned with no evidence", () => {
-  const result = conditionEvidence(
-    condition({ evidenceType: "fireemu-only", status: "VERIFIED", productionEvidence: [1] }),
-    ok(),
-    evidence,
+test("a fireemu-only condition is verified by the tests it names, all of which must exist", () => {
+  const local = condition({
+    conditionId: "TASK-QUEUE-FUNCTIONS/local-controls",
+    evidenceType: "fireemu-only",
+  });
+  const tests = [
+    { control: "a", file: "f.rs", test: "t1" },
+    { control: "b", file: "g.rs", test: "t2" },
+  ];
+  const verified = conditionEvidence(local, ok(), evidence, {
+    localTests: tests,
+    testExists: () => true,
+  });
+  assert.equal(verified.status, "VERIFIED");
+  assert.deepEqual(verified.localEvidence, tests);
+  assert.deepEqual(verified.productionEvidence, []);
+  assert.equal("observedPasses" in verified, false, "no production claim");
+  const missing = conditionEvidence(local, ok(), evidence, {
+    localTests: tests,
+    testExists: (file) => file !== "g.rs",
+  });
+  assert.deepEqual([missing.status, "localEvidence" in missing], ["PLANNED", false]);
+  assert.equal(
+    conditionEvidence(local, ok(), evidence, { localTests: [], testExists: () => true }).status,
+    "PLANNED",
   );
-  assert.deepEqual([result.status, result.productionEvidence], ["PLANNED", []]);
+});
+
+test("the release regression is verified only when it is wired, and the review never by this tool", () => {
+  const gate = (name) =>
+    condition({ conditionId: `TASK-QUEUE-FUNCTIONS/${name}`, evidenceType: "closure-gate" });
+  const wired = conditionEvidence(gate("final-artifact-regression"), ok(), evidence, {
+    regressionHolds: () => true,
+  });
+  assert.equal(wired.status, "VERIFIED");
+  assert.equal(wired.regressionEvidence.run, "R38");
+  assert.equal(
+    conditionEvidence(gate("final-artifact-regression"), ok(), evidence, {
+      regressionHolds: () => false,
+    }).status,
+    "PLANNED",
+  );
+  assert.equal(
+    conditionEvidence(gate("closure-review"), ok(), evidence, { regressionHolds: () => true })
+      .status,
+    "PLANNED",
+  );
+  assert.equal(repositoryRegressionHolds(REGRESSION), true, "the repository wires R38");
+  for (const broken of [
+    { ...REGRESSION, runner: "conformance/src/no-such-file.mjs" },
+    { ...REGRESSION, run: "R99" },
+    { ...REGRESSION, workflowStep: "a step that does not exist" },
+    { ...REGRESSION, releaseDependencies: "npm ci --prefix nowhere" },
+    { ...REGRESSION, tests: [...REGRESSION.tests, "conformance/src/missing.test.mjs"] },
+  ])
+    assert.equal(repositoryRegressionHolds(broken), false, JSON.stringify(broken).slice(0, 80));
+  assert.equal(
+    repositoryTestExists(
+      "crates/fireemu-adapter-functions/tests/task_strict_admission.rs",
+      "no_such_test",
+    ),
+    false,
+  );
+  assert.equal(repositoryTestExists("no/such/file.rs", "x"), false);
 });
 
 test("a named condition is not compared, with its reason, whatever the rows say", () => {

@@ -30,11 +30,6 @@ test(
       // committed comparison files are held to the tolerance itself (published.test.mjs).
       const result = compareStrict(local, json(pass), {
         tolerance: { gapMs: 3000, firstMs: 3000 },
-        other: json(
-          pass === "task-queue-production-pass-1.json"
-            ? "task-queue-production-pass-2.json"
-            : "task-queue-production-pass-1.json",
-        ),
       });
       const committed = json(committedName);
       assert.equal(

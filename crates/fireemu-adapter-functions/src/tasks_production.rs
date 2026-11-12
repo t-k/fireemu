@@ -37,6 +37,9 @@ pub struct Refusal {
     pub status: &'static str,
     /// The message text.
     pub message: String,
+    /// `error.details`: what production attached to an argument error (a `BadRequest` naming the field, or a `Help` link to
+    /// the definition of the field).
+    pub details: Option<Value>,
 }
 
 impl Refusal {
@@ -45,13 +48,53 @@ impl Refusal {
             http: 400,
             status: "INVALID_ARGUMENT",
             message: message.into(),
+            details: None,
         }
     }
 
-    /// `{"error": {"code", "message", "status"}}`.
+    /// An argument error with a `google.rpc.BadRequest` detail: one violation of `(field, description)` for each pair.
+    fn bad_request(message: impl Into<String>, violations: &[(&str, &str)]) -> Self {
+        let violations: Vec<Value> = violations
+            .iter()
+            .map(|(field, description)| {
+                if field.is_empty() {
+                    json!({"description": description})
+                } else {
+                    json!({"field": field, "description": description})
+                }
+            })
+            .collect();
+        Self {
+            details: Some(json!([{
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "fieldViolations": violations,
+            }])),
+            ..Self::invalid(message)
+        }
+    }
+
+    /// An argument error with a `google.rpc.Help` detail linking to the definition of a task field.
+    fn help(message: impl Into<String>, definition_of: &str) -> Self {
+        Self {
+            details: Some(json!([{
+                "@type": "type.googleapis.com/google.rpc.Help",
+                "links": [{
+                    "description": format!("Definition of {definition_of}"),
+                    "url": "https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task.FIELDS.name",
+                }],
+            }])),
+            ..Self::invalid(message)
+        }
+    }
+
+    /// `{"error": {"code", "message", "status", "details"?}}`.
     #[must_use]
     pub fn body(&self) -> Value {
-        json!({"error": {"code": self.http, "message": self.message, "status": self.status}})
+        let mut error = json!({"code": self.http, "message": self.message, "status": self.status});
+        if let Some(details) = &self.details {
+            error["details"] = details.clone();
+        }
+        json!({ "error": error })
     }
 
     /// The answer for a queue that does not exist (recorded for createTask and getQueue).
@@ -62,6 +105,7 @@ impl Refusal {
             status: "NOT_FOUND",
             message: "Queue does not exist. If you just created the queue, wait at least a minute for the queue to initialize."
                 .to_owned(),
+            details: None,
         }
     }
 
@@ -72,6 +116,7 @@ impl Refusal {
             http: 409,
             status: "ALREADY_EXISTS",
             message: "Requested entity already exists".to_owned(),
+            details: None,
         }
     }
 
@@ -83,6 +128,7 @@ impl Refusal {
             status: "ALREADY_EXISTS",
             message: "The task cannot be created because a task with this name existed too recently. For more information about task de-duplication see https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks/create#body.request_body.FIELDS.task."
                 .to_owned(),
+            details: None,
         }
     }
 
@@ -93,6 +139,7 @@ impl Refusal {
             http: 404,
             status: "NOT_FOUND",
             message: "Requested entity was not found.".to_owned(),
+            details: None,
         }
     }
 }
@@ -297,6 +344,9 @@ fn los_angeles_text(nanos: i128) -> String {
 
 // ---- durations -------------------------------------------------------------------------------
 
+/// The most seconds a proto `Duration` holds, either way.
+const MAX_DURATION_SECONDS: i128 = 315_576_000_000;
+
 /// A proto `Duration` text: an optional minus, digits, up to nine fractional digits, and `s`. Nanoseconds.
 #[must_use]
 pub fn parse_duration(text: &str) -> Option<i128> {
@@ -321,7 +371,15 @@ pub fn parse_duration(text: &str) -> Option<i128> {
     } else {
         fraction.parse::<i128>().ok()? * 10_i128.pow(u32::try_from(9 - fraction.len()).ok()?)
     };
-    let total = seconds * 1_000_000_000 + nanos;
+    // The proto Duration holds at most 315,576,000,000 seconds either way (UNRECORDED: production's text for a longer one
+    // was not observed; it is refused here as an invalid format, which no recorded answer contradicts).
+    if seconds > MAX_DURATION_SECONDS {
+        return None;
+    }
+    let total = seconds.checked_mul(1_000_000_000)?.checked_add(nanos)?;
+    if total > MAX_DURATION_SECONDS * 1_000_000_000 + 999_999_999 {
+        return None;
+    }
     Some(if negative { -total } else { total })
 }
 
@@ -367,6 +425,138 @@ pub fn generated_task_id(now_nanos: i128, counter: u64) -> String {
     id.to_string()
 }
 
+// ---- the retry gaps --------------------------------------------------------------------------
+
+/// The shortest gap production left before a retry once a task kept failing, by the number of the gap (the first retry
+/// follows gap 1). Recorded for a queue with `minBackoff` 1 s, `maxBackoff` 2 s, `maxDoublings` 1 and 100 attempts, in both
+/// runs (45 and 44 attempts): gap 1 was 1 s and gaps 2 to 11 were 2 s (the declared schedule), gaps 12 to 14 were 4 s, gaps 15
+/// and 16 were 8 s and every gap from 17 on was 10 s. How this depends on the declared `maxBackoff` was not recorded, so it
+/// is a floor under the declared gap, never a replacement for it.
+#[must_use]
+pub const fn production_gap_floor_millis(gap_number: u32) -> u64 {
+    match gap_number {
+        0..=11 => 0,
+        12..=14 => 4_000,
+        15..=16 => 8_000,
+        _ => 10_000,
+    }
+}
+
+/// The gap before a retry: the declared one, or under `production` backoff no shorter than production's recorded floor.
+#[must_use]
+pub fn retry_gap_millis(declared_millis: u64, gap_number: u32, production: bool) -> u64 {
+    if production {
+        declared_millis.max(production_gap_floor_millis(gap_number))
+    } else {
+        declared_millis
+    }
+}
+
+// ---- the answer layout -----------------------------------------------------------------------
+
+/// The order of the fields of a Cloud Tasks answer, as proto prints them (recorded in 110 task answers and 92 errors of the two
+/// TASK-QUEUE-FUNCTIONS recordings, all with the same order). A field not named here follows, in alphabetical order. The members of
+/// `headers` are not ordered by this list: production printed them in a different order from one run to the next.
+const FIELD_ORDER: [&str; 24] = [
+    "name",
+    "httpRequest",
+    "url",
+    "httpMethod",
+    "headers",
+    "body",
+    "oidcToken",
+    "serviceAccountEmail",
+    "audience",
+    "scheduleTime",
+    "createTime",
+    "dispatchDeadline",
+    "view",
+    "error",
+    "code",
+    "message",
+    "status",
+    "details",
+    "@type",
+    "fieldViolations",
+    "links",
+    "field",
+    "description",
+    "url",
+];
+
+/// A value as production prints an answer: multi-line JSON with two-space indentation, fields in proto order, `<`, `>` and `&`
+/// escaped and a newline at the end (`{}` for an empty answer), the layout of every recorded answer (638 bytes for a task whose
+/// compact form is 543).
+#[must_use]
+pub fn pretty(value: &Value) -> String {
+    let mut out = String::new();
+    write_pretty(value, 0, "", &mut out);
+    out.push('\n');
+    // Production escapes `<`, `>` and `&` inside strings (`\u003c`; recorded in the message of a malformed task name). They can
+    // only occur inside a string of the text above, so a plain replacement is exact.
+    out.replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('&', "\\u0026")
+}
+
+/// The members of a link are `description` then `url`, the opposite of `url` before the rest in a request.
+const LINK_ORDER: [&str; 2] = ["description", "url"];
+
+/// `parent` is the name of the member that holds `value` (an array's items have their array's name).
+fn write_pretty(value: &Value, depth: usize, parent: &str, out: &mut String) {
+    let in_headers = parent == "headers";
+    let pad = |n: usize| "  ".repeat(n);
+    match value {
+        Value::Object(map) if map.is_empty() => out.push_str("{}"),
+        Value::Object(map) => {
+            let mut members: Vec<(&String, &Value)> = map.iter().collect();
+            if !in_headers {
+                let order: &[&str] = if parent == "links" {
+                    &LINK_ORDER
+                } else {
+                    &FIELD_ORDER
+                };
+                members.sort_by_key(|(key, _)| {
+                    order
+                        .iter()
+                        .position(|known| known == key)
+                        .unwrap_or(order.len())
+                });
+            }
+            out.push_str("{\n");
+            for (index, (key, member)) in members.iter().enumerate() {
+                out.push_str(&pad(depth + 1));
+                out.push_str(&Value::String((*key).clone()).to_string());
+                out.push_str(": ");
+                write_pretty(member, depth + 1, key, out);
+                out.push_str(if index + 1 == members.len() {
+                    "\n"
+                } else {
+                    ",\n"
+                });
+            }
+            out.push_str(&pad(depth));
+            out.push('}');
+        }
+        Value::Array(items) if items.is_empty() => out.push_str("[]"),
+        Value::Array(items) => {
+            out.push_str("[\n");
+            for (index, item) in items.iter().enumerate() {
+                out.push_str(&pad(depth + 1));
+                write_pretty(item, depth + 1, parent, out);
+                out.push_str(if index + 1 == items.len() {
+                    "\n"
+                } else {
+                    ",\n"
+                });
+            }
+            out.push_str(&pad(depth));
+            out.push(']');
+        }
+        other => out.push_str(&other.to_string()),
+    }
+}
+
 // ---- the admission ---------------------------------------------------------------------------
 
 /// What the admission decided.
@@ -410,18 +600,20 @@ const HTTP_FIELDS: [&str; 6] = [
 ];
 
 fn unknown_name(field: &str, at: Option<&str>) -> Refusal {
-    Refusal::invalid(match at {
+    let message = match at {
         Some(at) => format!(
             "Invalid JSON payload received. Unknown name \"{field}\" at '{at}': Cannot find field."
         ),
         None => {
             format!("Invalid JSON payload received. Unknown name \"{field}\": Cannot find field.")
         }
-    })
+    };
+    let violation = [(at.unwrap_or(""), message.as_str())];
+    Refusal::bad_request(message.clone(), &violation)
 }
 
 /// Checks a createTask body the way production does and decides what the task is. `queue` is
-/// `projects/<p>/locations/<l>/queues/<q>`; `size` is the task's size in bytes (decoded body, headers, name and URL);
+/// `projects/<p>/locations/<l>/queues/<q>`; `size` is the task's size in bytes (the decoded body and the names and values of its headers, as the strict enqueue counts it);
 /// `default_deadline_seconds` is the dispatch deadline of a task that names none ([`DEFAULT_DEADLINE_SECONDS`] in production).
 ///
 /// # Errors
@@ -468,15 +660,16 @@ pub fn admit(
         .and_then(Value::as_str);
     let schedule = schedule_text.map(parse_timestamp);
     let deadline = deadline_text.map(parse_duration);
-    let mut format_errors = Vec::new();
+    let mut format_errors: Vec<(&str, &str)> = Vec::new();
     if schedule == Some(None) {
-        format_errors.push("Invalid value at 'task.schedule_time' (type.googleapis.com/google.protobuf.Timestamp), Field 'scheduleTime', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset.");
+        format_errors.push(("task.schedule_time", "Invalid value at 'task.schedule_time' (type.googleapis.com/google.protobuf.Timestamp), Field 'scheduleTime', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset."));
     }
     if deadline == Some(None) {
-        format_errors.push("Invalid value at 'task.dispatch_deadline' (type.googleapis.com/google.protobuf.Duration), Field 'dispatchDeadline', Illegal duration format; duration must end with 's'");
+        format_errors.push(("task.dispatch_deadline", "Invalid value at 'task.dispatch_deadline' (type.googleapis.com/google.protobuf.Duration), Field 'dispatchDeadline', Illegal duration format; duration must end with 's'"));
     }
     if !format_errors.is_empty() {
-        return Err(Refusal::invalid(format_errors.join("\n")));
+        let message: Vec<&str> = format_errors.iter().map(|(_, text)| *text).collect();
+        return Err(Refusal::bad_request(message.join("\n"), &format_errors));
     }
     // 3. A task needs a payload.
     let has_payload = task
@@ -499,13 +692,16 @@ pub fn admit(
                 && !parts[5].is_empty()
                 && !parts[7].is_empty();
             if !shaped {
-                return Err(Refusal::invalid(NAME_FORMAT));
+                return Err(Refusal::help(NAME_FORMAT, "task name"));
             }
             if !valid_task_id(parts[7]) {
-                return Err(Refusal::invalid(format!(
-                    "Task ID \"{}\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters.",
-                    parts[7]
-                )));
+                return Err(Refusal::help(
+                    format!(
+                        "Task ID \"{}\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters.",
+                        parts[7]
+                    ),
+                    "task ID",
+                ));
             }
             let named_queue = parts[..6].join("/");
             if named_queue != queue {
@@ -1248,5 +1444,236 @@ mod tests {
         .unwrap();
         assert_eq!(admitted.schedule_nanos, NOW);
         assert_eq!(admitted.schedule_time, "2026-11-11T09:06:59.589154Z");
+    }
+
+    // ---- a duration of any length is refused, never a panic or a wrap (review S1 of 2026-11-12) ------------------------------
+
+    #[test]
+    fn a_duration_beyond_the_proto_range_is_refused_and_the_edge_is_taken() {
+        // The proto Duration holds up to 315,576,000,000 seconds either way.
+        assert_eq!(
+            parse_duration("315576000000s"),
+            Some(315_576_000_000_i128 * 1_000_000_000)
+        );
+        assert_eq!(
+            parse_duration("-315576000000s"),
+            Some(-315_576_000_000_i128 * 1_000_000_000)
+        );
+        assert_eq!(
+            parse_duration("315576000000.999999999s"),
+            Some(315_576_000_000_999_999_999)
+        );
+        for bad in [
+            "315576000001s",
+            "-315576000001s",
+            "1000000000000000000000000000000s",
+            "99999999999999999999999999999999999999s",
+            "-99999999999999999999999999999999999999s",
+            "999999999999999999999999999999999999999999999999s",
+        ] {
+            assert_eq!(parse_duration(bad), None, "{bad}");
+        }
+        for text in [
+            "1000000000000000000000000000000s",
+            "99999999999999999999999999999999999999s",
+            "-1000000000000000000000000000000s",
+        ] {
+            let error = run(with(json!({"dispatchDeadline": text}))).unwrap_err();
+            assert_eq!(error.http, 400, "{text}");
+            assert_eq!(error.status, "INVALID_ARGUMENT", "{text}");
+        }
+    }
+
+    proptest::proptest! {
+        /// Any digits, with or without a sign and a fraction, parse to a value inside the proto range or to nothing;
+        /// admission answers a 400 for it and never panics.
+        #[test]
+        fn a_duration_of_any_digits_never_panics_and_stays_inside_the_proto_range(
+            negative in proptest::bool::ANY,
+            whole in "[0-9]{1,60}",
+            fraction in proptest::option::of("[0-9]{1,12}"),
+        ) {
+            let text = format!(
+                "{}{whole}{}s",
+                if negative { "-" } else { "" },
+                fraction.as_deref().map_or(String::new(), |f| format!(".{f}")),
+            );
+            if let Some(nanos) = parse_duration(&text) {
+                proptest::prop_assert!(nanos.abs() <= 315_576_000_000_999_999_999_i128, "{}", text);
+            }
+            let result = run(with(json!({"dispatchDeadline": text})));
+            if let Ok(admitted) = &result {
+                proptest::prop_assert!((15..=1800).contains(&admitted.deadline_seconds) || admitted.deadline_seconds == DEFAULT_DEADLINE_SECONDS);
+            }
+        }
+    }
+
+    #[test]
+    fn an_answer_is_printed_as_production_printed_it() {
+        let admitted = run(with(json!({"name": format!("{QUEUE}/tasks/layout")}))).unwrap();
+        let http = json!({"headers": {"Content-Type": "application/json"}, "oidcToken": {"audience": "https://u", "serviceAccountEmail": "a@b"}});
+        let text = pretty(&answer(
+            &admitted,
+            "https://u/",
+            http.as_object().unwrap(),
+            None,
+        ));
+        assert_eq!(
+            text,
+            format!(
+                "{{\n  \"name\": \"{QUEUE}/tasks/layout\",\n  \"httpRequest\": {{\n    \"url\": \"https://u/\",\n    \"httpMethod\": \"POST\",\n    \"headers\": {{\n      \"Content-Type\": \"application/json\",\n      \"User-Agent\": \"Google-Cloud-Tasks\"\n    }},\n    \"oidcToken\": {{\n      \"serviceAccountEmail\": \"a@b\",\n      \"audience\": \"https://u\"\n    }}\n  }},\n  \"scheduleTime\": \"{}\",\n  \"createTime\": \"{}\",\n  \"dispatchDeadline\": \"600s\",\n  \"view\": \"BASIC\"\n}}\n",
+                admitted.schedule_time, admitted.create_time
+            )
+        );
+        let error = Refusal::invalid("Task.payload_type is not set.");
+        assert_eq!(
+            pretty(&error.body()),
+            "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Task.payload_type is not set.\",\n    \"status\": \"INVALID_ARGUMENT\"\n  }\n}\n"
+        );
+        assert_eq!(pretty(&json!({})), "{}\n");
+        assert_eq!(
+            pretty(&json!({"a": [], "b": {}})),
+            "{\n  \"a\": [],\n  \"b\": {}\n}\n"
+        );
+        assert_eq!(
+            pretty(&json!({"a": [1, [2]]})),
+            "{\n  \"a\": [\n    1,\n    [\n      2\n    ]\n  ]\n}\n"
+        );
+    }
+
+    proptest::proptest! {
+        /// Whatever the value, the printed text parses back to it and ends with one newline.
+        #[test]
+        fn a_printed_answer_parses_back_to_the_same_value(
+            keys in proptest::collection::vec("[a-zA-Z]{1,8}", 0..6),
+            text in "[ -~]{0,20}",
+            number in proptest::num::i64::ANY,
+        ) {
+            let mut map = Map::new();
+            for (index, key) in keys.iter().enumerate() {
+                map.insert(key.clone(), json!({"s": text, "n": number, "a": [index, null, true], "e": {}, "l": []}));
+            }
+            map.insert("headers".to_owned(), json!({"name": "x", "Zeta": 1}));
+            let value = Value::Object(map);
+            let printed = pretty(&value);
+            proptest::prop_assert!(printed.ends_with('\n') && !printed.ends_with("\n\n"), "{}", printed);
+            proptest::prop_assert_eq!(serde_json::from_str::<Value>(&printed).unwrap(), value);
+        }
+    }
+
+    #[test]
+    fn the_production_gaps_of_the_recorded_queue_are_the_declared_ones_and_then_the_floor() {
+        use fireemu_core_functions::manifest::TaskRetryConfig;
+        // tqwindow of the recordings: minBackoff 1 s, maxBackoff 2 s, maxDoublings 1; the strict schedule's step of gap n is n.
+        let retry = TaskRetryConfig {
+            max_attempts: 100,
+            max_retry_millis: Some(6_000),
+            max_backoff_millis: 2_000,
+            max_doublings: 1,
+            min_backoff_millis: 1_000,
+        };
+        let gaps: Vec<u64> = (1..=20)
+            .map(|n| retry_gap_millis(retry.backoff_millis(n), n, true))
+            .collect();
+        let expected_seconds = [
+            1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 4, 4, 4, 8, 8, 10, 10, 10, 10,
+        ];
+        assert_eq!(gaps, expected_seconds.map(|s| s * 1000));
+        // Declared backoff keeps the declared gaps, and a declared gap above the floor is kept.
+        let declared: Vec<u64> = (1..=20)
+            .map(|n| retry_gap_millis(retry.backoff_millis(n), n, false))
+            .collect();
+        assert_eq!(declared[11], 2_000);
+        assert_eq!(declared[19], 2_000);
+        assert_eq!(retry_gap_millis(30_000, 17, true), 30_000);
+        assert_eq!(retry_gap_millis(0, 12, true), 4_000);
+        assert_eq!(retry_gap_millis(3_999, 12, true), 4_000);
+        assert_eq!(retry_gap_millis(4_001, 12, true), 4_001);
+    }
+
+    proptest::proptest! {
+        /// The production gap is never shorter than the declared one or than the floor, never longer than the larger of the two,
+        /// and the floor never shrinks as the gap number grows.
+        #[test]
+        fn the_production_gap_is_the_larger_of_the_declared_gap_and_a_floor_that_only_grows(
+            declared in 0_u64..100_000_000,
+            n in 0_u32..1_000,
+        ) {
+            let gap = retry_gap_millis(declared, n, true);
+            proptest::prop_assert!(gap >= declared);
+            proptest::prop_assert!(gap >= production_gap_floor_millis(n));
+            proptest::prop_assert!(gap == declared || gap == production_gap_floor_millis(n));
+            proptest::prop_assert!(production_gap_floor_millis(n) <= production_gap_floor_millis(n + 1));
+            proptest::prop_assert_eq!(retry_gap_millis(declared, n, false), declared);
+        }
+    }
+
+    #[test]
+    fn the_html_characters_of_a_message_are_escaped_as_production_escaped_them() {
+        let refusal = Refusal::invalid(NAME_FORMAT);
+        let text = pretty(&refusal.body());
+        assert!(text.contains(r#"\"projects/\u003cPROJECT_ID\u003e/locations/\u003cLOCATION_ID\u003e/queues/\u003cQUEUE_ID\u003e/tasks/\u003cTASK_ID\u003e\""#), "{text}");
+        assert!(!text.contains('<') && !text.contains('>'));
+        assert!(pretty(&json!({"a": "x & y"})).contains("x \\u0026 y"));
+        // It still parses back to the message.
+        assert_eq!(
+            serde_json::from_str::<Value>(&text).unwrap()["error"]["message"],
+            NAME_FORMAT
+        );
+    }
+
+    #[test]
+    fn an_argument_error_carries_the_details_production_attached() {
+        let detail = |task: Value| run(task).unwrap_err().body()["error"]["details"].clone();
+        let url = "https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task.FIELDS.name";
+        // A task ID and a task name: a Help link to the definition.
+        assert_eq!(
+            detail(with(json!({"name": format!("{QUEUE}/tasks/a b")}))),
+            json!([{"@type": "type.googleapis.com/google.rpc.Help", "links": [{"description": "Definition of task ID", "url": url}]}])
+        );
+        assert_eq!(
+            detail(with(json!({"name": "projects/p/tasks/x"}))),
+            json!([{"@type": "type.googleapis.com/google.rpc.Help", "links": [{"description": "Definition of task name", "url": url}]}])
+        );
+        // A malformed time: a BadRequest naming the proto field, one violation for each time.
+        let schedule = "Invalid value at 'task.schedule_time' (type.googleapis.com/google.protobuf.Timestamp), Field 'scheduleTime', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset.";
+        let deadline = "Invalid value at 'task.dispatch_deadline' (type.googleapis.com/google.protobuf.Duration), Field 'dispatchDeadline', Illegal duration format; duration must end with 's'";
+        assert_eq!(
+            detail(with(json!({"scheduleTime": "tomorrow"}))),
+            json!([{"@type": "type.googleapis.com/google.rpc.BadRequest", "fieldViolations": [{"field": "task.schedule_time", "description": schedule}]}])
+        );
+        assert_eq!(
+            detail(with(json!({"dispatchDeadline": "30"}))),
+            json!([{"@type": "type.googleapis.com/google.rpc.BadRequest", "fieldViolations": [{"field": "task.dispatch_deadline", "description": deadline}]}])
+        );
+        assert_eq!(
+            detail(with(
+                json!({"scheduleTime": "tomorrow", "dispatchDeadline": "30"})
+            )),
+            json!([{"@type": "type.googleapis.com/google.rpc.BadRequest", "fieldViolations": [
+                {"field": "task.schedule_time", "description": schedule},
+                {"field": "task.dispatch_deadline", "description": deadline}]}])
+        );
+        // An unknown name: the field is where the name was found.
+        let unknown =
+            "Invalid JSON payload received. Unknown name \"x\" at 'task': Cannot find field.";
+        assert_eq!(
+            detail(with(json!({"x": 1}))),
+            json!([{"@type": "type.googleapis.com/google.rpc.BadRequest", "fieldViolations": [{"field": "task", "description": unknown}]}])
+        );
+        // Other refusals carry none, and the printed form puts the details last, in production's order.
+        assert_eq!(
+            detail(with(json!({"dispatchDeadline": "14s"}))),
+            Value::Null
+        );
+        assert!(run(json!({})).unwrap_err().body()["error"]
+            .get("details")
+            .is_none());
+        let printed = pretty(
+            &run(with(json!({"name": format!("{QUEUE}/tasks/a b")})))
+                .unwrap_err()
+                .body(),
+        );
+        assert!(printed.contains("    \"status\": \"INVALID_ARGUMENT\",\n    \"details\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.Help\",\n        \"links\": [\n          {\n            \"description\": \"Definition of task ID\",\n            \"url\": "), "{printed}");
     }
 }

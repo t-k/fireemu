@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { applyEvidence } from "./closure-evidence.mjs";
+import { LOCAL_CONTROLS, applyEvidence, repositoryTestExists } from "./closure-evidence.mjs";
 import { CONDITION_IDS, PROGRAM, corpusManifest } from "./corpus.mjs";
 import { PROJECT, REGION } from "./plan.mjs";
 
@@ -27,7 +27,17 @@ test("the record is the implementing parent on the events sandbox, verified only
     runtime: "nodejs22",
   });
   assert.equal(record.closureReview, undefined, "no review has approved it");
-  assert.equal(record.integratedRegression, undefined);
+  // The release regression is described (R38) although the parent is not yet promoted.
+  assert.equal(record.integratedRegression.productionRequests, 0);
+  assert.deepEqual(
+    record.integratedRegression.comparisons.map((c) => c.path),
+    [
+      "conformance/task-queue-production-run-comparison.json",
+      "conformance/task-queue-production-strict-vs-pass-1.json",
+      "conformance/task-queue-production-strict-vs-pass-2.json",
+    ],
+  );
+  assert.match(record.integratedRegression.releaseBindingNote, /R38/);
   assert.deepEqual(record.recordingPolicy, { observedPasses: 2, requiredPasses: 2, waiver: null });
   assert.deepEqual(
     record.recordings.map((r) => [
@@ -46,17 +56,20 @@ test("the record is the implementing parent on the events sandbox, verified only
   const notVerified = ["dedup-window-expiry", "queue-config-mapping", "max-dispatches-per-second"];
   for (const condition of record.conditions) {
     const name = condition.conditionId.split("/")[1];
+    // The review of the record is the coordinator's, after the delta review.
     const expected = notVerified.includes(name)
       ? "NOT_COMPARED"
-      : condition.evidenceType === "production-parity"
-        ? "VERIFIED"
-        : "PLANNED";
+      : name === "closure-review"
+        ? "PLANNED"
+        : "VERIFIED";
     assert.equal(condition.status, expected, condition.conditionId);
-    if (expected === "VERIFIED") {
+    if (expected === "VERIFIED" && condition.evidenceType === "production-parity") {
       assert.equal(condition.productionEvidence.length, 2, condition.conditionId);
       assert.equal(condition.observedPasses, 2, condition.conditionId);
       assert.ok(condition.knownDifferences.length > 0, condition.conditionId);
     }
+    if (name === "local-controls") assert.ok(condition.localEvidence.length >= 10);
+    if (name === "final-artifact-regression") assert.equal(condition.regressionEvidence.run, "R38");
     if (expected === "NOT_COMPARED") assert.ok(isText(condition.reason), condition.conditionId);
     if (expected === "PLANNED")
       assert.deepEqual(condition.productionEvidence, [], condition.conditionId);
@@ -142,4 +155,24 @@ test("the record names no project number, no home-directory path and no key", as
   assert.equal(/\b\d{12,13}\b/.test(text), false);
   assert.equal(/\/Users\/|\/home\//.test(text), false);
   assert.equal(/AIza/.test(text), false);
+});
+
+test("the record names the rulings it rests on, answers the timing decision and keeps its follow-ups", () => {
+  assert.match(record.authority, /2026-11-12 \(12 to 21/);
+  assert.equal(record.scopeDecisions.find((d) => d.id === "TQ-TIMING").status, "ANSWERED");
+  assert.ok(record.scopeDecisions.every((d) => d.status === "ANSWERED"));
+  assert.equal(record.followUps.length, 2);
+  assert.match(record.followUps.join(" "), /rate-burst-probe/);
+  assert.match(record.followUps.join(" "), /recorder-follow-ups/);
+  assert.match(
+    record.comparisons.localStrictReplay.binarySha256 ?? "",
+    /^[0-9a-f]{64}$/,
+    "the replay names its build",
+  );
+});
+
+test("every test the local controls rest on exists", async () => {
+  for (const { file, test: name } of LOCAL_CONTROLS)
+    assert.ok(repositoryTestExists(file, name), `${file}: ${name}`);
+  assert.equal(new Set(LOCAL_CONTROLS.map((c) => c.control)).size >= 8, true);
 });

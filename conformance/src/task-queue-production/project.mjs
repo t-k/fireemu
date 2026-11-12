@@ -70,6 +70,42 @@ export function shapeOfValue(value) {
   return value === null ? "null" : typeof value;
 }
 
+const goEscape = (text) =>
+  text.replaceAll("<", "\\u003c").replaceAll(">", "\\u003e").replaceAll("&", "\\u0026");
+
+/** The order of the members of every object, by path; the members of `headers` are left out (production printed them in a different order in each run). */
+function keyOrderOf(value, path = "", out = {}) {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    if (!path.endsWith("/headers")) out[path] = Object.keys(value);
+    for (const [key, member] of Object.entries(value)) keyOrderOf(member, `${path}/${key}`, out);
+  } else if (Array.isArray(value))
+    value.forEach((item, i) => keyOrderOf(item, `${path}/${i}`, out));
+  return out;
+}
+
+/**
+ * The layout of an answer's text: its content type, its style (`indent2-newline` is production's: two-space indentation, `<`, `>` and
+ * `&` escaped, a newline at the end) and the order of its fields. The text itself is never kept.
+ */
+export function layoutOfAnswer(text, contentType) {
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { contentType: contentType ?? null, style: "not-json", keyOrder: {} };
+  }
+  const indented = goEscape(JSON.stringify(parsed, null, 2));
+  const style =
+    text === indented + "\n"
+      ? "indent2-newline"
+      : text === indented
+        ? "indent2"
+        : text === goEscape(JSON.stringify(parsed))
+          ? "compact"
+          : "other";
+  return { contentType: contentType ?? null, style, keyOrder: keyOrderOf(parsed) };
+}
+
 /** The admission answer of a create, a delete or a read: the status, the error code and text, and the masked body. */
 export function projectAnswer(answer, options) {
   if (!answer) return null;
@@ -77,12 +113,16 @@ export function projectAnswer(answer, options) {
   const error = json?.error;
   return {
     status: answer.status ?? null,
+    layout: answer.layout ?? null,
     ...(error
       ? {
           error: {
             code: error.code ?? null,
             status: error.status ?? null,
             message: maskText(error.message ?? "", { ...options, messageTimes: true }),
+            ...(error.details === undefined
+              ? {}
+              : { details: maskValue(error.details, { ...options, messageTimes: true }) }),
           },
         }
       : { body: maskBody(json, options), shape: shapeOfValue(json) }),
@@ -151,6 +191,14 @@ export function timingsOf(deliveries, t0 = null) {
   return {
     firstMs: starts[0] ?? null,
     gapsMs: gaps,
+    // How late the delivery started after the time the task was due (`X-CloudTasks-TaskETA`): the first delay without the
+    // service's own rounding of the create time to whole seconds and without the latency of the create call.
+    lateMs: deliveries.map((d) => {
+      const eta = d.request?.headers?.["x-cloudtasks-tasketa"];
+      return eta !== undefined && d.startedAt
+        ? Math.round(Date.parse(d.startedAt) - Number(eta) * 1000)
+        : null;
+    }),
     startsAtMs: deliveries.map((d) => at(d.startedAt)),
     endsAtMs: deliveries.map((d) => at(d.endedAt)),
     holdMs: deliveries.map((d) =>

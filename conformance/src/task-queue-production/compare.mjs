@@ -161,51 +161,60 @@ export function compareProperties(left, right) {
 
 const within = (x, y, tolerance) => x === null || y === null || Math.abs(x - y) <= tolerance;
 
-/** Timing of two cases: the first delivery and each gap, when both have the same number of deliveries. */
+/**
+ * Timing of two cases: the first delivery and each gap, when both have the same number of deliveries. The first delivery is
+ * compared by how late it started after the time the task was due (`lateMs`, from the ETA header) when both sides have it, and
+ * by its delay from the create time otherwise.
+ */
 export function compareTiming(a, b, { tolerance = TOLERANCE, claim = true } = {}) {
   if (!claim) return { verdict: "NOT_COMPARED" };
   if (a.gapsMs.length !== b.gapsMs.length)
     return { verdict: "OUTSIDE", why: "attempts", a: a.gapsMs.length + 1, b: b.gapsMs.length + 1 };
-  if (!within(a.firstMs, b.firstMs, tolerance.firstMs))
-    return { verdict: "OUTSIDE", why: "first", a: a.firstMs, b: b.firstMs };
+  const late = typeof a.lateMs?.[0] === "number" && typeof b.lateMs?.[0] === "number";
+  const [fa, fb] = late ? [a.lateMs[0], b.lateMs[0]] : [a.firstMs, b.firstMs];
+  if (!within(fa, fb, tolerance.firstMs))
+    return { verdict: "OUTSIDE", why: late ? "first late" : "first", a: fa, b: fb };
   for (let i = 0; i < a.gapsMs.length; i++)
     if (!within(a.gapsMs[i], b.gapsMs[i], tolerance.gapMs))
       return { verdict: "OUTSIDE", why: `gap ${i + 1}`, a: a.gapsMs[i], b: b.gapsMs[i] };
   return { verdict: "WITHIN" };
 }
 
+/** The first `n` deliveries of a case's timing. */
+const sliceTiming = (timing, n) => ({
+  ...timing,
+  gapsMs: timing.gapsMs.slice(0, Math.max(n - 1, 0)),
+  lateMs: timing.lateMs?.slice(0, n),
+  startsAtMs: timing.startsAtMs?.slice(0, n),
+  endsAtMs: timing.endsAtMs?.slice(0, n),
+  holdMs: timing.holdMs?.slice(0, n),
+});
+
 /**
  * @param left, right: projections (`projectRecording` output, or a local replay in the same shape).
  * @param knownDifferences: `{ id, cases: [key] | "*", part: "structure"|"timing", ruling, what }[]` (the ruling is required).
  * @param noTimingClaim: case keys whose timing is not compared (a case whose delay is the service's own latency).
  */
-/**
- * Cases whose number of attempts is not fixed by the configuration (a queue with maxAttempts 100 and a retry window): the
- * deliveries are compared up to the shorter side when the counts differ by at most this many.
- */
-export const ATTEMPT_JITTER = Object.freeze({ "window-six": 3 });
-
 export function compareProjections(
   left,
   right,
-  {
-    knownDifferences = [],
-    noTimingClaim = new Set(),
-    tolerance = TOLERANCE,
-    attemptJitter = ATTEMPT_JITTER,
-    // The first-delay spread between the two production runs of a case, in ms (`{ [case]: ms }`): what a timing allowance may add.
-    productionSpread = {},
-  } = {},
+  { knownDifferences = [], noTimingClaim = new Set(), tolerance = TOLERANCE } = {},
 ) {
-  for (const kd of knownDifferences)
+  for (const kd of knownDifferences) {
     if (
       !kd.id ||
       !kd.ruling ||
       !kd.what ||
       !Array.isArray(kd.paths) ||
-      (kd.paths.length === 0 && !kd.hide)
+      (kd.paths.length === 0 && !kd.hide && !kd.window)
     )
       throw new Error(`a known difference needs an id, a ruling, a text and paths: ${kd.id}`);
+    // A timing difference is a bound or it is nothing: an entry that covers any timing would widen the tolerance silently.
+    if (kd.part === "timing" && typeof kd.allowance !== "function")
+      throw new Error(`a timing known difference needs an allowance bound: ${kd.id}`);
+    if (kd.window && !(Number.isInteger(kd.window.minAttempts) && kd.window.minAttempts >= 2))
+      throw new Error(`an observation window needs a minimum of attempts: ${kd.id}`);
+  }
   const rows = [];
   const used = new Map();
   const keys = Object.keys(left.cases);
@@ -228,26 +237,33 @@ export function compareProjections(
     }
     const rules = new Map();
     const nl = normalizeNames(l, rules);
-    const nr = normalizeNames(r, new Map());
-    let jitter = false;
-    if (key in attemptJitter && nl.deliveries.length !== nr.deliveries.length) {
-      const n = Math.min(nl.deliveries.length, nr.deliveries.length);
-      if (Math.abs(nl.deliveries.length - nr.deliveries.length) <= attemptJitter[key]) {
-        nl.deliveries.length = n;
-        nr.deliveries.length = n;
-        jitter = true;
-      }
-    }
+    const nr = normalizeNames(r, rules);
     const exactL = clone(l);
     const exactR = clone(r);
+    let lt = l.timing;
+    let rt = r.timing;
+    // A queue that retries a hundred times is observed for as long as the run lasts, which differs from one run to the next: the
+    // attempts both sides made are compared, provided each made enough of them to show the whole of the recorded pattern.
+    let windowKd = null;
+    const countL = nl.deliveries.length;
+    const countR = nr.deliveries.length;
+    if (countL !== countR) {
+      const candidate = knownDifferences.find(
+        (k) => k.window && (k.cases === "*" || k.cases.includes(key)),
+      );
+      const n = Math.min(countL, countR);
+      if (candidate && n >= candidate.window.minAttempts) {
+        windowKd = candidate;
+        for (const side of [nl, nr, exactL, exactR]) side.deliveries.length = n;
+        lt = sliceTiming(lt, n);
+        rt = sliceTiming(rt, n);
+      }
+    }
     delete exactL.timing;
     delete exactR.timing;
     const parts = {};
     for (const part of PARTS) {
-      const exact =
-        part === "deliveries" && jitter
-          ? { path: "/deliveries[length]" }
-          : firstDifference(exactL[part], exactR[part]);
+      const exact = firstDifference(exactL[part], exactR[part]);
       const layout = firstDifference(nl[part], nr[part]);
       if (!exact) parts[part] = { verdict: "MATCH" };
       else if (!layout) parts[part] = { verdict: "MATCH_LAYOUT" };
@@ -282,29 +298,31 @@ export function compareProjections(
         if (parts[part].verdict === "KNOWN_DIFFERENCE" && parts[part].knownDifferences.length === 0)
           parts[part] = { verdict: "MATCH_LAYOUT" };
       }
-      if (parts[part].verdict === "MATCH_LAYOUT" || (parts[part].verdict === "MATCH" && false)) {
-        /* counted below */
-      }
     }
-    if (Object.values(parts).some((p) => p.verdict === "MATCH_LAYOUT")) {
-      for (const [id, n] of rules) used.set(id, (used.get(id) ?? 0) + (n > 0 ? 1 : 0));
-      if (jitter) used.set("attempt-count-jitter", (used.get("attempt-count-jitter") ?? 0) + 1);
+    // A layout rule that changed something in the row is counted whatever the part ends as.
+    for (const [id, n] of rules) used.set(id, (used.get(id) ?? 0) + (n > 0 ? 1 : 0));
+    if (windowKd) {
+      const deliveries = parts.deliveries;
+      if (deliveries.verdict === "MATCH" || deliveries.verdict === "MATCH_LAYOUT")
+        parts.deliveries = { verdict: "KNOWN_DIFFERENCE", knownDifferences: [windowKd.id] };
+      else if (deliveries.verdict === "KNOWN_DIFFERENCE")
+        parts.deliveries.knownDifferences = [
+          ...new Set([...deliveries.knownDifferences, windowKd.id]),
+        ].toSorted();
     }
     const structure =
       worst.find((v) => Object.values(parts).some((p) => p.verdict === v)) ?? "MATCH";
-    let timing = compareTiming(l.timing, r.timing, { tolerance, claim: !noTimingClaim.has(key) });
+    let timing = compareTiming(lt, rt, { tolerance, claim: !noTimingClaim.has(key) });
     let timingKnown = null;
     if (timing.verdict === "OUTSIDE") {
-      // An allowance covers a timing only when its own bound holds: it may add to the tolerance no more than the spread
-      // production showed between its two runs of the same case.
-      const spreadMs = productionSpread[key] ?? 0;
+      // An allowance covers a timing only when its own bound holds.
       for (const kd of knownDifferences.filter(
         (k) => k.part === "timing" && (k.cases === "*" || k.cases.includes(key)),
       )) {
-        const bound = kd.allowance ? kd.allowance({ timing, tolerance, spreadMs }) : null;
-        if (kd.allowance && !bound) continue;
+        const bound = kd.allowance({ timing, tolerance });
+        if (!bound) continue;
         timingKnown = kd;
-        timing = { ...timing, verdict: "KNOWN_DIFFERENCE", ...(bound ? { allowance: bound } : {}) };
+        timing = { ...timing, verdict: "KNOWN_DIFFERENCE", allowance: bound };
         break;
       }
     }
@@ -314,6 +332,14 @@ export function compareProjections(
       parts,
       timing,
       ...(timingKnown ? { timingKnownDifference: timingKnown.id } : {}),
+      ...(windowKd
+        ? {
+            observationWindow: {
+              attempts: { left: countL, right: countR },
+              compared: Math.min(countL, countR),
+            },
+          }
+        : {}),
     });
   }
   const count = (field, extract) => {
@@ -326,29 +352,24 @@ export function compareProjections(
     left: { alias: left.alias, corpusSha256: left.corpusSha256 },
     right: { alias: right.alias, corpusSha256: right.corpusSha256 },
     tolerance,
-    layoutRules: [
-      ...LAYOUT_RULES.map(({ id, what }) => ({ id, what, rows: used.get(id) ?? 0 })),
-      {
-        id: "attempt-count-jitter",
-        what:
-          "the number of attempts of a queue whose retry window does not bound them differs by at most " +
-          JSON.stringify(attemptJitter),
-        rows: used.get("attempt-count-jitter") ?? 0,
-      },
-    ],
-    knownDifferences: knownDifferences.map(({ id, cases, part, ruling, what, paths }) => ({
-      id,
-      cases,
-      part,
-      ruling,
-      what,
-      paths: paths.map(String),
-      rows: rows.filter(
-        (row) =>
-          row.timingKnownDifference === id ||
-          Object.values(row.parts).some((p) => p.knownDifferences?.includes(id)),
-      ).length,
-    })),
+    layoutRules: [...LAYOUT_RULES.map(({ id, what }) => ({ id, what, rows: used.get(id) ?? 0 }))],
+    knownDifferences: knownDifferences.map(
+      ({ id, cases, part, ruling, what, paths, window, allowance }) => ({
+        id,
+        cases,
+        part,
+        ruling,
+        what,
+        paths: paths.map(String),
+        ...(window ? { window } : {}),
+        ...(allowance ? { bounded: true } : {}),
+        rows: rows.filter(
+          (row) =>
+            row.timingKnownDifference === id ||
+            Object.values(row.parts).some((p) => p.knownDifferences?.includes(id)),
+        ).length,
+      }),
+    ),
     properties: compareProperties(left, right),
     summary: {
       structure: count("structure", (row) => row.structure),

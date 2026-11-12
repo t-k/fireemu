@@ -1330,6 +1330,11 @@ fn task_route(
                 return simple(StatusCode::BAD_REQUEST, "the request body is not JSON");
             };
             match runtime.enqueue_task(project, location, queue, &parsed) {
+                Ok(answer) if runtime.is_strict() => typed(
+                    StatusCode::OK,
+                    PRODUCTION_JSON,
+                    &crate::tasks_production::pretty(&answer),
+                ),
                 Ok(answer) => typed(StatusCode::OK, "application/json", &answer.to_string()),
                 Err(refusal) => refusal_response(runtime, &refusal),
             }
@@ -1340,12 +1345,14 @@ fn task_route(
             queue,
             task,
         } => {
-            if method != hyper::Method::DELETE {
-                return simple(StatusCode::METHOD_NOT_ALLOWED, "Method Not Allowed");
-            }
             if runtime.is_strict() {
+                // The emulator profile answers every method on this path as it always has (the official emulator
+                // registers no other handler there); only the strict profile tells a method from a delete.
+                if method != hyper::Method::DELETE {
+                    return simple(StatusCode::METHOD_NOT_ALLOWED, "Method Not Allowed");
+                }
                 return match runtime.delete_task_strict(project, location, queue, task) {
-                    Ok(()) => typed(StatusCode::OK, "application/json", "{}"),
+                    Ok(()) => typed(StatusCode::OK, PRODUCTION_JSON, "{}\n"),
                     Err(refusal) => refusal_response(runtime, &refusal),
                 };
             }
@@ -1357,6 +1364,9 @@ fn task_route(
     }
 }
 
+/// The content type of every recorded Cloud Tasks answer, 137 successes and 92 errors in the two recordings.
+const PRODUCTION_JSON: &str = "application/json; charset=UTF-8";
+
 /// A createTask or deleteTask refusal: `google.rpc.Status` JSON in the strict profile (where the runtime built it as JSON),
 /// plain text as the official emulator answers.
 fn refusal_response(
@@ -1364,11 +1374,17 @@ fn refusal_response(
     refusal: &crate::tasks::EnqueueRefusal,
 ) -> Response<OutBody> {
     let status = StatusCode::from_u16(refusal.status).unwrap_or(StatusCode::BAD_REQUEST);
-    if runtime.is_strict()
-        && serde_json::from_str::<serde_json::Value>(&refusal.body)
-            .is_ok_and(|v| v.get("error").is_some())
-    {
-        return typed(status, "application/json; charset=UTF-8", &refusal.body);
+    if runtime.is_strict() {
+        if let Some(parsed) = serde_json::from_str::<serde_json::Value>(&refusal.body)
+            .ok()
+            .filter(|v| v.get("error").is_some())
+        {
+            return typed(
+                status,
+                PRODUCTION_JSON,
+                &crate::tasks_production::pretty(&parsed),
+            );
+        }
     }
     typed(status, "text/plain; charset=utf-8", &refusal.body)
 }

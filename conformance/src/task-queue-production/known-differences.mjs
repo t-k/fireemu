@@ -36,31 +36,6 @@ export const KNOWN_DIFFERENCES = Object.freeze([
     what: "getTask and getQueue are the Cloud Tasks management API, which neither fireemu nor the official emulator serves (405 here); the recordings are read-back evidence of the queue settings and of the task states, not a claim.",
   },
   {
-    id: "KD-OIDC-TOKEN",
-    part: "deliveries",
-    cases: "*",
-    paths: [],
-    ruling: 3,
-    what: "Production delivers an OIDC Authorization header (a Bearer with three segments) and the task's own Authorization header is replaced by it; fireemu has no issuer to mint one, so no Authorization arrives and the SDK's auth context is absent (hasAuth).",
-    hide(delivery) {
-      let changed = false;
-      const names = delivery.request.headers.names.filter((name) => name !== "authorization");
-      if (names.length !== delivery.request.headers.names.length) {
-        delivery.request.headers.names = names;
-        changed = true;
-      }
-      if (delivery.request.headers.fixed.authorization !== undefined) {
-        delete delivery.request.headers.fixed.authorization;
-        changed = true;
-      }
-      if (delivery.context.hasAuth !== false) {
-        delivery.context.hasAuth = false;
-        changed = true;
-      }
-      return changed;
-    },
-  },
-  {
     id: "KD-PLATFORM-HEADERS",
     part: "deliveries",
     cases: "*",
@@ -91,20 +66,13 @@ export const KNOWN_DIFFERENCES = Object.freeze([
     },
   },
   {
-    id: "KD-SCHEDULE-CLOCK-SKEW",
-    part: "timing",
-    cases: ["pw-22", "pw-26"],
-    paths: [/.*/],
-    ruling: 3,
-    what: "A task scheduled a few seconds ahead of the client's clock is delivered after the delay between the server's create time and that scheduleTime, which holds the skew between the client's clock and Cloud Tasks' (production's two runs differ by 0.7 s and 1.1 s on these cases for a 5 s schedule); locally both clocks are one. The allowance covers only a first delivery that is outside the tolerance, and adds to the tolerance no more than the spread production showed between its two runs of the same case. Exact timing is outside the scope (ruling 3).",
-    allowance({ timing, tolerance, spreadMs }) {
-      if (timing.why !== "first" || timing.a === null || timing.b === null) return null;
-      const differenceMs = Math.abs(timing.a - timing.b);
-      const excessMs = differenceMs - tolerance.firstMs;
-      return excessMs <= spreadMs
-        ? { differenceMs, toleranceMs: tolerance.firstMs, excessMs, productionSpreadMs: spreadMs }
-        : null;
-    },
+    id: "KD-OBSERVATION-WINDOW",
+    part: "deliveries",
+    cases: ["window-six"],
+    paths: [],
+    window: { minAttempts: 18 },
+    ruling: 16,
+    what: "A queue that retries a hundred times is observed for as long as the run lasts (45 and 44 attempts in the two recordings, about 24 locally), so the deliveries of the two sides are compared up to the shorter side, which must hold at least 18 attempts: the first eleven gaps follow the declared schedule and the gaps from the twelfth on are 4, 8 and 10 s in production and in strict under productionExact. Which gaps follow after the last one observed, and how the growth depends on the declared maxBackoff, are not recorded.",
   },
   {
     id: "KD-LOCAL-PATH",
@@ -122,6 +90,5 @@ export const NO_TIMING_CLAIM = Object.freeze(
     ...["a", "b", "c", "d"].map((n) => "conc1-" + n),
     ...["a", "b", "c", "d", "e"].map((n) => "conc2-" + n),
     ...["a", "b", "c", "d", "e", "f", "g", "h"].map((n) => "rate-" + n),
-    "window-six",
   ]),
 );

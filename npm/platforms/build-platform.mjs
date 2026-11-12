@@ -72,6 +72,7 @@ export const RUNNER_FILES = [
   "http-admission.mjs",
   "invocation-error.mjs",
   "schedule-delivery.mjs",
+  "task-auth.mjs",
 ];
 
 function parseArgs(argv) {

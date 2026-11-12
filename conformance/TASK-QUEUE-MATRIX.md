@@ -26,9 +26,9 @@ The program (`conformance/src/task-queue-production/corpus.manifest.json`) has 1
 | max-concurrent-dispatches | Production parity | 9 | Verified: two recordings, strict matches (known differences listed) |
 | max-dispatches-per-second | Production parity | 8 | Not compared (reason in the record) |
 | delete-task | Production parity | 6 | Verified: two recordings, strict matches (known differences listed) |
-| local-controls | Fireemu-only | - | Local evidence, not built |
-| final-artifact-regression | Gate | - | Not yet |
-| closure-review | Gate | - | Not yet |
+| local-controls | Fireemu-only | - | Verified by local tests (named in the record) |
+| final-artifact-regression | Gate | - | Verified: release run R38 |
+| closure-review | Gate | - | After the delta review |
 
 Reading the table: `Verified` is derived by `conformance/src/task-queue-production/closure-evidence.mjs` from `conformance/task-queue-production-run-comparison.json` and the two `task-queue-production-strict-vs-pass-N.json` files (no mismatch, no unknown, every claimed timing inside its tolerance). `Not compared` conditions are not claimed: the queue settings are read with the management API that neither fireemu nor the official emulator serves, the rate limit was never held back by the program's pacing, and the reuse window's expiry was not observed. The known differences cite coordinator rulings 3 and 6 (the function URL and path, the OIDC token and Cloud Run's platform headers, the queue management API reads). The official-emulator columns of the HOSTING matrix are absent on purpose: this parent compares the strict profile with production, and the `emulator` profile makes no production claim (it never refuses more than firebase-tools 15.28.2).
 

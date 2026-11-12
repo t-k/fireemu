@@ -325,6 +325,9 @@ pub struct FunctionsConfig {
     /// The dispatch deadline, in seconds, of a task that names none (the strict profile): production's is 600, and the
     /// default profile keeps the 60 seconds of the official emulator so that a hung handler does not hold a test for ten minutes.
     pub task_default_deadline_seconds: u64,
+    /// Whether the gaps between the retries of a failing task follow production (a floor that grows after a dozen failures,
+    /// `tasks_production::production_gap_floor_millis`) rather than the declared schedule. Strict profile only.
+    pub task_retry_production_gaps: bool,
     /// Whether service timestamps use the configured daemon clock instead of wall time.
     pub clock_start_pinned: bool,
     /// How the subscription of a Pub/Sub function is named (and which the events name): by profile.
@@ -355,6 +358,7 @@ impl FunctionsConfig {
             honour_task_schedule_time: false,
             task_name_reuse: crate::tasks_production::NameReuse::Retained,
             task_default_deadline_seconds: 60,
+            task_retry_production_gaps: false,
             clock_start_pinned: false,
             subscription_naming: crate::events::SubscriptionNaming::default(),
             auth_context: crate::events::AuthContextNaming::default(),
@@ -384,6 +388,10 @@ impl std::fmt::Debug for FunctionsConfig {
             .field(
                 "task_default_deadline_seconds",
                 &self.task_default_deadline_seconds,
+            )
+            .field(
+                "task_retry_production_gaps",
+                &self.task_retry_production_gaps,
             )
             .field("clock_start_pinned", &self.clock_start_pinned)
             .field("subscription_naming", &self.subscription_naming)
@@ -3737,6 +3745,7 @@ impl FunctionsRuntime {
                     http: e.status,
                     status: "INVALID_ARGUMENT",
                     message: e.body,
+                    details: None,
                 })
             })?;
         task.name.clone_from(&admitted.name);
@@ -3748,6 +3757,7 @@ impl FunctionsRuntime {
                 status: "INVALID_ARGUMENT",
                 message: "a task may only be dispatched to this emulator's own function URL"
                     .to_owned(),
+                details: None,
             }));
         }
         let queue_key_bytes = crate::tasks::queue_key(project, location, queue).len();
@@ -3783,6 +3793,7 @@ impl FunctionsRuntime {
                         http: 429,
                         status: "RESOURCE_EXHAUSTED",
                         message: "the local task queue is full".to_owned(),
+                        details: None,
                     }));
                 }
                 Err(AdmissionError::RuntimeFull) => {
@@ -3790,6 +3801,7 @@ impl FunctionsRuntime {
                         http: 429,
                         status: "RESOURCE_EXHAUSTED",
                         message: "the local task queue capacity is exhausted".to_owned(),
+                        details: None,
                     }));
                 }
                 Err(AdmissionError::Closed) => {
@@ -4075,10 +4087,17 @@ impl FunctionsRuntime {
                 );
                 return true;
             }
-            let backoff = Duration::from_millis(dispatch.retry.backoff_millis(backoff_step(
+            let declared = dispatch.retry.backoff_millis(backoff_step(
                 self.profile == FunctionsHttpProfile::Strict,
                 attempt,
-            )));
+            ));
+            // The retry after gap n follows attempt n + 1.
+            let backoff = Duration::from_millis(crate::tasks_production::retry_gap_millis(
+                declared,
+                attempt.saturating_sub(1),
+                self.profile == FunctionsHttpProfile::Strict
+                    && self.config.task_retry_production_gaps,
+            ));
             let retry_deadline = task_retry_deadline(first_delivery, dispatch.retry, attempt);
             let backoff_deadline = self.task_now() + backoff;
             let deadline =
@@ -12613,6 +12632,7 @@ mod schedule_capacity_tests {
                 honour_task_schedule_time: false,
                 task_name_reuse: crate::tasks_production::NameReuse::Retained,
                 task_default_deadline_seconds: 60,
+                task_retry_production_gaps: false,
                 clock_start_pinned: false,
                 subscription_naming: crate::events::SubscriptionNaming::default(),
                 auth_context: crate::events::AuthContextNaming::default(),

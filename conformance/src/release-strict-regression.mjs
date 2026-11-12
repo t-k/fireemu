@@ -42,8 +42,9 @@ import { bindingProblems } from "./harness-registry.mjs";
 import { EXPECTED_ACTIONS, localSetupDigest } from "./harness-target/local-tenancy.mjs";
 import { findPackagedRunner, packagedRunnerCandidates } from "./packaged-runner.mjs";
 import { judgeHosting } from "./hosting-production/release-judge.mjs";
+import { judgeTaskQueue } from "./task-queue-production/release-judge.mjs";
 
-export { judgeHosting };
+export { judgeHosting, judgeTaskQueue };
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const CONFORMANCE = join(ROOT, "conformance");
@@ -209,6 +210,40 @@ const hostingRun = (id) => ({
   ],
 });
 
+/**
+ * The task queue comparisons (TASK-QUEUE-FUNCTIONS closure): the program served by the strict profile under productionExact on
+ * the binary under test and compared with the two committed recordings. One run exports the three comparison documents, and the
+ * judge (`task-queue-production/release-judge.mjs`) takes timing as a tolerance, not as an equality.
+ */
+const TASK_QUEUE_COMPARISONS = [
+  "conformance/task-queue-production-run-comparison.json",
+  "conformance/task-queue-production-strict-vs-pass-1.json",
+  "conformance/task-queue-production-strict-vs-pass-2.json",
+];
+const taskQueueRun = (id) => ({
+  id,
+  kind: "task-queue-comparison-v1",
+  comparisonPaths: TASK_QUEUE_COMPARISONS,
+  clear: [],
+  commands: [
+    {
+      mode: "local",
+      argv: [
+        "node",
+        "conformance/src/task-queue-production/release-replay.mjs",
+        "local",
+        "--fireemu",
+        "{bin}",
+        "--export",
+        "{export}",
+      ],
+      env: {},
+      expectedExitCodes: [0],
+      timeoutMs: 10 * 60 * 1000,
+    },
+  ],
+});
+
 export const RUNS = [
   (() => {
     const run = rtdbRun("R22", "rest-old", [
@@ -250,6 +285,7 @@ export const RUNS = [
   rtdbRun("R35", "sdk-rules-syntax", ["RTDB-sdk-rules-syntax-comparison.json"]),
   rtdbRun("R36", "kinds", ["RTDB-kinds-comparison.json"]),
   hostingRun("R37"),
+  taskQueueRun("R38"),
   laneRun(
     "R1",
     "fs-query-index-comparison-v1",
@@ -1754,6 +1790,9 @@ export function judge(comparison, observations, context) {
   if (comparison.kind === "hosting-comparison-v1") {
     return judgeHosting(comparison.path, expected, observations[comparison.runIds[0]], context);
   }
+  if (comparison.kind === "task-queue-comparison-v1") {
+    return judgeTaskQueue(comparison.path, expected, observations[comparison.runIds[0]], context);
+  }
   const observed = observations[comparison.runIds[0]];
   const run = RUNS.find((r) => r.id === comparison.runIds[0]);
   let sourceRebinds = [];
@@ -1785,7 +1824,8 @@ export function exportCopies(comparisons, runs) {
           (command) =>
             command.mode === "export-comparison" ||
             (run.kind === "rtdb-production-comparison-v1" && command.mode === "local") ||
-            (run.kind === "hosting-comparison-v1" && command.mode === "local"),
+            (run.kind === "hosting-comparison-v1" && command.mode === "local") ||
+            (run.kind === "task-queue-comparison-v1" && command.mode === "local"),
         ),
       )
       .map((run) => run.id),

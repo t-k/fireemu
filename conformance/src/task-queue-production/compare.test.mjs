@@ -206,26 +206,6 @@ test("a layout rule makes the volatile edge header, the ETA digits and the id le
   );
 });
 
-test("the attempt-count jitter compares the shorter side only inside its bound", () => {
-  const many = (n) =>
-    record({
-      deliveries: Array.from({ length: n }, () => delivery()),
-      timing: timing(100, Array(n - 1).fill(1000)),
-    });
-  const within = compareProjections(projection({ w: many(5) }), projection({ w: many(7) }), {
-    attemptJitter: { w: 3 },
-  });
-  assert.equal(within.rows[0].structure, "MATCH_LAYOUT");
-  const beyond = compareProjections(projection({ w: many(3) }), projection({ w: many(7) }), {
-    attemptJitter: { w: 3 },
-  });
-  assert.equal(beyond.rows[0].structure, "MISMATCH");
-  const unnamed = compareProjections(projection({ x: many(5) }), projection({ x: many(6) }), {
-    attemptJitter: { w: 3 },
-  });
-  assert.equal(unnamed.rows[0].structure, "MISMATCH");
-});
-
 test("timing is within the tolerance and outside beyond it, for the first delivery and every gap", () => {
   const t = (first, gaps) => timing(first, gaps);
   assert.equal(
@@ -245,23 +225,6 @@ test("timing is within the tolerance and outside beyond it, for the first delive
   assert.equal(compareTiming(t(100, [1000]), t(100, [1000, 5])).why, "attempts");
   assert.equal(compareTiming(t(100, []), t(99999, []), { claim: false }).verdict, "NOT_COMPARED");
   assert.equal(compareTiming(t(null, [null]), t(5, [5])).verdict, "WITHIN");
-});
-
-test("a timing known difference only relabels an outside verdict", () => {
-  const kd = { id: "KD-T", part: "timing", cases: "*", paths: [/x/], ruling: 6, what: "w" };
-  const slow = record({ timing: timing(100000) });
-  assert.equal(
-    verdictOf({ a: record() }, { a: slow }, { knownDifferences: [kd] }).timing.verdict,
-    "KNOWN_DIFFERENCE",
-  );
-  assert.equal(
-    verdictOf({ a: record() }, { a: record() }, { knownDifferences: [kd] }).timing.verdict,
-    "WITHIN",
-  );
-  assert.equal(
-    verdictOf({ a: record() }, { a: slow }, { noTimingClaim: new Set(["a"]) }).timing.verdict,
-    "NOT_COMPARED",
-  );
 });
 
 test("a case on only one side is refused or unknown", () => {
@@ -360,26 +323,15 @@ test("a property compares the overlap of both sides as numbers", () => {
 test("every known difference cites a ruling and a text, and the no-claim set holds only queue cases of the program", () => {
   const ids = new Set();
   for (const kd of KNOWN_DIFFERENCES) {
-    assert.ok([3, 6].includes(kd.ruling), kd.id);
+    assert.ok([3, 6, 16].includes(kd.ruling), kd.id);
     assert.ok(kd.what.length > 40, kd.id);
     assert.ok(!ids.has(kd.id), kd.id);
     ids.add(kd.id);
-    assert.ok(kd.paths.length > 0 || kd.hide, kd.id);
+    assert.ok(kd.paths.length > 0 || kd.hide || kd.window, kd.id);
+    // A timing difference is a bound, never a blanket.
+    if (kd.part === "timing") assert.equal(typeof kd.allowance, "function", kd.id);
   }
-  for (const key of NO_TIMING_CLAIM)
-    assert.match(key, /^(conc1-[a-d]|conc2-[a-e]|rate-[a-h]|window-six)$/);
-});
-
-test("the attempt-count jitter bound is inclusive", () => {
-  const many = (n) =>
-    record({
-      deliveries: Array.from({ length: n }, () => delivery()),
-      timing: timing(100, Array(n - 1).fill(1000)),
-    });
-  const result = compareProjections(projection({ w: many(4) }), projection({ w: many(7) }), {
-    attemptJitter: { w: 3 },
-  });
-  assert.equal(result.rows[0].structure, "MATCH_LAYOUT");
+  for (const key of NO_TIMING_CLAIM) assert.match(key, /^(conc1-[a-d]|conc2-[a-e]|rate-[a-h])$/);
 });
 
 test("a hide hook of other cases does not cover a case it does not name", () => {
@@ -463,65 +415,180 @@ test("the layout rules take exactly the recorded forms: ETA digits 3 to 7 and id
   );
 });
 
-test("a timing known difference is counted in the rows of its allowance", () => {
-  const kd = { id: "KD-T", part: "timing", cases: ["a"], paths: [/x/], ruling: 3, what: "w" };
-  const slow = record({ timing: timing(100000) });
-  const result = compareProjections(projection({ a: record() }), projection({ a: slow }), {
+// ---- observation window, timing allowance and the lateness of the first delivery (review of 2026-11-12) ---------------------------
+
+const windowKd = {
+  id: "KD-W",
+  part: "deliveries",
+  cases: ["w"],
+  paths: [],
+  window: { minAttempts: 5 },
+  ruling: 16,
+  what: "w",
+};
+const attempts = (n, gap = 1000) =>
+  record({
+    deliveries: Array.from({ length: n }, () => delivery()),
+    timing: timing(100, Array(n - 1).fill(gap)),
+  });
+const windowRow = (left, right, kd = windowKd) =>
+  compareProjections(projection({ w: left }), projection({ w: right }), { knownDifferences: [kd] })
+    .rows[0];
+
+test("an observation window compares the shorter side only when it holds the minimum of attempts, and says so", () => {
+  const covered = windowRow(attempts(8), attempts(5));
+  assert.equal(covered.structure, "KNOWN_DIFFERENCE");
+  assert.deepEqual(covered.parts.deliveries, {
+    verdict: "KNOWN_DIFFERENCE",
+    knownDifferences: ["KD-W"],
+  });
+  assert.deepEqual(covered.observationWindow, { attempts: { left: 8, right: 5 }, compared: 5 });
+  assert.equal(covered.timing.verdict, "WITHIN");
+  assert.equal(windowRow(attempts(8), attempts(4)).structure, "MISMATCH", "below the minimum");
+  assert.equal(
+    windowRow(attempts(5), attempts(5)).structure,
+    "MATCH",
+    "equal counts need no window",
+  );
+  assert.equal(windowRow(attempts(5), attempts(5)).observationWindow, undefined);
+  const other = compareProjections(projection({ x: attempts(8) }), projection({ x: attempts(5) }), {
+    knownDifferences: [windowKd],
+  }).rows[0];
+  assert.equal(other.structure, "MISMATCH", "another case has no window");
+});
+
+test("inside the window a difference of content or of a gap is still a difference", () => {
+  const changed = attempts(8);
+  changed.deliveries[2] = delivery({ context: { ...delivery().context, retryReason: "x" } });
+  assert.equal(windowRow(attempts(5), changed).structure, "MISMATCH");
+  assert.equal(
+    windowRow(attempts(8), attempts(6, 5000)).timing.verdict,
+    "OUTSIDE",
+    "gaps are claimed",
+  );
+  assert.equal(windowRow(attempts(8, 4000), attempts(6, 4000)).timing.verdict, "WITHIN");
+  // Attempts after the shorter side's last are not looked at, in structure or in timing.
+  const longer = attempts(9);
+  longer.timing.gapsMs[6] = 99999;
+  assert.equal(windowRow(longer, attempts(6)).timing.verdict, "WITHIN");
+});
+
+test("a window needs a minimum of at least two attempts, and a timing known difference needs a bound", () => {
+  for (const bad of [{ minAttempts: 1 }, { minAttempts: 2.5 }, {}, { minAttempts: "5" }])
+    assert.throws(
+      () => windowRow(attempts(8), attempts(5), { ...windowKd, window: bad }),
+      /minimum of attempts/,
+    );
+  const timingKd = { id: "KD-T", part: "timing", cases: "*", paths: [/x/], ruling: 6, what: "w" };
+  assert.throws(
+    () =>
+      compareProjections(projection({ a: record() }), projection({ a: record() }), {
+        knownDifferences: [timingKd],
+      }),
+    /needs an allowance bound/,
+  );
+  assert.doesNotThrow(() =>
+    compareProjections(projection({ a: record() }), projection({ a: record() }), {
+      knownDifferences: [{ ...timingKd, allowance: () => null }],
+    }),
+  );
+});
+
+test("a timing allowance covers a timing only inside its own bound, and the row records the bound", () => {
+  const kd = {
+    id: "KD-T",
+    part: "timing",
+    cases: ["a"],
+    paths: [/x/],
+    ruling: 6,
+    what: "w",
+    allowance: ({ timing, tolerance }) =>
+      timing.why === "first late" && Math.abs(timing.a - timing.b) - tolerance.firstMs <= 400
+        ? { excessMs: Math.abs(timing.a - timing.b) - tolerance.firstMs }
+        : null,
+  };
+  const late = (ms) => record({ timing: { ...timing(100), lateMs: [ms] } });
+  const row = (ms) =>
+    compareProjections(projection({ a: late(0) }), projection({ a: late(ms) }), {
+      knownDifferences: [kd],
+    }).rows[0];
+  assert.equal(row(1000).timing.verdict, "WITHIN");
+  const covered = row(1900);
+  assert.equal(covered.timing.verdict, "KNOWN_DIFFERENCE");
+  assert.deepEqual(covered.timing.allowance, { excessMs: 400 });
+  assert.equal(covered.timingKnownDifference, "KD-T");
+  assert.equal(row(1901).timing.verdict, "OUTSIDE");
+  const result = compareProjections(projection({ a: late(0) }), projection({ a: late(1900) }), {
     knownDifferences: [kd],
   });
-  assert.equal(result.rows[0].timingKnownDifference, "KD-T");
   assert.equal(result.knownDifferences[0].rows, 1);
-  const quiet = compareProjections(projection({ a: record() }), projection({ a: record() }), {
+  assert.equal(result.knownDifferences[0].bounded, true);
+  const quiet = compareProjections(projection({ a: late(0) }), projection({ a: late(10) }), {
     knownDifferences: [kd],
   });
   assert.equal(quiet.knownDifferences[0].rows, 0);
+  assert.equal(
+    compareProjections(projection({ b: late(0) }), projection({ b: late(1900) }), {
+      knownDifferences: [kd],
+    }).rows[0].timing.verdict,
+    "OUTSIDE",
+    "another case",
+  );
 });
 
-test("a timing allowance with a bound covers a first delay only while the excess over the tolerance stays inside production's spread", () => {
-  const kd = KNOWN_DIFFERENCES.find((k) => k.id === "KD-SCHEDULE-CLOCK-SKEW");
-  const row = (rightFirst, spread, gaps = []) =>
-    compareProjections(
-      projection({ "pw-26": record({ timing: timing(3700, gaps) }) }),
-      projection({ "pw-26": record({ timing: timing(rightFirst, gaps) }) }),
-      { knownDifferences: [kd], productionSpread: { "pw-26": spread } },
-    ).rows[0];
-  // 1900 ms apart: 400 ms over the 1500 ms tolerance.
-  const covered = row(5600, 1000);
-  assert.equal(covered.timing.verdict, "KNOWN_DIFFERENCE");
-  assert.deepEqual(covered.timing.allowance, {
-    differenceMs: 1900,
-    toleranceMs: TOLERANCE.firstMs,
-    excessMs: 400,
-    productionSpreadMs: 1000,
+test("the first delivery is compared by its lateness after the ETA when both sides have it", () => {
+  const t = (first, late) => ({ ...timing(first), lateMs: [late] });
+  assert.equal(
+    compareTiming(t(5000, 40), t(2000, 80)).verdict,
+    "WITHIN",
+    "the delay from the create time is not looked at",
+  );
+  assert.deepEqual(compareTiming(t(100, 40), t(100, 40 + TOLERANCE.firstMs + 1)), {
+    verdict: "OUTSIDE",
+    why: "first late",
+    a: 40,
+    b: 40 + TOLERANCE.firstMs + 1,
   });
-  assert.equal(row(5600, 400).timing.verdict, "KNOWN_DIFFERENCE", "the bound is inclusive");
-  assert.equal(row(5600, 399).timing.verdict, "OUTSIDE");
-  assert.equal(row(5600, 0).timing.verdict, "OUTSIDE", "no spread, no allowance");
-  assert.equal(row(5000, 0).timing.verdict, "WITHIN", "inside the tolerance needs none");
-  assert.equal(row(1700, 5000).timing.verdict, "KNOWN_DIFFERENCE", "either direction");
-  // A gap or an attempt count is not a first delay.
-  assert.equal(row(3700, 5000, [1000]).timing.verdict, "WITHIN");
-  const gap = compareProjections(
-    projection({ "pw-26": record({ timing: timing(3700, [1000]) }) }),
-    projection({ "pw-26": record({ timing: timing(3700, [9000]) }) }),
-    { knownDifferences: [kd], productionSpread: { "pw-26": 99999 } },
-  ).rows[0];
-  assert.equal(gap.timing.verdict, "OUTSIDE");
-  // Another case is not covered.
-  const other = compareProjections(
-    projection({ a: record({ timing: timing(3700) }) }),
-    projection({ a: record({ timing: timing(5600) }) }),
-    { knownDifferences: [kd], productionSpread: { a: 5000 } },
-  ).rows[0];
-  assert.equal(other.timing.verdict, "OUTSIDE");
+  assert.equal(
+    compareTiming(t(100, 40), t(100, 40 + TOLERANCE.firstMs)).verdict,
+    "WITHIN",
+    "inclusive",
+  );
+  // One side without an ETA falls back to the delay from the create time.
+  const without = { ...timing(100), lateMs: [null] };
+  assert.deepEqual(
+    compareTiming(t(100, 40), { ...without, firstMs: 100 + TOLERANCE.firstMs + 1 }),
+    { verdict: "OUTSIDE", why: "first", a: 100, b: 100 + TOLERANCE.firstMs + 1 },
+  );
+  assert.equal(compareTiming(timing(100), timing(100)).verdict, "WITHIN", "no lateMs at all");
 });
 
-test("a case with no production spread known gets no allowance", () => {
-  const kd = KNOWN_DIFFERENCES.find((k) => k.id === "KD-SCHEDULE-CLOCK-SKEW");
+test("a layout rule that changed something is counted although the part ends as a known difference", () => {
+  const withIds = (id, name) =>
+    record({
+      deliveries: [
+        delivery({
+          request: {
+            ...delivery().request,
+            headers: { ...delivery().request.headers, taskName: id },
+            path: name,
+          },
+        }),
+      ],
+    });
+  const kd = {
+    id: "KD-P",
+    part: "deliveries",
+    cases: "*",
+    paths: [/^\[\]\/request\/path$/],
+    ruling: 3,
+    what: "w",
+  };
   const result = compareProjections(
-    projection({ "pw-26": record({ timing: timing(3700) }) }),
-    projection({ "pw-26": record({ timing: timing(5600) }) }),
+    projection({ a: withIds("ID(19)", "/x") }),
+    projection({ a: withIds("ID(20)", "/y") }),
     { knownDifferences: [kd] },
   );
-  assert.equal(result.rows[0].timing.verdict, "OUTSIDE");
+  assert.equal(result.rows[0].structure, "KNOWN_DIFFERENCE");
+  assert.equal(result.layoutRules.find((rule) => rule.id === "numeric-id-length").rows, 1);
 });

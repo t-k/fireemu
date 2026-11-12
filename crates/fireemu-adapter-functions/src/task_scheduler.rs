@@ -988,6 +988,7 @@ mod tests {
             raw_body: Vec::new(),
             schedule_time: None,
             dispatch_deadline_seconds: 60,
+            oidc: None,
         }
     }
 

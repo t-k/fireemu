@@ -3370,6 +3370,8 @@ fn functions_config(
         // development defaults by profile and `productionExact`, each overridable by its own key
         // (`functions.taskNameReuse`, `functions.taskDispatchDeadlineSeconds`).
         task_default_deadline_seconds: cfg.functions_task_dispatch_deadline_seconds,
+        task_retry_production_gaps: cfg.functions_task_retry_backoff
+            == crate::config::TaskRetryBackoff::Production,
         task_name_reuse: task_name_reuse(cfg.functions_task_name_reuse),
         clock_start_pinned: cfg.clock_start_pinned,
         subscription_naming: subscription_naming(cfg.profile),
@@ -16148,6 +16150,35 @@ exit 0
         }
     }
 
+    /// `functions.taskRetryBackoff` reaches the runtime as the flag the dispatch reads, by profile, `productionExact` and its own key.
+    #[test]
+    fn the_retry_gaps_follow_production_under_production_exact_unless_the_key_says_declared() {
+        for (config, production_gaps) in [
+            (json!({"schemaVersion": 1, "profile": "strict"}), false),
+            (
+                json!({"schemaVersion": 1, "profile": "strict", "productionExact": true}),
+                true,
+            ),
+            (
+                json!({"schemaVersion": 1, "profile": "strict", "productionExact": true,
+                       "functions": {"taskRetryBackoff": "declared"}}),
+                false,
+            ),
+            (
+                json!({"schemaVersion": 1, "profile": "strict", "functions": {"taskRetryBackoff": "production"}}),
+                true,
+            ),
+            (json!({"schemaVersion": 1, "profile": "emulator"}), false),
+        ] {
+            let cfg = crate::config::RuntimeConfig::from_json(&config).unwrap();
+            assert_eq!(
+                super::functions_config(&cfg, None, "s").task_retry_production_gaps,
+                production_gaps,
+                "{config}"
+            );
+        }
+    }
+
     /// `functions.taskRetryDefaults` `production` fills `maxAttempts` of a task queue function that does not declare it
     /// and nothing else: a declared value (zero included), a null, another trigger type and the other retry fields stay.
     #[test]
@@ -16500,6 +16531,7 @@ exit 0
                 honour_task_schedule_time: false,
                 task_name_reuse: fireemu_adapter_functions::tasks_production::NameReuse::Retained,
                 task_default_deadline_seconds: 60,
+                task_retry_production_gaps: false,
                 clock_start_pinned: false,
                 subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
                 ),

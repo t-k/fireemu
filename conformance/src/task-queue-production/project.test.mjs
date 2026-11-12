@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   MASK_PROJECT,
   digestOf,
+  layoutOfAnswer,
   maskText,
   projectAnswer,
   projectHeaders,
@@ -79,6 +80,7 @@ test("an answer is projected as its error or as its masked body with its shape",
   );
   assert.deepEqual(err, {
     status: 400,
+    layout: null,
     error: { code: 400, status: "INVALID_ARGUMENT", message: "bad TIME(Z)" },
   });
   const ok = projectAnswer(
@@ -153,6 +155,7 @@ test("timings are the first start from creation, the gaps, and offsets from the 
   assert.deepEqual(t, {
     firstMs: 100,
     gapsMs: [1000],
+    lateMs: [null, null],
     startsAtMs: [0, 1000],
     endsAtMs: [50, 1010],
     holdMs: [50, 10],
@@ -240,4 +243,95 @@ test("the body of a FULL view task is decoded and masked as text", () => {
     base64Of: '{"run":"tqrun-RUN","at":"TIME(f2,Z)"}',
   });
   assert.equal(answer.body.httpRequest.url, "u");
+});
+
+test("the layout of an answer is its content type, its style and the order of its fields", () => {
+  const pretty =
+    '{\n  "name": "n",\n  "httpRequest": {\n    "url": "u",\n    "headers": {\n      "b": "1",\n      "a": "2"\n    }\n  },\n  "view": "BASIC"\n}\n';
+  assert.deepEqual(layoutOfAnswer(pretty, "application/json; charset=UTF-8"), {
+    contentType: "application/json; charset=UTF-8",
+    style: "indent2-newline",
+    keyOrder: { "": ["name", "httpRequest", "view"], "/httpRequest": ["url", "headers"] },
+  });
+  // The order of the members of `headers` is not a layout: production printed them differently in two runs.
+  assert.deepEqual(
+    layoutOfAnswer(pretty.replace('"b": "1",\n      "a": "2"', '"a": "2",\n      "b": "1"'), "t")
+      .keyOrder,
+    layoutOfAnswer(pretty, "t").keyOrder,
+  );
+  const value = JSON.parse(pretty);
+  assert.equal(layoutOfAnswer(JSON.stringify(value), "t").style, "compact");
+  assert.equal(layoutOfAnswer(JSON.stringify(value, null, 2), "t").style, "indent2");
+  assert.equal(layoutOfAnswer(JSON.stringify(value, null, 4) + "\n", "t").style, "other");
+  assert.equal(layoutOfAnswer("not json", "t").style, "not-json");
+  assert.equal(layoutOfAnswer("{}\n", null).style, "indent2-newline");
+  // Production escapes <, > and & inside strings.
+  assert.equal(
+    layoutOfAnswer('{\n  "m": "\\u003cA\\u003e \\u0026"\n}\n', "t").style,
+    "indent2-newline",
+  );
+  assert.equal(layoutOfAnswer('{\n  "m": "<A> &"\n}\n', "t").style, "other");
+  // The keys of a different order are a different layout.
+  assert.notDeepEqual(
+    layoutOfAnswer('{\n  "b": 1,\n  "a": 2\n}\n', "t").keyOrder,
+    layoutOfAnswer('{\n  "a": 2,\n  "b": 1\n}\n', "t").keyOrder,
+  );
+});
+
+test("an answer is projected with its layout, never its text", () => {
+  const layout = { contentType: "t", style: "indent2-newline", keyOrder: {} };
+  const projected = projectAnswer({ status: 200, json: { a: 1 }, layout }, {});
+  assert.deepEqual(projected.layout, layout);
+  assert.equal(projectAnswer({ status: 200, json: { a: 1 } }, {}).layout, null);
+  assert.deepEqual(
+    projectAnswer(
+      { status: 400, json: { error: { code: 400, status: "S", message: "m" } }, layout },
+      {},
+    ).layout,
+    layout,
+  );
+});
+
+test("the first delivery's lateness is measured from its ETA header, and absent without one", () => {
+  const delivery = (eta, startedAt) => ({
+    startedAt,
+    endedAt: startedAt,
+    startMs: 0,
+    endMs: 0,
+    startFromCreateMs: 100,
+    request: { headers: eta === undefined ? {} : { "x-cloudtasks-tasketa": eta } },
+  });
+  const t = timingsOf([
+    delivery("1794388019.500000", "2026-11-11T09:06:59.541Z"),
+    delivery(undefined, "2026-11-11T09:07:00.541Z"),
+  ]);
+  assert.equal(t.lateMs[0], 41);
+  // A fraction of a millisecond is rounded away (a published number never has a long decimal tail).
+  const fractional = timingsOf([delivery("1794388019.500400", "2026-11-11T09:06:59.541Z")]);
+  assert.equal(fractional.lateMs[0], 41);
+  assert.ok(Number.isInteger(fractional.lateMs[0]));
+  assert.equal(t.lateMs[1], null);
+  assert.deepEqual(timingsOf([]).lateMs, []);
+});
+
+test("the details of an error are projected, masked, and absent when there are none", () => {
+  const details = [
+    {
+      "@type": "t",
+      fieldViolations: [{ field: "task", description: "at 2026-11-11T00:00:00.5Z" }],
+    },
+  ];
+  const projected = projectAnswer(
+    { status: 400, json: { error: { code: 400, status: "S", message: "m", details } } },
+    {},
+  );
+  assert.deepEqual(projected.error.details, [
+    { "@type": "t", fieldViolations: [{ field: "task", description: "at TIME(Z)" }] },
+  ]);
+  assert.equal(
+    "details" in
+      projectAnswer({ status: 400, json: { error: { code: 400, status: "S", message: "m" } } }, {})
+        .error,
+    false,
+  );
 });

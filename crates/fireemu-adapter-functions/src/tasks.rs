@@ -47,6 +47,19 @@ pub struct Task {
     pub schedule_time: Option<String>,
     /// The abort deadline, in seconds; `dispatchDeadline` without its trailing `s`, else 60.
     pub dispatch_deadline_seconds: u64,
+    /// `httpRequest.oidcToken`: the service account and audience the task names. Cloud Tasks delivers an
+    /// `Authorization: Bearer` OIDC token for them; the strict profile delivers an emulator-issued token of the same
+    /// shape.
+    pub oidc: Option<TaskOidc>,
+}
+
+/// The identity a task asks Cloud Tasks to deliver as (`httpRequest.oidcToken`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskOidc {
+    /// `serviceAccountEmail`.
+    pub service_account_email: String,
+    /// `audience`; the task's URL when the task names none.
+    pub audience: String,
 }
 
 impl Task {
@@ -231,6 +244,20 @@ pub fn accept(
         .and_then(Value::as_str)
         .and_then(|d| d.trim_end_matches('s').parse::<u64>().ok())
         .unwrap_or(60);
+    let oidc = http
+        .get("oidcToken")
+        .and_then(Value::as_object)
+        .and_then(|token| {
+            let email = token.get("serviceAccountEmail")?.as_str()?;
+            let audience = token
+                .get("audience")
+                .and_then(Value::as_str)
+                .filter(|audience| !audience.is_empty());
+            Some(TaskOidc {
+                service_account_email: email.to_owned(),
+                audience: audience.map_or_else(|| url.clone(), str::to_owned),
+            })
+        });
     Ok(Task {
         name,
         url,
@@ -242,7 +269,38 @@ pub fn accept(
             .and_then(Value::as_str)
             .map(str::to_owned),
         dispatch_deadline_seconds,
+        oidc,
     })
+}
+
+/// The `Authorization` value of a strict delivery for a task that named an `oidcToken`: `Bearer` and a three segment
+/// token with the claims of the identity token Cloud Tasks signs for a service account (`iss`, `aud`, `sub`, `email`,
+/// `email_verified`, `iat`, `exp`). The emulator issues it unsigned (`alg: none`, an empty third segment): it has
+/// no key Google verifies, so only the scheme and the three segments are production's, never the signature or the values.
+#[must_use]
+pub fn oidc_authorization(oidc: &TaskOidc, now_millis: u64) -> String {
+    let issued = now_millis / 1000;
+    let subject = oidc
+        .service_account_email
+        .bytes()
+        .fold(1_u64, |hash, byte| {
+            hash.wrapping_mul(1_099_511_628_211)
+                .wrapping_add(u64::from(byte))
+        })
+        % 10_000_000_000_000_000_000;
+    let claims = json!({
+        "aud": oidc.audience,
+        "email": oidc.service_account_email,
+        "email_verified": true,
+        "exp": issued + 3600,
+        "iat": issued,
+        "iss": "https://accounts.google.com",
+        "sub": format!("{subject:020}"),
+    });
+    format!(
+        "Bearer {}",
+        fireemu_core_auth::jwt::encode_payload_with(&claims.to_string(), None)
+    )
 }
 
 /// The response the Admin SDK expects from a successful enqueue.
@@ -373,6 +431,13 @@ pub fn dispatch_headers(
     ];
     if matches!(shape, DispatchShape::Production { .. }) {
         out.push(("User-Agent".to_owned(), "Google-Cloud-Tasks".to_owned()));
+        // The task's own Authorization header is replaced by the identity token it asked for.
+        if let Some(oidc) = &task.oidc {
+            out.push((
+                "Authorization".to_owned(),
+                oidc_authorization(oidc, now_millis),
+            ));
+        }
     }
     if let Some(status) = previous_response {
         out.push((
@@ -387,6 +452,13 @@ pub fn dispatch_headers(
     }
     let mut forged = Vec::new();
     for (k, v) in &task.headers {
+        // The identity token the task asked for replaces any Authorization header of its own.
+        if matches!(shape, DispatchShape::Production { .. })
+            && task.oidc.is_some()
+            && k.eq_ignore_ascii_case("authorization")
+        {
+            continue;
+        }
         if matches!(shape, DispatchShape::Production { .. }) && service_owned(k) {
             // A task's own `X-CloudTasks-*` header reaches the function in front of the service's (recorded: a task that
             // set `X-CloudTasks-TaskName` was delivered as one header whose value was both, the task's first); the other
@@ -432,9 +504,13 @@ fn decode_base64(text: &str) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{accept, dispatch_headers, queue_key, route, DispatchShape, Route};
+    use super::{
+        accept, dispatch_headers, oidc_authorization, queue_key, route, DispatchShape, Route, Task,
+        TaskOidc,
+    };
     use fireemu_core_functions::manifest::TaskRetryConfig;
     use serde_json::json;
+    use serde_json::Value;
 
     /// Standard base64 with padding.
     fn b64(bytes: &[u8]) -> String {
@@ -1049,5 +1125,126 @@ mod tests {
         for attempt in 1..=3 {
             assert_eq!(reason(attempt, DispatchShape::Official), None, "{attempt}");
         }
+    }
+
+    #[test]
+    fn production_delivers_the_identity_token_a_task_asked_for_as_a_three_segment_bearer() {
+        let body = json!({"task": {"httpRequest": {
+            "url": "", "body": "e30=",
+            "headers": {"Authorization": "Bearer forged", "X-Own": "1"},
+            "oidcToken": {"serviceAccountEmail": "sa@example.test", "audience": "https://aud.example.test"},
+        }}});
+        let task = accept(
+            "demo",
+            "us-central1",
+            "onJob",
+            "http://127.0.0.1:5001/demo/us-central1/onJob",
+            &body,
+            7,
+        )
+        .expect("accepted");
+        assert_eq!(
+            task.oidc,
+            Some(TaskOidc {
+                service_account_email: "sa@example.test".to_owned(),
+                audience: "https://aud.example.test".to_owned()
+            })
+        );
+        let headers = |shape: DispatchShape<'_>, task: &Task| {
+            dispatch_headers(
+                task,
+                "queue:demo-us-central1-onJob",
+                1,
+                0,
+                None,
+                1_700_000_000_000,
+                shape,
+            )
+        };
+        let production = headers(DispatchShape::Production { queue: "onJob" }, &task);
+        let authorization: Vec<&str> = production
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(authorization.len(), 1, "the task's own header is replaced");
+        let token = authorization[0].strip_prefix("Bearer ").expect("a Bearer");
+        assert_eq!(token.split('.').count(), 3);
+        let claims = fireemu_core_auth::jwt::decode_unsigned(token).expect("decodes");
+        assert_eq!(claims.sub().map(str::len), Some(20));
+        // The subject is a stable number of the identity: not zero, the same for the same account, another for another one.
+        let subject = |email: &str| {
+            let other = TaskOidc {
+                service_account_email: email.to_owned(),
+                audience: "a".to_owned(),
+            };
+            let token = oidc_authorization(&other, 1_700_000_000_000);
+            let payload = fireemu_core_auth::jwt::base64url_decode(
+                token
+                    .strip_prefix("Bearer ")
+                    .unwrap()
+                    .split('.')
+                    .nth(1)
+                    .unwrap(),
+            )
+            .unwrap();
+            serde_json::from_slice::<Value>(&payload).unwrap()["sub"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        assert_eq!(subject("sa@example.test"), subject("sa@example.test"));
+        assert_ne!(subject("sa@example.test"), subject("other@example.test"));
+        assert_ne!(subject("sa@example.test"), "0".repeat(20));
+        assert!(subject("sa@example.test")
+            .bytes()
+            .all(|b| b.is_ascii_digit()));
+        assert!(
+            subject("sa@example.test")
+                .chars()
+                .take(10)
+                .any(|c| c != '0'),
+            "a hash, not a small number"
+        );
+        let payload =
+            fireemu_core_auth::jwt::base64url_decode(token.split('.').nth(1).unwrap()).unwrap();
+        let payload: Value = serde_json::from_slice(&payload).unwrap();
+        assert_eq!(payload["aud"], "https://aud.example.test");
+        assert_eq!(payload["email"], "sa@example.test");
+        assert_eq!(payload["iss"], "https://accounts.google.com");
+        assert_eq!(payload["iat"], 1_700_000_000_u64);
+        assert_eq!(payload["exp"], 1_700_003_600_u64);
+        assert!(production.iter().any(|(k, v)| k == "X-Own" && v == "1"));
+        // The official emulator keeps the task's own header and adds none.
+        let official = headers(DispatchShape::Official, &task);
+        let official: Vec<&str> = official
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(official, ["Bearer forged"]);
+        // A task that named no identity gets no Authorization header from Cloud Tasks.
+        let mut anonymous = task.clone();
+        anonymous.oidc = None;
+        anonymous.headers.remove("Authorization");
+        let production = headers(DispatchShape::Production { queue: "onJob" }, &anonymous);
+        assert!(!production
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("authorization")));
+        // No audience: the URL.
+        let body = json!({"task": {"httpRequest": {"url": "", "body": "e30=", "oidcToken": {"serviceAccountEmail": "sa@example.test"}}}});
+        let task = accept(
+            "demo",
+            "us-central1",
+            "onJob",
+            "http://127.0.0.1:5001/demo/us-central1/onJob",
+            &body,
+            8,
+        )
+        .unwrap();
+        assert_eq!(
+            task.oidc.unwrap().audience,
+            "http://127.0.0.1:5001/demo/us-central1/onJob"
+        );
     }
 }

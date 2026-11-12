@@ -757,7 +757,8 @@ fn the_manifest_publishes_effective_development_defaults() {
             {"key":"hosting.clientCountry","value":"honoured","source":"default"},
             {"key":"functions.taskNameReuse","value":"immediate","source":"default"},
             {"key":"functions.taskDispatchDeadlineSeconds","value":"60","source":"default"},
-            {"key":"functions.taskRetryDefaults","value":"emulated","source":"default"}
+            {"key":"functions.taskRetryDefaults","value":"emulated","source":"default"},
+            {"key":"functions.taskRetryBackoff","value":"declared","source":"default"}
         ])
     );
 }

@@ -830,6 +830,7 @@ fn build_functions_runtime(executor: &tokio::runtime::Runtime) -> Arc<FunctionsR
             honour_task_schedule_time: false,
             task_name_reuse: fireemu_adapter_functions::tasks_production::NameReuse::Retained,
             task_default_deadline_seconds: 60,
+            task_retry_production_gaps: false,
             clock_start_pinned: false,
             session: SessionId::new(1),
             max_running: 4,

@@ -29,3 +29,7 @@ No test sends a request to a Google service. The discovery and fixture tests nee
 ## Running a recording
 
 A recording is sent only by the coordinator, after a review of the frozen packet. `bin.mjs` refuses to send without `--send` and the digest of the packet it was reviewed as (`--expect-digest`). A run writes a private journal, a result file and the CLI logs into its run directory; these hold project numbers and are never committed.
+
+## The committed comparison files
+
+The three comparison files (`../../task-queue-production-run-comparison.json` and `...-strict-vs-pass-{1,2}.json`) carry `kind: "task-queue-comparison-v1"` and are derived by `compare-cli.mjs`. They are reformatted by `oxfmt` after being written, so they are not byte-identical to the tool's output; `published.test.mjs` rebuilds them from the committed projections and compares the parsed values, which is what a reviewer should compare. The first delivery of a case is compared by its lateness after the task's ETA (`lateMs`), each retry gap within the tolerance, and the answer by its layout (content type, style and field order) as well as its content. `release-replay.mjs` and `release-judge.mjs` are the release run R38: the judge takes timing as a tolerance (twice the committed one) and requires the same cases, structure and parts as the committed files.

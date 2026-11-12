@@ -4,16 +4,31 @@
 //
 //   FIREEMU_BIN=<fireemu binary> node local.mjs --profile strict|emulator --out <new file>
 import { spawn } from "node:child_process";
-import { cpSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  cpSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PROGRAM, corpusManifest, materialize, minStarts } from "./corpus.mjs";
-import { projectRecording } from "./project.mjs";
+import { layoutOfAnswer, projectRecording } from "./project.mjs";
 import { ROLE_IDS, PROJECT, functionOfRole, functionsOf } from "./plan.mjs";
 import { judge } from "./record/judge.mjs";
 import { parseFramesFromText } from "./record/logs.mjs";
+
+/**
+ * Cases whose attempts the replay waits for beyond the program's own minimum: a queue that retries a hundred times shows
+ * production's growing gaps (4, 8 and 10 s from the twelfth gap on) only after eighteen attempts.
+ */
+export const REPLAY_ATTEMPTS = Object.freeze({ "window-six": 20 });
 
 export const LOCAL_RUN = "0000000000000000";
 const READY_DEADLINE_MS = 30_000;
@@ -25,7 +40,12 @@ export function materializeLocal(root) {
   const functions = join(root, "functions");
   cpSync(join(conformance, "task-queue-functions/functions"), functions, { recursive: true });
   writeFileSync(join(functions, "suffix.json"), JSON.stringify({ suffix: LOCAL_RUN.slice(0, 6) }));
-  symlinkSync(join(conformance, "node_modules"), join(functions, "node_modules"));
+  // The fixture's own installation (`npm ci` of its lockfile, as the release job does) when there is one, else the harness's.
+  const own = join(conformance, "task-queue-functions/functions/node_modules");
+  symlinkSync(
+    existsSync(own) ? own : join(conformance, "node_modules"),
+    join(functions, "node_modules"),
+  );
   const firebaseJson = join(root, "firebase.json");
   writeFileSync(
     firebaseJson,
@@ -121,7 +141,13 @@ async function send(tasksHost, request) {
   } catch {
     json = null;
   }
-  return { status: response.status, json, text, bodyBytes: Buffer.byteLength(text) };
+  return {
+    status: response.status,
+    json,
+    text,
+    bodyBytes: Buffer.byteLength(text),
+    layout: layoutOfAnswer(text, response.headers.get("content-type")),
+  };
 }
 
 const answerClassOf = (status) => (status >= 200 && status < 300 ? "2xx" : "4xx");
@@ -177,7 +203,12 @@ export async function runLocal({
         status: answer.status,
         dispatchedAt,
         answeredAt: Date.now(),
-        answer: { status: answer.status, bodyBytes: answer.bodyBytes, json: answer.json },
+        answer: {
+          status: answer.status,
+          bodyBytes: answer.bodyBytes,
+          json: answer.json,
+          layout: answer.layout,
+        },
       };
       await new Promise((r) => setTimeout(r, 200));
     }
@@ -185,7 +216,7 @@ export async function runLocal({
     const fns = functionsOf(LOCAL_RUN);
     const want = Object.entries(program)
       .filter(([key, step]) => step.kind === "create" && step.class === "2xx" && minStarts(key) > 0)
-      .map(([key]) => [key, minStarts(key)]);
+      .map(([key]) => [key, Math.max(minStarts(key), REPLAY_ATTEMPTS[key] ?? 0)]);
     const deadline = Date.now() + waitSeconds * 1000;
     let frames = [];
     while (Date.now() < deadline) {
@@ -201,6 +232,8 @@ export async function runLocal({
     const judged = judge({ runId: LOCAL_RUN, program, frames });
     return {
       runId: LOCAL_RUN,
+      // The daemon's own output, for a replay that delivered nothing (never part of a projection).
+      log: started.log.text,
       judged,
       program,
       functions: fns.length,
@@ -219,7 +252,11 @@ export async function localProjection(options) {
     alias: options.alias ?? options.profile,
     corpusSha256: corpusManifest().corpusSha256,
     projectNumber: null,
-    meta: { profile: options.profile, productionExact: options.productionExact ?? true },
+    meta: {
+      profile: options.profile,
+      productionExact: options.productionExact ?? true,
+      ...options.meta,
+    },
   });
 }
 
@@ -230,7 +267,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (!["strict", "emulator"].includes(profile)) throw new Error("--profile strict|emulator");
   if (!out || !process.env.FIREEMU_BIN)
     throw new Error("--out <new file> and FIREEMU_BIN are required");
-  const projection = await localProjection({ binary: resolve(process.env.FIREEMU_BIN), profile });
+  const binary = resolve(process.env.FIREEMU_BIN);
+  // The digest of the binary that served the replay is part of the file, so that the evidence names its build.
+  const binarySha256 = createHash("sha256").update(readFileSync(binary)).digest("hex");
+  const projection = await localProjection({ binary, profile, meta: { binarySha256 } });
   (await import("node:fs")).writeFileSync(
     resolve(out),
     JSON.stringify(projection, null, 2) + "\n",

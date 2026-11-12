@@ -31,7 +31,16 @@ async fn start(
     reuse: NameReuse,
     deadline: u64,
 ) -> Harness {
-    start_full(name, profile, reuse, deadline, 1, false, 500).await
+    start_full(name, profile, reuse, deadline, retry(1, 500), false, false).await
+}
+
+/// A retry configuration with the official defaults but for the attempts and the minimum backoff.
+fn retry(max_attempts: u32, min_backoff_millis: u64) -> TaskRetryConfig {
+    TaskRetryConfig {
+        max_attempts,
+        min_backoff_millis,
+        ..TaskRetryConfig::default()
+    }
 }
 
 /// `probe` makes the fake runner record every delivery of a task queue in `entries` (a task whose name holds `failing`
@@ -42,9 +51,9 @@ async fn start_full(
     profile: FunctionsHttpProfile,
     reuse: NameReuse,
     deadline: u64,
-    max_attempts: u32,
+    retry: TaskRetryConfig,
     virtual_tasks: bool,
-    min_backoff_millis: u64,
+    production_gaps: bool,
 ) -> Harness {
     let dir =
         std::env::temp_dir().join(format!("fireemu-task-shape-{name}-{}", std::process::id()));
@@ -77,11 +86,7 @@ async fn start_full(
     "taskA".clone_into(&mut function.name);
     "taskA".clone_into(&mut function.entry_point);
     function.trigger = Trigger::TaskQueue {
-        retry: TaskRetryConfig {
-            max_attempts,
-            min_backoff_millis,
-            ..TaskRetryConfig::default()
-        },
+        retry,
         rate_limits: TaskRateLimits {
             max_concurrent_dispatches: 1,
             max_dispatches_per_second: 500.0,
@@ -107,6 +112,7 @@ async fn start_full(
             honour_task_schedule_time: true,
             task_name_reuse: reuse,
             task_default_deadline_seconds: deadline,
+            task_retry_production_gaps: production_gaps,
             ..FunctionsConfig::for_tests(1, "runner-secret".into())
         },
         clock.clone(),
@@ -470,9 +476,19 @@ async fn the_strict_listener_answers_json_in_both_directions_and_reads_a_task_of
     assert_eq!(status, 200, "{head} {body}");
     let answer: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(answer["name"], format!("{BASE}/tasks/wire-a"));
-    assert!(head
-        .to_ascii_lowercase()
-        .contains("content-type: application/json"));
+    assert!(
+        head.to_ascii_lowercase()
+            .contains("content-type: application/json; charset=utf-8"),
+        "{head}"
+    );
+    // Production's layout: multi-line JSON, two-space indentation, the proto field order, a newline at the end.
+    assert!(
+        body.starts_with(&format!(
+            "{{\n  \"name\": \"{BASE}/tasks/wire-a\",\n  \"httpRequest\": {{\n    \"url\": "
+        )),
+        "{body}"
+    );
+    assert!(body.ends_with("\n  \"view\": \"BASIC\"\n}\n"), "{body}");
     // A refusal is production's JSON, with the JSON content type.
     let bad = body_of(&json!({"dispatchDeadline": "14s"}));
     let (status, head, body) = wire(addr, "POST", TASKS, bad.to_string().as_bytes()).await;
@@ -483,8 +499,8 @@ async fn the_strict_listener_answers_json_in_both_directions_and_reads_a_task_of
         "{head}"
     );
     assert_eq!(
-        serde_json::from_str::<Value>(&body).unwrap()["error"]["status"],
-        "INVALID_ARGUMENT"
+        body,
+        "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Task.dispatchDeadline must be between [15s, 30m].\",\n    \"status\": \"INVALID_ARGUMENT\"\n  }\n}\n"
     );
     // A request over the official emulator's 100 KiB JSON limit is still read: a task may be up to 1 MiB.
     let big = body_of(&json!({"name": format!("{BASE}/tasks/wire-big")}));
@@ -536,20 +552,20 @@ async fn the_strict_listener_deletes_with_json_and_refuses_other_methods() {
     assert_eq!(wire(addr, "GET", &path, b"").await.0, 405);
     assert_eq!(wire(addr, "POST", &path, b"{}").await.0, 405);
     let (status, head, body) = wire(addr, "DELETE", &path, b"").await;
-    assert_eq!((status, body.as_str()), (200, "{}"));
+    assert_eq!((status, body.as_str()), (200, "{}\n"));
     assert!(head
         .to_ascii_lowercase()
-        .contains("content-type: application/json"));
+        .contains("content-type: application/json; charset=utf-8"));
     let (status, head, body) = wire(addr, "DELETE", &path, b"").await;
     assert_eq!(status, 404);
     assert!(
         head.to_ascii_lowercase()
-            .contains("content-type: application/json"),
+            .contains("content-type: application/json; charset=utf-8"),
         "{head}"
     );
     assert_eq!(
-        serde_json::from_str::<Value>(&body).unwrap()["error"]["status"],
-        "NOT_FOUND"
+        body,
+        "{\n  \"error\": {\n    \"code\": 404,\n    \"message\": \"Requested entity was not found.\",\n    \"status\": \"NOT_FOUND\"\n  }\n}\n"
     );
     server.abort();
     h.stop().await;
@@ -566,10 +582,19 @@ async fn the_emulator_listener_keeps_plain_text_refusals_and_the_hundred_kibibyt
     .await;
     let (addr, server) = tasks_listener(&h).await;
     let ok = body_of(&json!({"name": format!("{BASE}/tasks/wire-e")}));
-    assert_eq!(
-        wire(addr, "POST", TASKS, ok.to_string().as_bytes()).await.0,
-        200
+    let (status, head, body) = wire(addr, "POST", TASKS, ok.to_string().as_bytes()).await;
+    assert_eq!(status, 200, "{body}");
+    // The emulator profile answers as it always has: the task wrapped, compact JSON, the plain JSON content type.
+    assert!(
+        head.to_ascii_lowercase()
+            .contains("content-type: application/json\r\n"),
+        "{head}"
     );
+    assert!(!body.contains('\n') && body.starts_with("{\""), "{body}");
+    assert!(serde_json::from_str::<Value>(&body)
+        .unwrap()
+        .get("task")
+        .is_some());
     h.idle().await;
     let (status, head, body) = wire(addr, "POST", TASKS, ok.to_string().as_bytes()).await;
     assert_eq!(status, 409);
@@ -588,6 +613,20 @@ async fn the_emulator_listener_keeps_plain_text_refusals_and_the_hundred_kibibyt
             .0,
         413
     );
+    // Every method on a task's own path gets the answer the emulator profile always gave.
+    for method in ["GET", "POST", "PATCH", "DELETE"] {
+        let (status, head, body) = wire(addr, method, &format!("{TASKS}/never-was"), b"").await;
+        assert_eq!(status, 404, "{method}");
+        assert_eq!(
+            body, "Tried to remove a task that doesn't exist",
+            "{method}"
+        );
+        assert!(
+            head.to_ascii_lowercase()
+                .contains("content-type: text/plain"),
+            "{head}"
+        );
+    }
     let (status, head, _) = wire(addr, "DELETE", &format!("{TASKS}/never-was"), b"").await;
     assert_eq!(status, 404);
     assert!(
@@ -688,9 +727,9 @@ async fn two_tasks_without_a_name_in_the_same_instant_get_two_names() {
         FunctionsHttpProfile::Strict,
         NameReuse::Immediate,
         600,
-        1,
+        retry(1, 500),
         true,
-        500,
+        false,
     )
     .await;
     let mut names = std::collections::BTreeSet::new();
@@ -714,9 +753,9 @@ async fn a_finished_name_is_held_for_exactly_the_window_on_the_virtual_clock() {
         FunctionsHttpProfile::Strict,
         NameReuse::Window(Duration::from_secs(3600)),
         600,
-        1,
+        retry(1, 500),
         true,
-        500,
+        false,
     )
     .await;
     let task = body_of(&json!({"name": format!("{BASE}/tasks/windowed")}));
@@ -760,7 +799,16 @@ async fn an_overrun_deadline_is_a_504_for_the_next_attempt_in_strict() {
     // (The official profile keeps the official deadline of the task, a minute, so only the strict one is cut off here.)
     for (profile, previous) in [(FunctionsHttpProfile::Strict, Some("504"))] {
         // A deadline of one second; the runner holds the task (no release file) until it is cut off.
-        let h = start_full("deadline", profile, NameReuse::Immediate, 1, 2, false, 100).await;
+        let h = start_full(
+            "deadline",
+            profile,
+            NameReuse::Immediate,
+            1,
+            retry(2, 100),
+            false,
+            false,
+        )
+        .await;
         std::fs::remove_file(h.dir.join("entries.taskA.release")).unwrap();
         // A task may not name less than 15 s, so the default carries the one second.
         let task = body_of(&json!({"name": format!("{BASE}/tasks/slow")}));
@@ -803,7 +851,16 @@ async fn the_first_retry_waits_the_minimum_backoff_in_strict_and_twice_it_in_the
 {
     let mut gaps = Vec::new();
     for profile in [FunctionsHttpProfile::Strict, FunctionsHttpProfile::Emulator] {
-        let h = start_full("backoff", profile, NameReuse::Immediate, 60, 2, false, 1000).await;
+        let h = start_full(
+            "backoff",
+            profile,
+            NameReuse::Immediate,
+            60,
+            retry(2, 1000),
+            false,
+            false,
+        )
+        .await;
         h.runtime
             .enqueue_task(
                 "demo-app",
@@ -866,4 +923,108 @@ async fn a_refusal_that_is_not_google_json_stays_plain_text_in_the_strict_listen
     );
     server.abort();
     let _ = std::fs::remove_dir_all(h.dir);
+}
+
+#[tokio::test]
+async fn the_retry_gaps_of_a_failing_task_follow_production_after_a_dozen_failures_in_strict() {
+    use fireemu_core_types::time::LogicalDuration;
+    // tqwindow of the recordings: minBackoff 1 s, maxBackoff 2 s, one doubling, 100 attempts.
+    let queue = TaskRetryConfig {
+        max_attempts: 100,
+        max_retry_millis: None,
+        max_backoff_millis: 2_000,
+        max_doublings: 1,
+        min_backoff_millis: 1_000,
+    };
+    // The gaps in milliseconds before attempt 2, 3, ...: production's, then the declared ones.
+    let production = [
+        1000, 2000, 2000, 2000, 2000, 2000, 2000, 2000, 2000, 2000, 2000, 4000, 4000, 4000, 8000,
+        8000, 10_000,
+    ];
+    for (production_gaps, expected) in [
+        (true, production.to_vec()),
+        (
+            false,
+            production
+                .iter()
+                .enumerate()
+                .map(|(i, _)| if i == 0 { 1000 } else { 2000 })
+                .collect(),
+        ),
+    ] {
+        let h = start_full(
+            "gaps",
+            FunctionsHttpProfile::Strict,
+            NameReuse::Immediate,
+            600,
+            queue,
+            true,
+            production_gaps,
+        )
+        .await;
+        h.runtime
+            .enqueue_task(
+                "demo-app",
+                "us-central1",
+                "taskA",
+                &body_of(&json!({"name": format!("{BASE}/tasks/failing-gaps")})),
+            )
+            .unwrap();
+        let deliveries = || {
+            std::fs::read_to_string(&h.probe)
+                .unwrap_or_default()
+                .lines()
+                .count()
+        };
+        let advance = |millis: i64| {
+            h.clock
+                .lock()
+                .unwrap()
+                .advance(LogicalDuration::from_millis(millis))
+                .unwrap()
+        };
+        let wait_for = |count: usize| async move {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while deliveries() < count {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "attempt {count} never came with production gaps {production_gaps}; the runner saw {}",
+                    deliveries()
+                )
+            });
+        };
+        // The task is waiting out a backoff (nothing runnable) before the clock is moved, or the move would be counted into the gap.
+        let backed_off = || async {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while !h.runtime.is_idle_with_scope(true) {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("the task backed off");
+        };
+        advance(1000);
+        wait_for(1).await;
+        backed_off().await;
+        for (gap, millis) in expected.iter().enumerate() {
+            let attempt = gap + 1;
+            // One millisecond short of the gap: no retry yet; at the gap: the retry.
+            advance(millis - 1);
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            assert_eq!(
+                deliveries(),
+                attempt,
+                "gap {} ({production_gaps}): sooner than {millis} ms",
+                gap + 1
+            );
+            advance(1);
+            wait_for(attempt + 1).await;
+            backed_off().await;
+        }
+        h.stop().await;
+    }
 }

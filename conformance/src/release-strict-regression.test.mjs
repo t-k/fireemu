@@ -500,6 +500,84 @@ test("a verified closure with a comparison of an unknown kind stops the release"
   assert.ok(plan.errors.some((error) => error.includes("new-kind-v1")));
 });
 
+// --- the task queue comparisons (R38) --------------------------------------------------------
+
+const TASK_QUEUE_FILES = [
+  "conformance/task-queue-production-run-comparison.json",
+  "conformance/task-queue-production-strict-vs-pass-1.json",
+  "conformance/task-queue-production-strict-vs-pass-2.json",
+];
+
+test("R38 replays the task queue program on the binary and serves exactly the three committed comparisons", async () => {
+  const run = RUNS.find((r) => r.id === "R38");
+  assert.equal(run.kind, "task-queue-comparison-v1");
+  assert.deepEqual(run.comparisonPaths, TASK_QUEUE_FILES);
+  assert.equal(run.commands.length, 1);
+  assert.deepEqual(run.commands[0].argv, [
+    "node",
+    "conformance/src/task-queue-production/release-replay.mjs",
+    "local",
+    "--fireemu",
+    "{bin}",
+    "--export",
+    "{export}",
+  ]);
+  assert.equal(run.commands[0].mode, "local");
+  assert.ok(run.commands[0].timeoutMs >= 10 * 60 * 1000);
+  assert.ok(Object.values(GROUPS).some((ids) => ids.includes("R38")));
+  // Once the parent names these files they are planned on R38 and nowhere else; a file without the kind is refused.
+  const closure = (name) => ({
+    name,
+    closure: {
+      parent: "TASK-QUEUE-FUNCTIONS",
+      parentStatus: "COMPAT_VERIFIED",
+      integratedRegression: { comparisons: TASK_QUEUE_FILES.map((path) => ({ path })) },
+    },
+  });
+  const plan = planComparisons([closure("TASK-QUEUE-FUNCTIONS.json")], readJson, {
+    excludedKinds: [],
+  });
+  assert.deepEqual(plan.errors, []);
+  assert.deepEqual(
+    plan.comparisons.map((c) => [c.path, c.kind, c.runIds]),
+    TASK_QUEUE_FILES.map((path) => [path, "task-queue-comparison-v1", ["R38"]]),
+  );
+  const unkinded = planComparisons(
+    [closure("TASK-QUEUE-FUNCTIONS.json")],
+    (path) => ({ ...readJson(path), kind: undefined }),
+    { excludedKinds: [] },
+  );
+  assert.ok(unkinded.errors.some((error) => error.includes("kind undefined")));
+  // The judge is the task queue judge, and the export is copied under the file name.
+  const { documentsFor } = await import("./task-queue-production/release-replay.mjs");
+  const { EXPORT_KIND } = await import("./task-queue-production/release-judge.mjs");
+  const read = (name) => readJson(`conformance/${name}`);
+  const observed = {
+    kind: EXPORT_KIND,
+    binarySha256: BINARY,
+    documents: documentsFor(
+      read("task-queue-production-local-strict.json"),
+      read("task-queue-production-pass-1.json"),
+      read("task-queue-production-pass-2.json"),
+    ),
+  };
+  const context = { binarySha256: BINARY, readJson };
+  for (const comparison of plan.comparisons)
+    assert.deepEqual(judge(comparison, { R38: observed }, context), [], comparison.path);
+  assert.match(
+    judge(
+      plan.comparisons[1],
+      { R38: { ...observed, binarySha256: "0".repeat(64) } },
+      context,
+    ).join(),
+    /another binary/,
+  );
+  assert.deepEqual(
+    exportCopies(plan.comparisons, RUNS).map((copy) => copy.to),
+    TASK_QUEUE_FILES.map((path) => path.split("/").at(-1)),
+  );
+});
+
 // --- several comparison files of one kind -----------------------------------------------------
 
 const SYNTHETIC_KIND = "synthetic-two-suites-v1";

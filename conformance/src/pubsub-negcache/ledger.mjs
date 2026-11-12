@@ -13,9 +13,8 @@
 
 export const MAX_DELETES = 3;
 
-// The state of one incarnation of a name. A name created again after the run's own DELETE answered 2xx
-// (the snapshots of the exemption cells) starts a new incarnation: nothing about the previous one,
-// neither its confirmation nor its absence after the delete, carries over.
+// The state of one incarnation of a name. Every create attempt clears earlier absence and closure
+// evidence. After an own 2xx DELETE, a refusal restores delete bookkeeping without that evidence.
 const incarnation = () => ({
   creates: [],
   deletes: [],
@@ -48,7 +47,7 @@ export function createLedger() {
     /** Records the intent before the request is sent. */
     intent({ name, action, kind }) {
       const r = get(name, kind);
-      let restore = null; // the previous incarnation, put back if this create answers 409
+      let restore = null; // the previous incarnation, put back if this create is refused
       if (action === "create" && r.deletes.some((d) => d.answer === "ok")) {
         // A create after the run's own successful DELETE: a new incarnation. An unknown DELETE of the
         // old one stays unknown (sticky); everything else starts again.
@@ -57,6 +56,12 @@ export function createLedger() {
         if (r.deletes.some((d) => d.answer === "unknown" || d.answer === null))
           r.stickyUnknownDelete = true;
         Object.assign(r, incarnation());
+      }
+      if (action === "create") {
+        r.absenceAfterDelete = false;
+        r.a2Absent = false;
+        r.presentAfterDelete = false;
+        r.retryAdmitted = false;
       }
       // A DELETE answered before the resource was known (a 404 for a name nobody had created) says
       // nothing about the resource the create then makes.
@@ -80,18 +85,15 @@ export function createLedger() {
         if (result === "ok") r.confirmed = true;
         else if (result === "unknown") r.createUnknown = true;
         else if (entry.restore && !r.confirmed && !r.createUnknown) {
-          // A known refusal (409, 404, 4xx, 429...) of re-creating our own name after our own 2xx DELETE:
-          // this request created nothing, so the earlier incarnation's state comes back and an absence
-          // read or A2 can still close it. A 409 is also positive evidence that a snapshot of the name
-          // exists now, so an absence read of the earlier incarnation no longer holds: the name is
-          // deletable and only a later absence closes it. Other refusals prove nothing about presence.
+          // A refusal restores the earlier delete bookkeeping, but no evidence from before this
+          // create attempt. A 409 proves presence; other refusals leave presence unread.
           const { history, ...before } = entry.restore;
           void history;
           Object.assign(r, before);
-          if (result === "conflict") {
-            r.absenceAfterDelete = false;
-            r.presentAfterDelete = true;
-          }
+          r.absenceAfterDelete = false;
+          r.a2Absent = false;
+          r.presentAfterDelete = result === "conflict";
+          r.retryAdmitted = false;
         } else if (result !== "conflict" && !r.confirmed && !r.createUnknown)
           r.createRejected = true;
         // a 409 settles nothing about an earlier unknown create, and nothing about itself either
@@ -136,13 +138,19 @@ export function createLedger() {
       if (!r) return "never-created";
       // The A2 absence settles a confirmed create or an unknown delete; it never settles an unknown create.
       const unsettledCreate = r.createUnknown && !r.confirmed;
-      if (r.a2Absent && !unsettledCreate && !r.deletes.some((d) => d.answer === null))
+      if (
+        r.a2Absent &&
+        r.creates.length > 0 &&
+        !unsettledCreate &&
+        !r.deletes.some((d) => d.answer === null)
+      )
         return "gone-a2";
       if (
         r.stickyUnknownDelete ||
         r.deletes.some((d) => d.answer === "unknown" || d.answer === null)
       )
         return "delete-unknown";
+      if (r.creates.length === 0) return "never-created";
       if (r.deletes.some((d) => d.answer === "ok")) {
         if (r.absenceAfterDelete) return "deleted";
         return r.presentAfterDelete ? "delete-present" : "delete-unread";

@@ -2,15 +2,22 @@
 
 use crate::{CliError, Selection};
 use fireemu_adapter_support::diagnostics::{self, ConfigValue};
+use std::io::Write;
 use std::path::Path;
 
+#[allow(clippy::too_many_lines)] // Keep bundle assembly and guarded file creation together.
 pub(super) fn command(args: &[String]) -> Result<(), CliError> {
     let mut url = None;
     let mut out = None;
     let mut flags = Vec::new();
+    let mut force = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--force" => {
+                force = true;
+                i += 1;
+            }
             "--url" | "--out" | "--config" | "--firebase-json" => {
                 let value = args
                     .get(i + 1)
@@ -54,7 +61,10 @@ pub(super) fn command(args: &[String]) -> Result<(), CliError> {
     };
     let path = "/v1/sessions/default/diagnostics/bundle";
     let body = crate::doctor::control_get(url, path).map_err(CliError::usage)?;
-    let mut bundle = diagnostics::from_json(&body).map_err(CliError::refused)?;
+    let value: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| CliError::refused(e.to_string()))?;
+    let mut bundle = diagnostics::from_value(&value).map_err(CliError::refused)?;
+    // The daemon has no config route, so these rows reflect locally loaded configuration.
     bundle.config = cfg
         .config_show(&input)
         .into_iter()
@@ -72,34 +82,96 @@ pub(super) fn command(args: &[String]) -> Result<(), CliError> {
             (key, value)
         })
         .collect();
-    let html_body =
-        crate::doctor::control_get(url, &format!("{path}?format=html")).map_err(CliError::usage)?;
-    let html: serde_json::Value =
-        serde_json::from_str(&html_body).map_err(|e| CliError::refused(e.to_string()))?;
-    let html = html["html"]
-        .as_str()
-        .ok_or_else(|| CliError::refused("HTML response has no html field"))?;
     let dir = Path::new(out);
-    std::fs::create_dir_all(dir).map_err(|e| {
+    let json_path = dir.join("bundle.json");
+    let html_path = dir.join("bundle.html");
+    for (path, is_dir) in [
+        (dir, true),
+        (json_path.as_path(), false),
+        (html_path.as_path(), false),
+    ] {
+        match std::fs::symlink_metadata(path) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink()
+                    || (is_dir && !metadata.is_dir())
+                    || (!is_dir && (!metadata.is_file() || !force))
+                {
+                    return Err(CliError::refused(format!(
+                        "cannot use {}: already exists or is a symbolic link",
+                        crate::diagnostic_path(path)
+                    )));
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(CliError::refused(format!(
+                    "cannot inspect {}: {e}",
+                    crate::diagnostic_path(path)
+                )))
+            }
+        }
+    }
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    // On non-Unix targets, directory and file creation use the platform defaults.
+    builder.create(dir).map_err(|e| {
         CliError::refused(format!(
             "cannot create {}: {e}",
             crate::diagnostic_path(dir)
         ))
     })?;
-    let json_path = dir.join("bundle.json");
-    let html_path = dir.join("bundle.html");
-    std::fs::write(&json_path, diagnostics::to_json(&bundle)).map_err(|e| {
-        CliError::refused(format!(
-            "cannot write {}: {e}",
-            crate::diagnostic_path(&json_path)
-        ))
-    })?;
-    std::fs::write(&html_path, html.as_bytes()).map_err(|e| {
-        CliError::refused(format!(
-            "cannot write {}: {e}",
-            crate::diagnostic_path(&html_path)
-        ))
-    })?;
+    for (path, content) in [
+        (&json_path, diagnostics::to_json(&bundle)),
+        (&html_path, diagnostics::to_html(&bundle)),
+    ] {
+        if force {
+            match std::fs::symlink_metadata(path) {
+                Ok(metadata) if metadata.is_file() => std::fs::remove_file(path).map_err(|e| {
+                    CliError::refused(format!(
+                        "cannot remove {}: {e}",
+                        crate::diagnostic_path(path)
+                    ))
+                })?,
+                Ok(_) => {
+                    return Err(CliError::refused(format!(
+                        "cannot replace {}",
+                        crate::diagnostic_path(path)
+                    )))
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    return Err(CliError::refused(format!(
+                        "cannot inspect {}: {e}",
+                        crate::diagnostic_path(path)
+                    )))
+                }
+            }
+        }
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(path).map_err(|e| {
+            CliError::refused(format!(
+                "cannot create {}: {e}",
+                crate::diagnostic_path(path)
+            ))
+        })?;
+        file.write_all(content.as_bytes()).map_err(|e| {
+            CliError::refused(format!(
+                "cannot write {}: {e}",
+                crate::diagnostic_path(path)
+            ))
+        })?;
+    }
     println!("{}", crate::diagnostic_path(&json_path));
     println!("{}", crate::diagnostic_path(&html_path));
     Ok(())

@@ -16,7 +16,7 @@ pub fn scrub(text: &str) -> (String, u64) {
         .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.'))
         .any(|word| {
             let parts: Vec<_> = word.split('.').collect();
-            parts.len() == 3
+            (parts.len() == 2 || parts.len() == 3)
                 && parts[0].starts_with("eyJ")
                 && parts[0].len() >= 7
                 && parts[1].len() >= 4
@@ -28,13 +28,16 @@ pub fn scrub(text: &str) -> (String, u64) {
         .any(|label| {
             lower.match_indices(label).any(|(i, _)| {
                 let rest = &text[i + label.len()..];
-                let rest = rest.trim_start_matches([':', '=', '"']);
+                let rest = rest.trim_start_matches(|c: char| {
+                    c.is_whitespace() || [':', '=', '"', '\''].contains(&c)
+                });
                 rest.bytes().take_while(|b| token_char(*b)).count() >= 40
             })
         });
     if lower.contains("authorization")
         || bearer
         || text.contains("ya29.")
+        || text.contains("rt1.")
         || api_key
         || text.contains("-----BEGIN ")
         || text.contains("\"private_key\"")
@@ -52,4 +55,26 @@ pub fn scrub(text: &str) -> (String, u64) {
         }
     }
     (text.into(), 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scrub;
+
+    #[test]
+    fn two_segment_jwt_is_redacted() {
+        let token = format!("{}.{}", "eyJhbGciOiJub25lIn0", "eyJzdWIiOiJ1c2VyIn0");
+        assert_eq!(scrub(&token).0, "[redacted]");
+    }
+
+    #[test]
+    fn labeled_and_emulator_refresh_tokens_are_redacted() {
+        let opaque = "r".repeat(60);
+        for text in [
+            format!("\"refreshToken\": \"{opaque}\""),
+            "rt1.8.0.demo-app.0123456789abcdef0001".to_owned(),
+        ] {
+            assert_eq!(scrub(&text).0, "[redacted]");
+        }
+    }
 }

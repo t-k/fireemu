@@ -297,3 +297,86 @@ fn bundle_reports_functions_causality_gaps() {
         assert_eq!(result.body["functions"]["logGaps"], expected);
     }
 }
+
+#[test]
+fn bundle_hides_values_in_denial_reasons() {
+    use fireemu_core_rules::coverage::RequestTrace;
+    use fireemu_core_rules::eval::{evaluate_request_traced, Method, RequestContext, RulesService};
+    use fireemu_core_rules::parse::parse_ruleset;
+
+    let s = state(Arc::new(AtomicUsize::new(0)));
+    let source = "service cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow get: if false; } } }";
+    let ctx = RequestContext {
+        service: RulesService::Firestore,
+        method: Method::Get,
+        path: "/databases/(default)/documents/notes/a".into(),
+        auth: None,
+        resource: None,
+        request_resource: None,
+        time_unix_nanos: 0,
+        abstract_path: false,
+        request_query: None,
+    };
+    let (_, coverage) = evaluate_request_traced(&parse_ruleset(source).unwrap(), &ctx, None);
+    let rules = s.rules.snapshot().unwrap();
+    let mut diagnostics = rules.diagnostics.lock().unwrap();
+    diagnostics.enable_request_traces();
+    diagnostics.push(&coverage, |sequence| RequestTrace {
+        sequence,
+        method: "get",
+        path: "notes/a".into(),
+        allowed: false,
+        reason: "unsupported rules feature: unknown Unicode class confidential-example-value"
+            .into(),
+        uid: None,
+        expressions: coverage.trace_entries(),
+    });
+    drop(diagnostics);
+    let headers = RequestHeaders {
+        authorization: Some(format!("Bearer {}", s.control_token)),
+        ..RequestHeaders::default()
+    };
+    for suffix in ["", "?format=html"] {
+        let result = handle_with(
+            &s,
+            "GET",
+            &format!("/v1/sessions/default/diagnostics/bundle{suffix}"),
+            &headers,
+            &json!({}),
+        );
+        assert_eq!(result.status, 200);
+        assert!(!result
+            .body
+            .to_string()
+            .contains("confidential-example-value"));
+        assert!(result
+            .body
+            .to_string()
+            .contains("Security Rules denied the request"));
+    }
+}
+
+#[test]
+fn bundle_masks_refresh_token_object_values() {
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    let opaque = "r".repeat(60);
+    s.functions = Some(Arc::new(BundleFunctions(
+        json!({"causality": {"events": [{"nested": {"refreshToken": opaque}}]}}),
+    )));
+    let headers = RequestHeaders {
+        authorization: Some(format!("Bearer {}", s.control_token)),
+        ..RequestHeaders::default()
+    };
+    for suffix in ["", "?format=html"] {
+        let result = handle_with(
+            &s,
+            "GET",
+            &format!("/v1/sessions/default/diagnostics/bundle{suffix}"),
+            &headers,
+            &json!({}),
+        );
+        assert_eq!(result.status, 200);
+        assert!(!result.body.to_string().contains(&opaque));
+        assert!(result.body.to_string().contains("[redacted]"));
+    }
+}

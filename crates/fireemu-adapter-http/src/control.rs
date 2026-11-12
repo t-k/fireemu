@@ -1033,7 +1033,7 @@ fn diagnostics_bundle_route(
             method: request.method.into(),
             path: request.path.clone(),
             uid: request.uid.clone(),
-            reason: request.reason.clone(),
+            reason: "Security Rules denied the request".to_owned(),
             conditions: request
                 .expressions
                 .iter()

@@ -239,6 +239,12 @@ impl Bundle {
                 Value::Object(o) => {
                     let old = std::mem::take(o);
                     for (k, mut v) in old {
+                        if k.eq_ignore_ascii_case("refreshToken")
+                            || k.eq_ignore_ascii_case("refresh_token")
+                        {
+                            v = Value::String("[redacted]".into());
+                            *count += 1;
+                        }
                         let (k, n) = redact::scrub(&k);
                         *count += n;
                         clean(&mut v, count, max, cuts);

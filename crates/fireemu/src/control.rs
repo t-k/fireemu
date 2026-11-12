@@ -949,6 +949,10 @@ mod tests {
             json!({"key":"auth.allowUnsignedIdTokens", "value":"true", "source":"explicit"})
         );
         assert_eq!(
+            manifest["developmentDefaults"][14],
+            json!({"key":"storage.undeclaredBuckets", "value":"refuse", "source":"productionExact"})
+        );
+        assert_eq!(
             manifest["developmentDefaults"][2],
             json!({"key":"auth.idpAssertions", "value":"signed", "source":"derived from auth.idpSigners"})
         );

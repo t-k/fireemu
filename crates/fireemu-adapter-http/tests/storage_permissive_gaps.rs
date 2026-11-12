@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use fireemu_adapter_http::storage::{
     handle, NoRulesNotice, NoticeEvent, NoticeLimit, StorageRequest, StorageResponse,
-    StorageRulesRegistry, StorageState,
+    StorageRulesRegistry, StorageState, UndeclaredBuckets,
 };
 use fireemu_core_auth::jwt::TokenAcceptance;
 use fireemu_core_auth::mfa::TotpPolicy;
@@ -2032,4 +2032,285 @@ fn strict_refuses_a_bucket_name_cloud_storage_never_accepts_unless_such_a_bucket
         ),
     );
     assert_eq!(ok.status, 200);
+}
+
+// ----------------------------------------------------------------------------------------
+// `storage.undeclaredBuckets`: create (silent), warn (the strict default) or refuse
+// ----------------------------------------------------------------------------------------
+
+fn with_mode(s: StorageState, mode: UndeclaredBuckets) -> StorageState {
+    s.rules.set_undeclared_buckets(mode);
+    s
+}
+
+fn json_error_message(r: &StorageResponse) -> String {
+    json_body(r)["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
+}
+
+#[test]
+fn refuse_answers_a_missing_bucket_on_every_object_route_without_creating_it() {
+    for (label, request) in object_requests("typo-bucket") {
+        let s = with_mode(strict(), UndeclaredBuckets::Refuse);
+        seed(&s, DEFAULT_BUCKET, "a.txt", b"hello");
+        let response = handle(&s, request);
+        assert_eq!(response.status, 404, "{label}: {}", text(&response));
+        if label.starts_with("firebase") {
+            assert!(
+                text(&response).contains("typo-bucket"),
+                "{label}: {}",
+                text(&response)
+            );
+        } else if label == "xml-style get" {
+            assert!(
+                text(&response).contains("<Code>NoSuchBucket</Code>"),
+                "{label}: {}",
+                text(&response)
+            );
+        } else {
+            assert_eq!(
+                json_error_message(&response),
+                "The specified bucket does not exist.",
+                "{label}: {}",
+                text(&response)
+            );
+            assert_eq!(
+                json_body(&response)["error"]["errors"][0]["reason"],
+                "notFound"
+            );
+        }
+        assert!(
+            !has_bucket(&s, "typo-bucket"),
+            "{label}: nothing is created"
+        );
+    }
+}
+
+#[test]
+fn upload_id_does_not_bypass_bucket_checks_on_normal_requests() {
+    let s = with_mode(strict(), UndeclaredBuckets::Refuse);
+    seed(&s, DEFAULT_BUCKET, "a.txt", b"hello");
+    for path in [
+        "/upload/storage/v1/b/typo-bucket/o?uploadType=media&name=a.txt&upload_id=anything".to_owned(),
+        format!("/storage/v1/b/{DEFAULT_BUCKET}/o/a.txt/copyTo/b/typo-bucket/o/b.txt?upload_id=anything"),
+        format!("/storage/v1/b/typo-bucket/o/a.txt/rewriteTo/b/{DEFAULT_BUCKET}/o/b.txt?upload_id=anything"),
+    ] {
+        let response = handle(&s, req("POST", &path, &[OWNER], b"hello"));
+        assert_eq!(response.status, 404, "{path}: {}", text(&response));
+        assert_eq!(json_error_message(&response), "The specified bucket does not exist.");
+    }
+    assert!(!has_bucket(&s, "typo-bucket"));
+}
+
+#[test]
+fn refuse_answers_a_missing_bucket_to_a_form_upload_in_the_xml_shape() {
+    let s = with_mode(strict(), UndeclaredBuckets::Refuse);
+    let policy = signed_policy(&json!([]), "2026-08-29T13:00:00Z");
+    let response = form_post(
+        &s,
+        "typo-bucket",
+        &[
+            ("key", "a.txt"),
+            ("policy", &policy),
+            ("x-goog-signature", "abc"),
+        ],
+        b"hello",
+    );
+    assert_eq!(response.status, 404, "{}", text(&response));
+    assert!(text(&response).contains("<Code>NoSuchBucket</Code>"));
+    assert!(!has_bucket(&s, "typo-bucket"));
+}
+
+#[test]
+fn refuse_names_the_missing_destination_of_a_copy_and_its_missing_source_alike() {
+    let s = with_mode(strict(), UndeclaredBuckets::Refuse);
+    seed(&s, DEFAULT_BUCKET, "a.txt", b"hello");
+    for path in [
+        format!("/storage/v1/b/{DEFAULT_BUCKET}/o/a.txt/copyTo/b/typo-bucket/o/b.txt"),
+        format!("/storage/v1/b/typo-bucket/o/a.txt/rewriteTo/b/{DEFAULT_BUCKET}/o/b.txt"),
+    ] {
+        let response = handle(&s, req("POST", &path, &[OWNER], b""));
+        assert_eq!(response.status, 404, "{path}");
+        assert_eq!(
+            json_error_message(&response),
+            "The specified bucket does not exist."
+        );
+    }
+    assert!(!has_bucket(&s, "typo-bucket"));
+}
+
+#[test]
+fn refuse_still_serves_every_bucket_that_exists() {
+    let s = with_mode(strict(), UndeclaredBuckets::Refuse);
+    s.rules.set_configured_buckets(["listed-bucket".to_owned()]);
+    s.rules.set_public_buckets(["public-bucket".to_owned()]);
+    s.rules.set_trigger_buckets(["trigger-bucket".to_owned()]);
+    seed(&s, "imported-bucket", "a.txt", b"hello");
+    for bucket in [
+        DEFAULT_BUCKET,
+        NEW_DEFAULT_BUCKET,
+        "listed-bucket",
+        "public-bucket",
+        "trigger-bucket",
+        "imported-bucket",
+    ] {
+        let response = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{bucket}/o?uploadType=media&name=n.txt"),
+                &[OWNER, ("content-type", "text/plain")],
+                b"x",
+            ),
+        );
+        assert_eq!(response.status, 200, "{bucket}: {}", text(&response));
+    }
+}
+
+#[test]
+fn refuse_does_not_recheck_a_resumable_continuation_and_refuses_its_start() {
+    let s = with_mode(strict(), UndeclaredBuckets::Refuse);
+    let missing = handle(
+        &s,
+        req(
+            "POST",
+            "/upload/storage/v1/b/typo-bucket/o?uploadType=resumable&name=r.txt",
+            &[OWNER],
+            b"{}",
+        ),
+    );
+    assert_eq!(missing.status, 404);
+    let start = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/upload/storage/v1/b/{DEFAULT_BUCKET}/o?uploadType=resumable&name=r.txt"),
+            &[OWNER],
+            b"{}",
+        ),
+    );
+    assert_eq!(start.status, 200, "{}", text(&start));
+    let location = start
+        .headers
+        .iter()
+        .find(|(k, _)| k == "location")
+        .map(|(_, v)| v.clone())
+        .unwrap();
+    let session = location.strip_prefix("http://127.0.0.1:9199").unwrap();
+    assert_eq!(
+        handle(&s, req("PUT", session, &[OWNER], b"hello")).status,
+        200
+    );
+}
+
+#[test]
+fn refuse_answers_with_the_pretty_error_layout_of_the_strict_profile() {
+    let s = with_mode(strict(), UndeclaredBuckets::Refuse);
+    let response = handle(
+        &s,
+        req("GET", "/storage/v1/b/typo-bucket/o/a.txt", &[OWNER], b""),
+    );
+    assert_eq!(response.status, 404);
+    assert!(
+        response
+            .body
+            .starts_with(b"{\n  \"error\": {\n    \"code\": 404,"),
+        "{}",
+        text(&response)
+    );
+}
+
+#[test]
+fn create_mode_serves_a_missing_bucket_and_never_notes_it() {
+    let s = with_mode(strict(), UndeclaredBuckets::Create);
+    let seen = noting(&s);
+    let response = handle(
+        &s,
+        req(
+            "POST",
+            "/upload/storage/v1/b/typo-bucket/o?uploadType=media&name=a.txt",
+            &[OWNER, ("content-type", "text/plain")],
+            b"x",
+        ),
+    );
+    assert_eq!(response.status, 200);
+    assert!(has_bucket(&s, "typo-bucket"));
+    assert!(seen.lock().unwrap().is_empty());
+}
+
+#[test]
+fn warn_mode_is_the_strict_default_and_still_notes() {
+    let s = strict();
+    let seen = noting(&s);
+    let response = handle(
+        &s,
+        req(
+            "POST",
+            "/upload/storage/v1/b/typo-bucket/o?uploadType=media&name=a.txt",
+            &[OWNER, ("content-type", "text/plain")],
+            b"x",
+        ),
+    );
+    assert_eq!(response.status, 200);
+    assert_eq!(*seen.lock().unwrap(), ["typo-bucket"]);
+}
+
+#[test]
+fn the_emulator_profile_keeps_creating_buckets_whatever_the_mode() {
+    let s = with_mode(emulator(), UndeclaredBuckets::Refuse);
+    seed(&s, DEFAULT_BUCKET, "a.txt", b"hello");
+    for (label, request) in object_requests("typo-bucket") {
+        if WRITES.contains(&label) {
+            let response = handle(&s, request);
+            assert_eq!(response.status, 200, "{label}: {}", text(&response));
+        }
+    }
+    assert!(has_bucket(&s, "typo-bucket"));
+}
+
+mod undeclared_bucket_modes {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        /// A reference model: under `refuse` a write is served exactly when its bucket is a
+        /// default bucket, listed, or already holds data; under `create` and `warn` it is always
+        /// served; and a refused write leaves no bucket behind.
+        #[test]
+        fn a_write_is_served_iff_the_model_says_the_bucket_exists(
+            mode in 0usize..3,
+            writes in proptest::collection::vec(0usize..6, 0..24),
+        ) {
+            let names = ["alpha-bucket", "beta-bucket", DEFAULT_BUCKET, "listed-bucket", "imported-bucket", NEW_DEFAULT_BUCKET];
+            let mode = [UndeclaredBuckets::Create, UndeclaredBuckets::Warn, UndeclaredBuckets::Refuse][mode];
+            let s = with_mode(strict(), mode);
+            s.rules.set_configured_buckets(["listed-bucket".to_owned()]);
+            seed(&s, "imported-bucket", "seed.txt", b"x");
+            let mut existing: std::collections::BTreeSet<&str> =
+                [DEFAULT_BUCKET, NEW_DEFAULT_BUCKET, "listed-bucket", "imported-bucket"].into();
+            for i in writes {
+                let name = names[i];
+                let response = handle(
+                    &s,
+                    req(
+                        "POST",
+                        &format!("/upload/storage/v1/b/{name}/o?uploadType=media&name=a.txt"),
+                        &[OWNER, ("content-type", "text/plain")],
+                        b"x",
+                    ),
+                );
+                let served = mode != UndeclaredBuckets::Refuse || existing.contains(name);
+                prop_assert_eq!(response.status, if served { 200 } else { 404 });
+                if served {
+                    existing.insert(name);
+                } else {
+                    prop_assert!(!has_bucket(&s, name));
+                }
+            }
+        }
+    }
 }

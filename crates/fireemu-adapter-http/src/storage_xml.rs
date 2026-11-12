@@ -56,6 +56,10 @@ pub fn check_signed_url(params: &BTreeMap<String, String>, now_unix: i64) -> Sig
         if seconds == 0 || seconds > MAX_SIGNED_URL_SECONDS {
             return SignedUrl::Invalid("X-Goog-Expires must be between 1 and 604800 seconds.");
         }
+        // Allow up to 15 minutes of clock skew before the signing time.
+        if date > now_unix.saturating_add(900) {
+            return SignedUrl::Invalid("X-Goog-Date is more than 15 minutes in the future.");
+        }
         let expires = date.saturating_add(i64::try_from(seconds).unwrap_or(i64::MAX));
         return if now_unix > expires {
             SignedUrl::Expired
@@ -374,6 +378,20 @@ mod tests {
     }
 
     #[test]
+    fn a_v4_url_rejects_dates_beyond_clock_skew() {
+        let url = params(&[
+            ("X-Goog-Date", "20260829T121600Z"),
+            ("X-Goog-Expires", "60"),
+            ("X-Goog-Signature", "sig"),
+        ]);
+        assert_eq!(check_signed_url(&url, NOW), SignedUrl::Valid);
+        assert!(matches!(
+            check_signed_url(&url, NOW - 1),
+            SignedUrl::Invalid(_)
+        ));
+    }
+
+    #[test]
     fn a_v4_url_is_valid_through_its_last_second_and_expired_after() {
         let url = |date: &str, expires: &str| {
             params(&[
@@ -489,7 +507,8 @@ mod tests {
             );
             let expires = signed_at + i64::try_from(lifetime).unwrap();
             prop_assert_eq!(verdict == SignedUrl::Expired, NOW > expires);
-            prop_assert_eq!(verdict == SignedUrl::Valid, NOW <= expires);
+            prop_assert_eq!(verdict == SignedUrl::Valid, NOW <= expires && offset <= 900);
+            prop_assert_eq!(matches!(verdict, SignedUrl::Invalid(_)), offset > 900);
         }
     }
 

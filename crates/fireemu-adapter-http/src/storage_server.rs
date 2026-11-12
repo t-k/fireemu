@@ -299,6 +299,79 @@ fn cors(
     b
 }
 
+/// The bucket CORS configuration that decides the CORS headers of a request: under the strict
+/// profile, the one `storage.cors` lists for the request's bucket. The Firebase API sends its own
+/// CORS headers on everything but its media reads (the answers a download URL serves), so only
+/// those follow the bucket's configuration there.
+fn bucket_cors_for(
+    state: &StorageState,
+    method: &str,
+    path: &str,
+    query: &str,
+) -> Option<crate::storage_cors::BucketCors> {
+    if !state.is_strict() {
+        return None;
+    }
+    let (bucket, firebase) = crate::storage::cors_bucket(method, path)?;
+    if firebase
+        && crate::storage::query_params(query)
+            .get("alt")
+            .map(String::as_str)
+            != Some("media")
+    {
+        return None;
+    }
+    state.rules.bucket_cors(&bucket)
+}
+
+/// `headers` with their CORS headers replaced by `matched`, the headers the bucket's rules gave
+/// the request (none when no rule matched). A `Vary: Origin` the answer already carries is not
+/// repeated.
+fn with_bucket_cors(
+    mut headers: Vec<(String, String)>,
+    matched: Option<crate::storage_cors::CorsHeaders>,
+) -> Vec<(String, String)> {
+    headers.retain(|(name, _)| !name.to_ascii_lowercase().starts_with("access-control-"));
+    for (name, value) in matched.unwrap_or_default() {
+        let repeated_vary = name == "vary"
+            && headers.iter().any(|(existing, listed)| {
+                existing.eq_ignore_ascii_case("vary")
+                    && listed.split(',').any(|part| part.trim() == "Origin")
+            });
+        if !repeated_vary {
+            headers.push((name, value));
+        }
+    }
+    headers
+}
+
+/// The answer to a preflight on a bucket `storage.cors` configures: the `200` with no body that
+/// Cloud Storage's XML API gave a preflight on a bucket without CORS (recorded), plus the CORS
+/// headers of the first rule that matches the request, if any.
+fn configured_preflight(
+    cors: &crate::storage_cors::BucketCors,
+    origin: Option<&str>,
+    headers: &hyper::HeaderMap,
+) -> Response<StorageBody> {
+    let mut builder = Response::builder()
+        .status(200)
+        .header("cache-control", "private, max-age=0")
+        .header("content-type", "text/html; charset=UTF-8");
+    let text = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+    if let (Some(origin), Some(method)) = (origin, text("access-control-request-method")) {
+        if let Some(matched) =
+            cors.preflight(origin, method, text("access-control-request-headers"))
+        {
+            for (name, value) in matched {
+                builder = builder.header(name, value);
+            }
+        }
+    }
+    builder
+        .body(plain(Bytes::new()))
+        .unwrap_or_else(|_| Response::new(plain(Bytes::new())))
+}
+
 /// The refusal a body that was not accepted turns into.
 /// The body of every Storage answer.
 type StorageBody = BoxBody<Bytes, std::convert::Infallible>;
@@ -419,7 +492,17 @@ async fn respond(
             .body(plain(Bytes::from_static(b"forbidden origin")))
             .unwrap_or_else(|_| Response::new(plain(Bytes::new()))));
     }
+    // A bucket `storage.cors` lists decides its own CORS headers, a preflight included.
+    let bucket_cors = bucket_cors_for(
+        &state,
+        req.method().as_str(),
+        req.uri().path(),
+        req.uri().query().unwrap_or(""),
+    );
     if req.method() == hyper::Method::OPTIONS {
+        if let Some(cors) = &bucket_cors {
+            return Ok(configured_preflight(cors, origin.as_deref(), req.headers()));
+        }
         // The preflight the official emulator's `cors` middleware answers: the requested
         // headers reflected, the express method list, and both Vary members.
         //
@@ -457,6 +540,7 @@ async fn respond(
             .unwrap_or_else(|_| Response::new(plain(Bytes::new()))));
     }
     let method = req.method().as_str().to_owned();
+    let request_method = method.clone();
     let path = req.uri().path().to_owned();
     let query = req.uri().query().unwrap_or("").to_owned();
     let host = req
@@ -607,17 +691,24 @@ async fn respond(
     let mut builder = Response::builder()
         .status(StatusCode::from_u16(response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR));
     if !framed {
-        builder = cors(
-            // Defence in depth: a body typed text/plain that happens to look like markup is
-            // never sniffed as HTML on this origin. It does not change how an explicit
-            // text/html content-type renders, so it is not a substitute for typing
-            // caller-influenced bodies as text/plain -- see storage::gcs_no_such_object.
-            builder.header("x-content-type-options", "nosniff"),
-            origin.as_deref(),
-        );
+        // Defence in depth: a body typed text/plain that happens to look like markup is
+        // never sniffed as HTML on this origin. It does not change how an explicit
+        // text/html content-type renders, so it is not a substitute for typing
+        // caller-influenced bodies as text/plain -- see storage::gcs_no_such_object.
+        builder = builder.header("x-content-type-options", "nosniff");
+        if bucket_cors.is_none() {
+            builder = cors(builder, origin.as_deref());
+        }
     }
     let body = body_of(&response);
-    for (k, v) in response.headers {
+    let mut response_headers = response.headers;
+    if let Some(configured) = &bucket_cors {
+        let matched = origin
+            .as_deref()
+            .and_then(|origin| configured.actual(origin, &request_method));
+        response_headers = with_bucket_cors(response_headers, matched);
+    }
+    for (k, v) in response_headers {
         builder = builder.header(k, v);
     }
     match builder.body(body) {
@@ -679,6 +770,95 @@ pub fn serve_storage_with_budget(
                 let _ = http1::Builder::new().serve_connection(io, svc).await;
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod bucket_cors_merge_tests {
+    use super::*;
+
+    fn pair(name: &str, value: &str) -> (String, String) {
+        (name.to_owned(), value.to_owned())
+    }
+
+    fn matched() -> crate::storage_cors::CorsHeaders {
+        vec![
+            pair("access-control-allow-origin", "http://localhost:3000"),
+            pair("vary", "Origin"),
+            pair("access-control-expose-headers", "Content-Type"),
+        ]
+    }
+
+    #[test]
+    fn the_rules_headers_replace_every_cors_header_and_keep_the_others() {
+        let merged = with_bucket_cors(
+            vec![
+                pair("content-type", "text/plain"),
+                pair("Access-Control-Allow-Origin", "*"),
+                pair("access-control-expose-headers", "x"),
+                pair("etag", "\"a\""),
+            ],
+            Some(matched()),
+        );
+        assert_eq!(
+            merged,
+            vec![
+                pair("content-type", "text/plain"),
+                pair("etag", "\"a\""),
+                pair("access-control-allow-origin", "http://localhost:3000"),
+                pair("vary", "Origin"),
+                pair("access-control-expose-headers", "Content-Type"),
+            ]
+        );
+    }
+
+    #[test]
+    fn no_matching_rule_leaves_no_cors_header_at_all() {
+        let merged = with_bucket_cors(
+            vec![pair("access-control-allow-origin", "*"), pair("etag", "a")],
+            None,
+        );
+        assert_eq!(merged, vec![pair("etag", "a")]);
+    }
+
+    #[test]
+    fn vary_origin_is_not_repeated_but_another_vary_does_not_hide_it() {
+        let count = |headers: &[(String, String)]| {
+            headers
+                .iter()
+                .filter(|(name, value)| name == "vary" && value == "Origin")
+                .count()
+        };
+        // Already present, as a separate line or inside a list, in any case of the name.
+        for existing in [
+            pair("vary", "Origin"),
+            pair("Vary", "Accept, Origin"),
+            pair("VARY", "Origin,X-Origin"),
+        ] {
+            let merged = with_bucket_cors(vec![existing.clone()], Some(matched()));
+            let varies = merged
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case("vary"))
+                .count();
+            assert_eq!(varies, 1, "{existing:?} is the only Vary line");
+            assert_eq!(
+                merged.len(),
+                3,
+                "{existing:?}: the allow-origin and expose headers follow"
+            );
+            assert!(merged
+                .iter()
+                .any(|(n, _)| n == "access-control-allow-origin"));
+        }
+        // A Vary without Origin does not count.
+        let merged = with_bucket_cors(vec![pair("vary", "X-Origin")], Some(matched()));
+        assert_eq!(count(&merged), 1);
+        // Another header that happens to mention Origin is not a Vary.
+        let merged = with_bucket_cors(vec![pair("x-note", "Origin")], Some(matched()));
+        assert_eq!(count(&merged), 1);
+        assert!(merged
+            .iter()
+            .any(|(n, v)| n == "access-control-allow-origin" && v == "http://localhost:3000"));
     }
 }
 

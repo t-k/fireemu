@@ -2843,7 +2843,54 @@ fn load_storage_rules(
     loaded
         .registry
         .set_default_buckets(cfg.storage_default_bucket);
+    loaded
+        .registry
+        .set_undeclared_buckets(cfg.storage_undeclared_buckets);
+    loaded
+        .registry
+        .set_bucket_cors(load_storage_cors(&cfg.storage_cors)?);
+    loaded
+        .registry
+        .set_unlisted_buckets_cors_none(cfg.storage_cors_unlisted_none);
+    loaded
+        .registry
+        .set_signer_keys(load_signer_keys(&cfg.storage_signed_url_keys)?);
     Ok(loaded)
+}
+
+/// The `storage.cors` rules, read as the server reads them (`parse_storage_cors` validated them).
+fn load_storage_cors(
+    cors: &std::collections::BTreeMap<String, serde_json::Value>,
+) -> Result<
+    std::collections::BTreeMap<String, fireemu_adapter_http::storage_cors::BucketCors>,
+    String,
+> {
+    cors.iter()
+        .map(|(bucket, rules)| {
+            fireemu_adapter_http::storage_cors::BucketCors::from_json(rules)
+                .map(|parsed| (bucket.clone(), parsed))
+                .map_err(|e| format!("storage.cors[{bucket:?}] {e}"))
+        })
+        .collect()
+}
+
+/// Reads the files `storage.signedUrlKeys` names. A file that cannot be read or is not a usable
+/// RSA key stops the start (fail closed); the message names the file, never its contents.
+fn load_signer_keys(
+    paths: &[String],
+) -> Result<fireemu_adapter_http::storage_signature::SignerKeys, String> {
+    use std::io::Read as _;
+    let mut keys = fireemu_adapter_http::storage_signature::SignerKeys::default();
+    for (index, path) in paths.iter().enumerate() {
+        let limit = fireemu_adapter_http::storage_signature::MAX_KEY_FILE_BYTES as u64 + 1;
+        let mut contents = Vec::new();
+        std::fs::File::open(path)
+            .and_then(|file| file.take(limit).read_to_end(&mut contents))
+            .map_err(|e| format!("storage.signedUrlKeys[{index}] {path}: {}", e.kind()))?;
+        keys.add_file_contents(&contents)
+            .map_err(|e| format!("storage.signedUrlKeys[{index}] {path}: {e}"))?;
+    }
+    Ok(keys)
 }
 
 fn load_storage_rules_registry(
@@ -4304,6 +4351,110 @@ fn logical_system_time(system_time: std::time::SystemTime) -> LogicalInstant {
         .map(|duration| i128::try_from(duration.as_nanos()).unwrap_or(i128::MAX))
         .unwrap_or(0);
     LogicalInstant::from_nanos(nanos)
+}
+
+#[cfg(test)]
+mod storage_strictness_loader_tests {
+    use super::*;
+
+    /// A public key generated for these tests; it signs nothing and is no credential.
+    const PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtrsZ4pTJlFRUNpx4dEbd
+h0zn2JAkmdb3xjKyaQ2WtJGgL45vuyR+E/n8VycyY2D9pQ2aAtsNQfg/Iq09MFc6
+vC6r31mdKBv3UW+VfCR6+WhlQFfJ+097oBDdIdpSCOcFecvTSL42DyMyb+es0pq/
+0XdN2i4aKkukUNnNQqZZ0JoahyTtD8hGdQ44ynsr/bWsKKdrSLDyTmuBzpcF/Wje
+2hhcJL/I3x97SatMCbmtQPxujZt+Hei7jKoKP0Nmyj11z3qRLQPfJGZS0bRmCFnP
+it9cUtSPy7hGjUxDnX1xqPCeAcQiAFNv/W9gBwjmUvJlSlh2bNrpQ30eVIyEwn8b
+rwIDAQAB
+-----END PUBLIC KEY-----
+";
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "fireemu-storage-keys-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn signing_keys_are_read_from_the_named_files() {
+        let dir = scratch("read");
+        let (first, second) = (dir.join("a.pem"), dir.join("b.pem"));
+        std::fs::write(&first, PUBLIC_KEY).unwrap();
+        std::fs::write(&second, PUBLIC_KEY).unwrap();
+        let none = load_signer_keys(&[]).unwrap();
+        assert!(none.is_empty());
+        let both = load_signer_keys(&[
+            first.to_string_lossy().into_owned(),
+            second.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+        assert_eq!(both.len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_unreadable_or_unusable_key_file_stops_the_start_without_echoing_contents() {
+        let dir = scratch("refuse");
+        let missing = dir.join("missing.pem");
+        let error = load_signer_keys(&[missing.to_string_lossy().into_owned()]).unwrap_err();
+        assert!(
+            error.starts_with("storage.signedUrlKeys[0] ")
+                && error.contains("missing.pem")
+                && error.contains("not found"),
+            "{error}"
+        );
+        let junk = dir.join("junk.pem");
+        std::fs::write(&junk, "SECRET-LOOKING-CONTENT").unwrap();
+        let error =
+            load_signer_keys(&[dir.join("ok.pem").to_string_lossy().into_owned()]).unwrap_err();
+        assert!(error.contains("[0]"), "{error}");
+        std::fs::write(dir.join("ok.pem"), PUBLIC_KEY).unwrap();
+        let error = load_signer_keys(&[
+            dir.join("ok.pem").to_string_lossy().into_owned(),
+            junk.to_string_lossy().into_owned(),
+        ])
+        .unwrap_err();
+        assert!(error.starts_with("storage.signedUrlKeys[1] "), "{error}");
+        assert!(!error.contains("SECRET-LOOKING-CONTENT"), "{error}");
+        // A file past the size limit is refused, not read whole.
+        let huge = dir.join("huge.pem");
+        std::fs::write(
+            &huge,
+            vec![b' '; fireemu_adapter_http::storage_signature::MAX_KEY_FILE_BYTES + 1],
+        )
+        .unwrap();
+        let error = load_signer_keys(&[huge.to_string_lossy().into_owned()]).unwrap_err();
+        assert!(error.contains("too large"), "{error}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn storage_cors_rules_are_read_per_bucket() {
+        use serde_json::json;
+        let cors = std::collections::BTreeMap::from([
+            (
+                "a-bucket".to_owned(),
+                json!([{"origin": ["http://localhost:3000"], "method": ["GET"]}]),
+            ),
+            ("b-bucket".to_owned(), json!([])),
+        ]);
+        let loaded = load_storage_cors(&cors).unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert!(loaded["a-bucket"]
+            .actual("http://localhost:3000", "GET")
+            .is_some());
+        assert!(loaded["b-bucket"].is_empty());
+        let bad = std::collections::BTreeMap::from([("a-bucket".to_owned(), json!({}))]);
+        let error = load_storage_cors(&bad).unwrap_err();
+        assert!(error.starts_with("storage.cors[\"a-bucket\"] "), "{error}");
+        assert!(load_storage_cors(&std::collections::BTreeMap::new())
+            .unwrap()
+            .is_empty());
+    }
 }
 
 #[cfg(test)]

@@ -1100,9 +1100,11 @@ pub struct RuntimeConfig {
     /// `storage.publicBuckets`: buckets whose objects the public URL serves without a credential.
     pub storage_public_buckets: Vec<String>,
     /// `storage.cors`: the CORS rules of the buckets it lists, as the Cloud Storage `cors` JSON
-    /// (validated when read); a bucket that is not listed keeps the permissive answer. Strict
-    /// profile only.
+    /// (validated when read); unlisted buckets are permissive unless productionExact is set.
+    /// Strict profile only.
     pub storage_cors: std::collections::BTreeMap<String, Value>,
+    /// Whether an unlisted bucket has no CORS configuration.
+    pub storage_cors_unlisted_none: bool,
     /// `storage.signedUrlKeys`: files holding the public keys V4 signed URLs are verified against
     /// (empty: the signature is not verified). Strict profile only.
     pub storage_signed_url_keys: Vec<String>,
@@ -1832,6 +1834,7 @@ impl Default for RuntimeConfig {
             storage_buckets: Vec::new(),
             storage_public_buckets: Vec::new(),
             storage_cors: std::collections::BTreeMap::new(),
+            storage_cors_unlisted_none: false,
             storage_signed_url_keys: Vec::new(),
             storage_default_bucket: fireemu_adapter_http::storage::DefaultBuckets::Both,
             storage_undeclared_buckets: profile.undeclared_buckets(),
@@ -2186,7 +2189,6 @@ impl RuntimeConfig {
                     "firestore.enforceLimits"
                         | "auth.improvedEmailPrivacy"
                         | "firestore.missingIndexes"
-                        | "storage.undeclaredBuckets"
                 ) {
                     "derived from profile"
                 } else {
@@ -2227,6 +2229,7 @@ pub const SECRET_CONFIG_KEYS: &[&str] = &[
 /// [`SECRET_CONFIG_KEYS`] or here with a reason.
 #[cfg(test)]
 pub const NOT_SECRET_CONFIG_KEYS: &[(&str, &str)] = &[
+    ("storage.signedUrlKeys", "paths to public verification keys"),
     ("auth.allowUnsignedCustomTokens", "boolean switch"),
     ("auth.allowUnsignedIdTokens", "boolean switch"),
     ("auth.idTokenSigning", "signing mode name"),
@@ -4561,6 +4564,7 @@ impl RuntimeConfig {
         self.enforce_limits = profile.enforce_limits();
         self.firestore_missing_indexes = profile.missing_indexes();
         self.storage_undeclared_buckets = profile.undeclared_buckets();
+        self.storage_cors_unlisted_none = false;
         self.token_acceptance = profile.token_acceptance();
         self.implicit_database_creation = profile.implicit_database_creation();
         self.refuse_without_ruleset = profile.refuse_without_ruleset();
@@ -4588,6 +4592,12 @@ impl RuntimeConfig {
     /// those keys apply that rule.
     pub fn set_production_exact(&mut self, exact: bool) {
         self.production_exact = exact;
+        self.storage_undeclared_buckets = if exact {
+            fireemu_adapter_http::storage::UndeclaredBuckets::Refuse
+        } else {
+            self.profile.undeclared_buckets()
+        };
+        self.storage_cors_unlisted_none = exact;
         self.auth_allow_unsigned_custom_tokens = !exact;
         self.auth_allow_unsigned_id_tokens = !exact;
         self.auth_idp_assertions = if exact {
@@ -4732,6 +4742,14 @@ impl RuntimeConfig {
             (
                 "hosting.clientCountry",
                 self.hosting_client_country.as_config_str(),
+            ),
+            (
+                "storage.undeclaredBuckets",
+                match self.storage_undeclared_buckets {
+                    fireemu_adapter_http::storage::UndeclaredBuckets::Create => "create",
+                    fireemu_adapter_http::storage::UndeclaredBuckets::Warn => "warn",
+                    fireemu_adapter_http::storage::UndeclaredBuckets::Refuse => "refuse",
+                },
             ),
         ];
         self.development_defaults = values
@@ -6789,11 +6807,7 @@ mod tests {
             ("storage.cors", json!({}), "default"),
             ("storage.signedUrlKeys", json!([]), "default"),
             ("storage.defaultBucket", json!("both"), "default"),
-            (
-                "storage.undeclaredBuckets",
-                json!("warn"),
-                "derived from profile",
-            ),
+            ("storage.undeclaredBuckets", json!("warn"), "default"),
             ("events.maxAttempts", json!(4), "default"),
             (
                 "pubsub.pushMinimumRedeliveryIntervalMillis",
@@ -7371,6 +7385,7 @@ mod tests {
                     // runs the query (Report is its inert value).
                     ("firestore.missingIndexes", _) if profile == "emulator" => json!("report"),
                     ("storage.undeclaredBuckets", _) if profile == "emulator" => json!("create"),
+                    ("storage.undeclaredBuckets", true) => json!("refuse"),
                     ("firestore.listenStreamLifetime", true) => json!("oneHour"),
                     _ => node["default"].clone(),
                 };
@@ -7393,13 +7408,22 @@ mod tests {
                 assert_eq!(row["value"], json!(actual), "{key}");
                 assert_eq!(row["source"], "derived from profile", "{key}");
             }
-            for key in ["firestore.missingIndexes", "storage.undeclaredBuckets"] {
-                let row = rows.iter().find(|row| row["key"] == key).unwrap();
-                assert_eq!(
-                    row["source"], "derived from profile",
-                    "{key}, {profile}, productionExact={exact}"
-                );
-            }
+            let row = rows
+                .iter()
+                .find(|row| row["key"] == "firestore.missingIndexes")
+                .unwrap();
+            assert_eq!(
+                row["source"], "derived from profile",
+                "{profile}, productionExact={exact}"
+            );
+            let row = rows
+                .iter()
+                .find(|row| row["key"] == "storage.undeclaredBuckets")
+                .unwrap();
+            assert_eq!(
+                row["source"],
+                if exact { "productionExact" } else { "default" }
+            );
             // Defaults behind schema references also have concrete runtime values.
             let full_schema: Value =
                 serde_json::from_str(include_str!("../../../spec/config/fireemu.schema.json"))
@@ -7808,13 +7832,11 @@ mod tests {
             RuntimeConfig::from_json(&input)
         };
         for exact in [false, true] {
-            // The strict profile keeps the note (owner decision of 2026-10-13); productionExact
-            // does not move the key.
             assert_eq!(
                 read("strict", exact, None)
                     .unwrap()
                     .storage_undeclared_buckets,
-                Warn
+                if exact { Refuse } else { Warn }
             );
             assert_eq!(
                 read("emulator", false, None)
@@ -7873,6 +7895,56 @@ mod tests {
         assert_eq!(cfg.storage_undeclared_buckets, Create);
         cfg.set_profile(CompatibilityProfile::Strict);
         assert_eq!(cfg.storage_undeclared_buckets, Warn);
+    }
+
+    #[test]
+    fn storage_production_exact_defaults_and_explicit_precedence() {
+        use fireemu_adapter_http::storage::UndeclaredBuckets::{Create, Refuse, Warn};
+        for (input, mode, flag, source) in [
+            (json!({"schemaVersion": 1}), Warn, false, "default"),
+            (
+                json!({"schemaVersion": 1, "profile": "emulator"}),
+                Create,
+                false,
+                "default",
+            ),
+            (
+                json!({"schemaVersion": 1, "productionExact": true}),
+                Refuse,
+                true,
+                "productionExact",
+            ),
+            (
+                json!({"schemaVersion": 1, "productionExact": true, "storage": {"undeclaredBuckets": "warn"}}),
+                Warn,
+                true,
+                "explicit",
+            ),
+            (
+                json!({"schemaVersion": 1, "productionExact": true, "storage": {"undeclaredBuckets": "create", "cors": {"demo-app.appspot.com": []}}}),
+                Create,
+                true,
+                "explicit",
+            ),
+        ] {
+            let cfg = RuntimeConfig::from_json(&input).unwrap();
+            assert_eq!(cfg.storage_undeclared_buckets, mode);
+            assert_eq!(cfg.storage_cors_unlisted_none, flag);
+            let entry = cfg
+                .development_defaults
+                .iter()
+                .find(|entry| entry["key"] == "storage.undeclaredBuckets")
+                .unwrap();
+            assert_eq!(entry["source"], source);
+            if input.pointer("/storage/cors").is_some() {
+                assert_eq!(cfg.storage_cors["demo-app.appspot.com"], json!([]));
+            }
+        }
+        let mut cfg = RuntimeConfig::default();
+        cfg.set_production_exact(true);
+        cfg.set_production_exact(false);
+        assert_eq!(cfg.storage_undeclared_buckets, Warn);
+        assert!(!cfg.storage_cors_unlisted_none);
     }
 
     #[test]

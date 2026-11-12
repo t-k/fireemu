@@ -1,6 +1,6 @@
 //! `storage.cors`: a bucket's CORS configuration decides which cross-origin requests the
 //! strict profile lets a browser read, on the JSON API, the XML API and the Firebase API's media
-//! reads, as Cloud Storage does. A bucket with no configuration keeps the permissive answer.
+//! reads, as Cloud Storage does. Unlisted buckets are permissive unless configured otherwise.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -333,6 +333,80 @@ async fn a_bucket_without_a_configuration_keeps_the_permissive_answer() {
         preflight.header("access-control-allow-origin"),
         Some(ORIGIN)
     );
+    task.abort();
+}
+
+#[tokio::test]
+async fn unlisted_bucket_cors_can_default_to_none() {
+    let state = configured(TokenAcceptance::Verified, &rule());
+    state.rules.set_unlisted_buckets_cors_none(true);
+    state.rules.set_bucket_cors(BTreeMap::from([
+        (
+            CONFIGURED.to_owned(),
+            BucketCors::from_json(&rule()).unwrap(),
+        ),
+        ("empty-bucket".to_owned(), BucketCors::default()),
+    ]));
+    seed(&state, "empty-bucket");
+    let (addr, task) = serve(state).await;
+    for bucket in [OPEN, "empty-bucket", CONFIGURED] {
+        for path in reads(bucket) {
+            let answer = send(addr, "GET", &path, &[("Origin", ORIGIN)]).await;
+            assert_eq!(answer.status, 200, "{path}");
+            let preflight = send(
+                addr,
+                "OPTIONS",
+                &path,
+                &[("Origin", ORIGIN), ("Access-Control-Request-Method", "GET")],
+            )
+            .await;
+            assert_eq!(preflight.status, 200, "{path}");
+            if bucket == CONFIGURED {
+                assert_eq!(
+                    answer.header("access-control-allow-origin"),
+                    Some(ORIGIN),
+                    "{path}"
+                );
+                assert_eq!(
+                    preflight.header("access-control-allow-origin"),
+                    Some(ORIGIN),
+                    "{path}"
+                );
+            } else {
+                assert!(answer.cors_names().is_empty(), "{path}");
+                assert!(preflight.cors_names().is_empty(), "{path}");
+            }
+        }
+    }
+    task.abort();
+}
+
+#[tokio::test]
+async fn emulator_ignores_unlisted_bucket_cors_default() {
+    let state = configured(TokenAcceptance::EmulatorMock, &rule());
+    state.rules.set_unlisted_buckets_cors_none(true);
+    let (addr, task) = serve(state).await;
+    for path in reads(OPEN) {
+        let answer = send(addr, "GET", &path, &[("Origin", ORIGIN)]).await;
+        assert_eq!(
+            answer.header("access-control-allow-origin"),
+            Some(ORIGIN),
+            "{path}"
+        );
+        let preflight = send(
+            addr,
+            "OPTIONS",
+            &path,
+            &[("Origin", ORIGIN), ("Access-Control-Request-Method", "GET")],
+        )
+        .await;
+        assert_eq!(preflight.status, 204, "{path}");
+        assert_eq!(
+            preflight.header("access-control-allow-origin"),
+            Some(ORIGIN),
+            "{path}"
+        );
+    }
     task.abort();
 }
 

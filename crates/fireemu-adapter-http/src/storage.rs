@@ -205,6 +205,7 @@ pub struct StorageRulesRegistry {
     public_buckets: std::sync::RwLock<std::collections::BTreeSet<String>>,
     /// The buckets `storage.cors` configures, each with its rules (strict profile only).
     bucket_cors: std::sync::RwLock<BTreeMap<String, crate::storage_cors::BucketCors>>,
+    unlisted_buckets_cors_none: std::sync::RwLock<bool>,
     /// The public keys V4 signed URLs are verified against (`storage.signedUrlKeys`); none means
     /// the signature is not verified.
     signer_keys: std::sync::RwLock<crate::storage_signature::SignerKeys>,
@@ -290,6 +291,7 @@ impl StorageRulesRegistry {
             default_buckets: std::sync::RwLock::default(),
             public_buckets: std::sync::RwLock::default(),
             bucket_cors: std::sync::RwLock::default(),
+            unlisted_buckets_cors_none: std::sync::RwLock::default(),
             signer_keys: std::sync::RwLock::default(),
             undeclared_buckets: std::sync::RwLock::default(),
             unknown_bucket_notice: std::sync::RwLock::default(),
@@ -310,6 +312,7 @@ impl StorageRulesRegistry {
             default_buckets: std::sync::RwLock::default(),
             public_buckets: std::sync::RwLock::default(),
             bucket_cors: std::sync::RwLock::default(),
+            unlisted_buckets_cors_none: std::sync::RwLock::default(),
             signer_keys: std::sync::RwLock::default(),
             undeclared_buckets: std::sync::RwLock::default(),
             unknown_bucket_notice: std::sync::RwLock::default(),
@@ -380,20 +383,36 @@ impl StorageRulesRegistry {
         self.default_buckets.read().map(|d| *d).unwrap_or_default()
     }
 
-    /// Replaces the CORS configuration of the listed buckets (strict profile only); a bucket
-    /// that is not listed keeps the permissive answer.
+    /// Replaces the CORS configuration of the listed buckets (strict profile only).
     pub fn set_bucket_cors(&self, cors: BTreeMap<String, crate::storage_cors::BucketCors>) {
         if let Ok(mut slot) = self.bucket_cors.write() {
             *slot = cors;
         }
     }
 
-    /// The CORS configuration of `bucket`, if `storage.cors` lists it.
+    /// Selects whether unlisted buckets have no CORS configuration.
+    pub fn set_unlisted_buckets_cors_none(&self, none: bool) {
+        if let Ok(mut slot) = self.unlisted_buckets_cors_none.write() {
+            *slot = none;
+        }
+    }
+
+    fn unlisted_buckets_cors_none(&self) -> bool {
+        self.unlisted_buckets_cors_none
+            .read()
+            .is_ok_and(|flag| *flag)
+    }
+
+    /// The CORS configuration of `bucket`, including the unlisted-bucket default.
     pub(crate) fn bucket_cors(&self, bucket: &str) -> Option<crate::storage_cors::BucketCors> {
         self.bucket_cors
             .read()
             .ok()
             .and_then(|cors| cors.get(bucket).cloned())
+            .or_else(|| {
+                self.unlisted_buckets_cors_none()
+                    .then(crate::storage_cors::BucketCors::default)
+            })
     }
 
     /// Registers the public keys V4 signed URLs are verified against (strict profile only).

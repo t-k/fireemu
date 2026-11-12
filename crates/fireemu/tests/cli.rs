@@ -664,8 +664,7 @@ fn config_show_defaults_cover_every_schema_leaf_without_loading_the_reference() 
                     match path.as_str() {
                         "firestore.history.maxBytes"
                         | "firestore.deletedDatabaseIdCooldownSeconds" => "default (schema)",
-                        "firestore.missingIndexes" | "storage.undeclaredBuckets" =>
-                            "derived from profile",
+                        "firestore.missingIndexes" => "derived from profile",
                         _ => "default",
                     },
                     "{path}"

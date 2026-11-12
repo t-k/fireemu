@@ -2570,6 +2570,9 @@ fn load_storage_rules(
         .set_bucket_cors(load_storage_cors(&cfg.storage_cors)?);
     loaded
         .registry
+        .set_unlisted_buckets_cors_none(cfg.storage_cors_unlisted_none);
+    loaded
+        .registry
         .set_signer_keys(load_signer_keys(&cfg.storage_signed_url_keys)?);
     Ok(loaded)
 }

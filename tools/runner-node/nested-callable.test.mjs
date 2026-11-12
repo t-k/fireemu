@@ -197,6 +197,19 @@ test("the wrapper sees only App Check tokens admitted by the daemon", () => {
   }
 });
 
+test("a task dispatched to a plain HTTP export hides a forged App Check token from its nested wrapper", () => {
+  for (const strict of [false, true]) {
+    const req = request({
+      "x-cloudtasks-taskname": "task-1",
+      "x-firebase-appcheck": "forged.token.signature",
+      [VERIFIED_APP_CHECK_HEADER]: "0",
+    });
+    markNonCallableRequest(req, { strict, nonCallableHttp: true });
+    assert.equal(requestForCallableWrapper(req).header("x-firebase-appcheck"), undefined);
+    assert.equal(req.header("x-firebase-appcheck"), "forged.token.signature");
+  }
+});
+
 test("property: a nested wrapper cannot read an unadmitted App Check token", () => {
   let seed = 12345;
   const alphabet = "abcXYZ019._- ";

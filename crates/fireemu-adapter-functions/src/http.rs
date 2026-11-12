@@ -10,6 +10,7 @@ use std::task::{Context, Poll};
 
 use bytes::Bytes;
 use fireemu_adapter_support::connection::{DrainBounds, GracefulClose};
+use fireemu_core_app_check::header::APP_CHECK_HEADER;
 use http_body_util::combinators::UnsyncBoxBody;
 use http_body_util::{BodyExt, Full, StreamBody};
 use hyper::body::{Frame, Incoming};
@@ -1055,7 +1056,7 @@ fn sanitize_credentials(
     // The credential fields are collected separately and lossily: a value that is not
     // renderable as text must still count as an instance, or a second copy could hide behind
     // one byte the general collection dropped (spec 7.3).
-    let presented_app_check = field_values(raw, fireemu_core_app_check::header::APP_CHECK_HEADER);
+    let presented_app_check = field_values(raw, APP_CHECK_HEADER);
     let presented_auth = field_values(raw, "authorization");
     match trust.sanitize(&crate::callable::CallableRequest {
         function,
@@ -1936,7 +1937,8 @@ async fn respond(
         }
     };
     if plain_http {
-        add_app_check_verification_header(&runtime, function, req.headers(), &mut headers);
+        let app_check = field_values(req.headers(), APP_CHECK_HEADER);
+        add_app_check_verification_header(&runtime, function, &app_check, &mut headers);
     }
     if profile == FunctionsHttpProfile::Strict {
         let verified = plain_http && verified_single_credential(&runtime, req.headers());
@@ -1958,20 +1960,19 @@ async fn respond(
     .await
 }
 
-fn add_app_check_verification_header(
+pub(crate) fn add_app_check_verification_header(
     runtime: &FunctionsRuntime,
     function: &str,
-    raw: &hyper::HeaderMap,
+    app_check: &[String],
     headers: &mut Vec<(String, String)>,
 ) {
     if let Some(trust) = runtime.callable_trust() {
-        let app_check = field_values(raw, fireemu_core_app_check::header::APP_CHECK_HEADER);
         let decision = trust.sanitize(&crate::callable::CallableRequest {
             function,
             enforce_app_check: false,
             consume_app_check_token: false,
             headers: &[],
-            app_check: &app_check,
+            app_check,
             authorization: &[],
             now: runtime.now(),
         });

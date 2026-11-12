@@ -26,6 +26,7 @@ use fireemu_core_app_check::verify::BaselineMode;
 use fireemu_core_auth::jwt::encode_unsigned;
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::{AuthStore, NewUser};
+use fireemu_core_functions::manifest::{TaskRateLimits, TaskRetryConfig};
 use fireemu_core_rules::runtime::RulesetSlot;
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
@@ -834,6 +835,7 @@ async fn start_with_env_marking(
     marked: &[&str],
 ) -> Harness {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
+    let task_echo = env.iter().any(|(key, _)| key == "FIREEMU_FAKE_TASK_ECHO");
     let spec = SpawnSpec {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
@@ -845,6 +847,17 @@ async fn start_with_env_marking(
         .expect("the fake runner starts");
     let mut manifest =
         parse_manifest(runner.hello().manifest.as_ref().expect("a manifest")).expect("it parses");
+    if task_echo {
+        manifest
+            .functions
+            .iter_mut()
+            .find(|f| f.name == "echo")
+            .unwrap()
+            .trigger = fireemu_core_functions::manifest::Trigger::TaskQueue {
+            retry: TaskRetryConfig::default(),
+            rate_limits: TaskRateLimits::default(),
+        };
+    }
     for function in &mut manifest.functions {
         if marked.contains(&function.name.as_str()) {
             function.platform_options.strict_callable_ingress = true;
@@ -855,6 +868,7 @@ async fn start_with_env_marking(
         manifest,
         FunctionsConfig {
             project: PROJECT.into(),
+            functions_host: Some("127.0.0.1:5001".into()),
             ..FunctionsConfig::for_tests(1000, "runner-secret".into())
         },
         clock.clone(),
@@ -906,6 +920,64 @@ async fn start_with_env_marking(
         runtime,
         server,
     }
+}
+
+#[tokio::test]
+async fn task_dispatch_marks_a_forged_app_check_token_as_unverified() {
+    let log = std::env::temp_dir().join(format!(
+        "fireemu-task-appcheck-{}.jsonl",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&log);
+    let h = start_with_env(
+        true,
+        vec![
+            ("FIREEMU_FAKE_TASK_ECHO".into(), "1".into()),
+            (
+                "FIREEMU_FAKE_REQUEST_LOG".into(),
+                log.to_string_lossy().into_owned(),
+            ),
+        ],
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator,
+        false,
+    )
+    .await;
+    let dispatcher = tokio::spawn(h.runtime.clone().dispatch_loop());
+    h.runtime
+        .enqueue_task(
+            PROJECT,
+            "us-central1",
+            "echo",
+            &serde_json::json!({"task": {
+                "httpRequest": {"url": "", "body": "e30=", "headers": {
+                    "X-Firebase-AppCheck": "forged.token.signature",
+                    "X-Fireemu-AppCheck-Verified": "1"
+                }}
+            }}),
+        )
+        .unwrap();
+    let entry = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Ok(text) = std::fs::read_to_string(&log) {
+                if let Some(line) = text.lines().next() {
+                    if let Ok(entry) = serde_json::from_str::<Value>(line) {
+                        break entry;
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("task reaches runner");
+    assert_eq!(
+        entry["headers"]["x-firebase-appcheck"],
+        "forged.token.signature"
+    );
+    assert_eq!(entry["headers"]["x-fireemu-appcheck-verified"], "0");
+    dispatcher.abort();
+    h.stop().await;
+    std::fs::remove_file(log).unwrap();
 }
 
 impl Harness {

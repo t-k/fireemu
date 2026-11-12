@@ -3717,11 +3717,27 @@ impl FunctionsRuntime {
                 });
             }
         }
+        let app_check: Vec<String> = headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("x-firebase-appcheck"))
+            .map(|(_, value)| value.clone())
+            .collect();
+        let mut headers: Vec<_> = headers
+            .iter()
+            .filter(|(name, _)| !name.eq_ignore_ascii_case("x-fireemu-appcheck-verified"))
+            .cloned()
+            .collect();
+        crate::http::add_app_check_verification_header(
+            self,
+            &target.function,
+            &app_check,
+            &mut headers,
+        );
         self.invoke_http_classified(
             target,
             "POST",
             path,
-            headers,
+            &headers,
             body,
             FunctionsHttpProfile::Emulator,
         )

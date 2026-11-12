@@ -40,7 +40,7 @@ fn spill_lifecycle_and_failure() {
         .unwrap();
     assert_eq!(meta, expected);
     assert_eq!(store.get(&bucket, &name), Some(&meta));
-    assert_eq!(fs::read_dir(process.path()).unwrap().count(), 1);
+    assert_eq!(spill_files(process.path()).len(), 1);
     assert_eq!(store.body_bytes(&meta).unwrap().as_ref(), body);
     assert_eq!(*store.body_shared(&meta).unwrap(), body);
     assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| store.bytes(&meta))).is_err());
@@ -48,9 +48,9 @@ fn spill_lifecycle_and_failure() {
     store
         .delete(&bucket, &name, Precondition::default(), now)
         .unwrap();
-    assert_eq!(fs::read_dir(process.path()).unwrap().count(), 1);
+    assert_eq!(spill_files(process.path()).len(), 1);
     drop(snapshot);
-    assert_eq!(fs::read_dir(process.path()).unwrap().count(), 0);
+    assert_eq!(spill_files(process.path()).len(), 0);
     store
         .put(
             &bucket,
@@ -61,12 +61,7 @@ fn spill_lifecycle_and_failure() {
             now,
         )
         .unwrap();
-    let old = fs::read_dir(process.path())
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
+    let old = spill_files(process.path()).remove(0);
     store
         .put(
             &bucket,
@@ -78,9 +73,9 @@ fn spill_lifecycle_and_failure() {
         )
         .unwrap();
     assert!(!old.exists());
-    assert_eq!(fs::read_dir(process.path()).unwrap().count(), 1);
+    assert_eq!(spill_files(process.path()).len(), 1);
     store.clear();
-    assert_eq!(fs::read_dir(process.path()).unwrap().count(), 0);
+    assert_eq!(spill_files(process.path()).len(), 0);
     store.set_spill(Some((process.spill_dir(), 11)));
     store
         .put(
@@ -92,7 +87,7 @@ fn spill_lifecycle_and_failure() {
             now,
         )
         .unwrap();
-    assert_eq!(fs::read_dir(process.path()).unwrap().count(), 0);
+    assert_eq!(spill_files(process.path()).len(), 0);
     store.set_spill(None);
     store
         .put(
@@ -104,7 +99,7 @@ fn spill_lifecycle_and_failure() {
             now,
         )
         .unwrap();
-    assert_eq!(fs::read_dir(process.path()).unwrap().count(), 0);
+    assert_eq!(spill_files(process.path()).len(), 0);
     let bad = root.join("not-a-directory");
     fs::write(&bad, b"x").unwrap();
     store.set_spill(Some((SpillDir::new(&bad), 4)));
@@ -147,7 +142,7 @@ fn spill_lifecycle_and_failure() {
         )
         .unwrap();
     drop(store);
-    assert_eq!(fs::read_dir(process.path()).unwrap().count(), 0);
+    assert_eq!(spill_files(process.path()).len(), 0);
     drop(process);
     fs::remove_dir_all(root).unwrap();
 }
@@ -217,31 +212,31 @@ fn spilled_read_failure_and_generation_delete() {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| store.shared_bytes(&meta)))
             .is_err()
     );
-    let path = fs::read_dir(process.path())
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
+    let path = spill_files(process.path()).remove(0);
     fs::remove_file(path).unwrap();
-    assert!(store.body_bytes(&meta).is_err());
-    assert!(store.body_shared(&meta).is_err());
+    // The store reads through the handle it opened, so an unlinked spill file still serves its bytes.
+    assert_eq!(store.body_bytes(&meta).unwrap().as_ref(), [1, 2]);
+    assert_eq!(*store.body_shared(&meta).unwrap(), vec![1, 2]);
     store
         .delete_generation(&bucket, &name, meta.generation, Precondition::default())
         .unwrap();
-    assert_eq!(fs::read_dir(process.path()).unwrap().count(), 0);
+    assert_eq!(spill_files(process.path()).len(), 0);
     drop(store);
     drop(process);
     fs::remove_dir_all(root).unwrap();
 }
 
-fn count_files(dir: &std::path::Path) -> usize {
-    match fs::read_dir(dir) {
-        Ok(entries) => entries
-            .filter(|entry| entry.as_ref().map(|e| e.path().is_file()).unwrap_or(false))
-            .count(),
-        Err(_) => 0,
-    }
+/// The spill files in a process directory; the owner marker is not one of them.
+fn spill_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("spill-"))
+        })
+        .collect()
 }
 
 #[test]
@@ -306,7 +301,11 @@ fn an_upload_spills_at_exactly_the_threshold_and_not_below() {
             .unwrap();
         store.append_upload(&id, 0, &vec![7_u8; size], now).unwrap();
         store.finalize_upload(&id, now).unwrap();
-        assert_eq!(count_files(process.path()), expected_files, "size {size}");
+        assert_eq!(
+            spill_files(process.path()).len(),
+            expected_files,
+            "size {size}"
+        );
     }
     drop(store);
     drop(process);

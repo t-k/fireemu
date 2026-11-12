@@ -116,3 +116,25 @@ proptest! {
         prop_assert_eq!(range.as_slice(), &expected[start..start + length]);
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn reads_from_original_handle_after_directory_replacement() {
+    use std::os::unix::fs::{symlink, DirBuilderExt, PermissionsExt};
+    let root = std::env::temp_dir().join(format!("spill-replaced-{}", std::process::id()));
+    fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    let dir = root.join("dir");
+    let moved = root.join("moved");
+    let other = root.join("other");
+    let mut file = SpillDir::new(&dir).create_file().unwrap();
+    file.append(b"original").unwrap();
+    fs::rename(&dir, &moved).unwrap();
+    fs::create_dir(&other).unwrap();
+    fs::write(other.join(file.path().file_name().unwrap()), b"intruder").unwrap();
+    symlink(&other, &dir).unwrap();
+    assert_eq!(file.read_all().unwrap(), b"original");
+    assert!(file.append(b"x").is_err());
+    drop(file);
+    fs::remove_dir_all(root).unwrap();
+}

@@ -191,9 +191,41 @@ impl StatisticWindow {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum BurstRule {
+    Emulator,
+    Production,
+}
+
+impl BurstRule {
+    fn capacity(self, rate: f64) -> f64 {
+        match (self, rate) {
+            // TASK-QUEUE burst recording 2026-11-13, run f7e5c776424f470a; stage 1 recordings 2026-11-11 queue read-backs.
+            (Self::Production, 1.0) => 10.0,
+            (Self::Production, 500.0) => 100.0,
+            // The burst of any other production rate is UNRECORDED. The pinned emulator
+            // uses TaskQueue.maxTokens = max(rate, 1.1), including fractional rates.
+            _ => rate.max(1.1),
+        }
+    }
+
+    /// At the two recorded rates (1 and 500), a new or reset queue starts full under the production rule. In the recording the queue
+    /// existed for at least 300 s before the tasks became due (the program sends its creates
+    /// first and the due time is 300 s after the program start), so at rate 1 its bucket had
+    /// long refilled to capacity whatever it started with; starting full reproduces the observed
+    /// 10 immediate starts. A queue's very first second after creation was not observed.
+    fn initial_tokens(self, rate: f64) -> f64 {
+        match (self, rate) {
+            (Self::Production, 1.0 | 500.0) => self.capacity(rate),
+            _ => 0.0,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct QueueState {
     limits: TaskRateLimits,
+    burst_rule: BurstRule,
     pending: VecDeque<QueuedTask>,
     active: BTreeMap<u64, ActiveTask>,
     names: BTreeSet<Arc<str>>,
@@ -208,6 +240,7 @@ impl QueueState {
     fn new(limits: TaskRateLimits, now: TaskTime) -> Self {
         Self {
             limits,
+            burst_rule: BurstRule::Emulator,
             pending: VecDeque::new(),
             active: BTreeMap::new(),
             names: BTreeSet::new(),
@@ -225,9 +258,7 @@ impl QueueState {
         }
         let elapsed = now.duration_since(self.last_refill).as_secs_f64();
         let rate = self.limits.max_dispatches_per_second;
-        // The pinned emulator uses this exact minimum burst capacity (`TaskQueue.maxTokens`,
-        // `taskQueue.js:123`), which lets a fractional-rate queue eventually own one token.
-        self.tokens = (self.tokens + elapsed * rate).min(rate.max(1.1));
+        self.tokens = (self.tokens + elapsed * rate).min(self.burst_rule.capacity(rate));
         self.last_refill = now;
     }
 
@@ -355,6 +386,13 @@ impl TaskScheduler {
         self.name_reuse = reuse;
     }
 
+    pub(crate) fn set_burst_rule(&mut self, rule: BurstRule) {
+        for queue in self.queues.values_mut() {
+            queue.burst_rule = rule;
+            queue.tokens = rule.initial_tokens(queue.limits.max_dispatches_per_second);
+        }
+    }
+
     /// Releases the names whose tombstone has run out.
     fn expire_names(&mut self, now: TaskTime) {
         let NameReuse::Window(window) = self.name_reuse else {
@@ -406,7 +444,7 @@ impl TaskScheduler {
     pub(crate) fn delete_pending(
         &mut self,
         queue: &str,
-        name: &str,
+        matches: impl Fn(&str) -> bool,
         now: impl Into<TaskTime>,
     ) -> bool {
         let now = now.into();
@@ -416,7 +454,7 @@ impl TaskScheduler {
         let Some(position) = state
             .pending
             .iter()
-            .position(|queued| queued.task.name == name)
+            .position(|queued| matches(&queued.task.name))
         else {
             return false;
         };
@@ -747,8 +785,11 @@ impl TaskScheduler {
             return;
         };
         if state.active.contains_key(&id) {
-            state.tokens =
-                (state.tokens + 1.0).min(state.limits.max_dispatches_per_second.max(1.1));
+            state.tokens = (state.tokens + 1.0).min(
+                state
+                    .burst_rule
+                    .capacity(state.limits.max_dispatches_per_second),
+            );
         }
     }
 
@@ -916,7 +957,9 @@ impl TaskScheduler {
             queue.pending.clear();
             queue.active.clear();
             queue.names.clear();
-            queue.tokens = 0.0;
+            queue.tokens = queue
+                .burst_rule
+                .initial_tokens(queue.limits.max_dispatches_per_second);
             queue.last_refill = now;
             queue.added_times.clear();
             queue.completed_times.clear();
@@ -1885,6 +1928,136 @@ mod tests {
     }
 
     #[test]
+    fn recorded_strict_burst_and_emulator_empty_bucket_dispatch_on_virtual_clock() {
+        for (rule, first) in [
+            (super::BurstRule::Production, 10),
+            (super::BurstRule::Emulator, 0),
+        ] {
+            let start = super::TaskTime::Virtual(0);
+            let mut scheduler = TaskScheduler::from_manifest(
+                &manifest(TaskRateLimits {
+                    max_concurrent_dispatches: 20,
+                    max_dispatches_per_second: 1.0,
+                }),
+                start,
+            );
+            scheduler.set_burst_rule(rule);
+            for index in 0..20 {
+                scheduler
+                    .enqueue_at(
+                        "queue",
+                        task(&format!("task-{index}")),
+                        TaskRetryConfig::default(),
+                        1,
+                        start,
+                    )
+                    .unwrap();
+            }
+            // TASK-QUEUE burst recording 2026-11-13, run f7e5c776424f470a:
+            // ten at 153–214 ms, then 1030, 2028, 3032, 4034, 5036 and 6032 ms.
+            let (dispatches, _) = scheduler.dispatch_ready_at(
+                start,
+                None,
+                "demo-app",
+                |_| Some(DEFAULT_REGION.to_owned()),
+                20,
+            );
+            assert_eq!(dispatches.len(), first);
+            let (early, _) = scheduler.dispatch_ready_at(
+                super::TaskTime::Virtual(999_000_000),
+                None,
+                "demo-app",
+                |_| Some(DEFAULT_REGION.to_owned()),
+                20,
+            );
+            assert!(early.is_empty());
+            for second in 1..=20 - first {
+                let now = super::TaskTime::Virtual(second as u128 * 1_000_000_000);
+                let (dispatches, _) = scheduler.dispatch_ready_at(
+                    now,
+                    None,
+                    "demo-app",
+                    |_| Some(DEFAULT_REGION.to_owned()),
+                    20,
+                );
+                assert_eq!(dispatches.len(), 1, "second {second}");
+            }
+        }
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)] // the recorded capacities are exact values
+    fn production_recorded_and_unrecorded_bucket_state_and_reset() {
+        for (rate, capacity, initial) in [(1.0, 10.0, 10.0), (500.0, 100.0, 100.0), (2.0, 2.0, 0.0)]
+        {
+            let start = super::TaskTime::Virtual(0);
+            let mut scheduler = TaskScheduler::from_manifest(
+                &manifest(TaskRateLimits {
+                    max_concurrent_dispatches: 100,
+                    max_dispatches_per_second: rate,
+                }),
+                start,
+            );
+            scheduler.set_burst_rule(super::BurstRule::Production);
+            let queue = &scheduler.queues["queue"];
+            assert_eq!(queue.burst_rule.capacity(rate), capacity);
+            assert_eq!(queue.tokens, initial);
+            scheduler.queues.get_mut("queue").unwrap().tokens = 0.0;
+            scheduler.reset(start);
+            assert_eq!(scheduler.queues["queue"].tokens, initial);
+            let queue = scheduler.queues.get_mut("queue").unwrap();
+            queue.refill(super::TaskTime::Virtual(200_000_000_000));
+            assert_eq!(queue.tokens, capacity);
+        }
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn production_refund_never_exceeds_bucket_capacity() {
+        let start = super::TaskTime::Virtual(0);
+        let mut scheduler = TaskScheduler::from_manifest(
+            &manifest(TaskRateLimits {
+                max_concurrent_dispatches: 1,
+                max_dispatches_per_second: 1.0,
+            }),
+            start,
+        );
+        scheduler.set_burst_rule(super::BurstRule::Production);
+        scheduler
+            .enqueue_at(
+                "queue",
+                task("refund"),
+                TaskRetryConfig::default(),
+                1,
+                start,
+            )
+            .unwrap();
+        let (dispatch, _) = scheduler.dispatch_ready_at(
+            start,
+            None,
+            "demo-app",
+            |_| Some(DEFAULT_REGION.to_owned()),
+            1,
+        );
+        assert_eq!(dispatch.len(), 1);
+        assert_eq!(scheduler.queues["queue"].tokens, 9.0);
+        scheduler.refund_token("queue", dispatch[0].id, dispatch[0].generation);
+        assert_eq!(scheduler.queues["queue"].tokens, 10.0);
+        scheduler.refund_token("queue", dispatch[0].id, dispatch[0].generation);
+        assert_eq!(scheduler.queues["queue"].tokens, 10.0);
+    }
+
+    proptest::proptest! {
+        #[test]
+        #[allow(clippy::float_cmp)] // exact rates select the recorded rows
+        fn unrecorded_rates_keep_emulator_capacity(rate in 0.0f64..=1000.0) {
+            if rate > 0.0 && rate != 1.0 && rate != 500.0 {
+                proptest::prop_assert_eq!(super::BurstRule::Production.capacity(rate), super::BurstRule::Emulator.capacity(rate));
+            }
+        }
+    }
+
+    #[test]
     fn a_token_refill_is_applied_once_per_scheduler_tick() {
         let start = Instant::now();
         let mut scheduler = TaskScheduler::from_manifest(
@@ -2114,16 +2287,19 @@ mod tests {
         use crate::tasks_production::NameReuse;
         let start = Instant::now();
         let mut scheduler = scheduler_with_reuse(NameReuse::Window(Duration::from_secs(10)), start);
-        assert!(!scheduler.delete_pending("queue", "p", start));
-        assert!(!scheduler.delete_pending("nope", "p", start));
+        assert!(!scheduler.delete_pending("queue", |name| name == "p", start));
+        assert!(!scheduler.delete_pending("nope", |name| name == "p", start));
         scheduler
             .enqueue_at("queue", task("p"), TaskRetryConfig::default(), 8, start)
             .unwrap();
         scheduler
             .enqueue_at("queue", task("q"), TaskRetryConfig::default(), 8, start)
             .unwrap();
-        assert!(scheduler.delete_pending("queue", "p", start));
-        assert!(!scheduler.delete_pending("queue", "p", start), "once");
+        assert!(scheduler.delete_pending("queue", |name| name == "p", start));
+        assert!(
+            !scheduler.delete_pending("queue", |name| name == "p", start),
+            "once"
+        );
         assert_eq!(
             scheduler.name_state("queue", "p", start),
             NameState::Finished
@@ -2135,7 +2311,7 @@ mod tests {
         );
         let (id, generation) = dispatch_one(&mut scheduler, start + Duration::from_secs(1));
         assert!(
-            !scheduler.delete_pending("queue", "q", start),
+            !scheduler.delete_pending("queue", |name| name == "q", start),
             "a dispatched task is not pending"
         );
         assert!(scheduler.finish_with_outcome_at(
@@ -2149,7 +2325,7 @@ mod tests {
         immediate
             .enqueue_at("queue", task("p"), TaskRetryConfig::default(), 8, start)
             .unwrap();
-        assert!(immediate.delete_pending("queue", "p", start));
+        assert!(immediate.delete_pending("queue", |name| name == "p", start));
         assert_eq!(immediate.name_state("queue", "p", start), NameState::Free);
         assert_eq!(immediate.retained_bytes, 0);
     }

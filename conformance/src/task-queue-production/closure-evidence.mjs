@@ -9,6 +9,8 @@
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
+import { compareBurst } from "./burst-compare.mjs";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const RECORD = "spec/compatibility/closure/TASK-QUEUE-FUNCTIONS.json";
@@ -20,6 +22,9 @@ export const FILES = Object.freeze({
   strict1: "conformance/task-queue-production-strict-vs-pass-1.json",
   strict2: "conformance/task-queue-production-strict-vs-pass-2.json",
   knownDifferences: "conformance/src/task-queue-production/known-differences.mjs",
+  burstProduction: "conformance/task-queue-production-burst-pass-1.json",
+  burstLocal: "conformance/task-queue-production-burst-local-strict.json",
+  burstComparison: "conformance/task-queue-production-burst-strict-vs-pass-1.json",
 });
 
 /**
@@ -125,8 +130,6 @@ export const REGRESSION = Object.freeze({
 export const NOT_COMPARED = Object.freeze({
   "TASK-QUEUE-FUNCTIONS/queue-config-mapping":
     "The queue settings are read back with getQueue, which is the Cloud Tasks queue management API: neither fireemu nor the official emulator serves it (coordinator ruling 3). The settings read from production are recorded in both recordings (the queue-* cases) and their effects are compared by retry-backoff-schedule, retry-limits and max-concurrent-dispatches.",
-  "TASK-QUEUE-FUNCTIONS/max-dispatches-per-second":
-    "The program sent the eight tasks of the rate queue about 1.4 seconds apart in both production runs, so the limit never held a task back and no spacing or burst was observed; the local limiter spaces them one second apart. Rate and burst are not claimed (the rate cases carry no timing claim).",
   "TASK-QUEUE-FUNCTIONS/dedup-window-expiry":
     "The end of the reuse window was not observed: the window is documented as about one hour and strict under productionExact refuses a name for 3600 seconds after it finished or was deleted. A stage 2 packet of about 70 minutes would record the expiry; stage 1 leaves the refusal inside the window recorded, so the packet is recommended against unless the coordinator wants the length measured (ruling 4).",
 });
@@ -134,6 +137,43 @@ export const NOT_COMPARED = Object.freeze({
 const read = (path) => readFileSync(root + path);
 const json = (path) => JSON.parse(read(path));
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
+
+export function burstEvidence(readFile = read) {
+  const evidence = [];
+  try {
+    const productionBytes = readFile(FILES.burstProduction);
+    evidence.push({ path: FILES.burstProduction, sha256: sha(productionBytes) });
+    const comparisonBytes = readFile(FILES.burstComparison);
+    evidence.push({ path: FILES.burstComparison, sha256: sha(comparisonBytes) });
+    const production = JSON.parse(productionBytes);
+    const local = JSON.parse(readFile(FILES.burstLocal));
+    const comparison = JSON.parse(comparisonBytes);
+    if (
+      [production, local].some(
+        (p) =>
+          p.kind !== "task-queue-burst-projection-v1" ||
+          p.program !== "burst" ||
+          p.tasks !== 120 ||
+          p.observationComplete !== true,
+      ) ||
+      local.profile !== "strict"
+    )
+      throw new Error("invalid burst projection");
+    if (
+      !isDeepStrictEqual(comparison, compareBurst(production, local)) ||
+      comparison.verdict !== "MATCH"
+    )
+      throw new Error("burst comparison differs from its projections or does not match");
+    return { status: "VERIFIED", productionEvidence: evidence };
+  } catch {
+    return {
+      status: "NOT_COMPARED",
+      productionEvidence: evidence,
+      reason:
+        "The burst comparison is missing, invalid, does not rebuild from its projections, or does not match.",
+    };
+  }
+}
 
 export const countsOf = (rows) => {
   const counts = { MATCH: 0, MATCH_LAYOUT: 0, KNOWN_DIFFERENCE: 0, MISMATCH: 0, UNKNOWN: 0 };
@@ -167,6 +207,7 @@ export function conditionEvidence(
     testExists = repositoryTestExists,
     regressionHolds = repositoryRegressionHolds,
     closureReview,
+    burst = burstEvidence,
   } = {},
 ) {
   const id = condition.conditionId;
@@ -216,6 +257,7 @@ export function conditionEvidence(
       };
     return { ...base, status: "PLANNED", productionEvidence: [] };
   }
+  if (id === "TASK-QUEUE-FUNCTIONS/max-dispatches-per-second") return { ...base, ...burst() };
   if (NOT_COMPARED[id])
     return { ...base, status: "NOT_COMPARED", productionEvidence, reason: NOT_COMPARED[id] };
   const keys = new Set(condition.corpusSteps ?? []);

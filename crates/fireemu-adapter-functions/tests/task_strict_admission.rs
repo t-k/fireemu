@@ -62,6 +62,7 @@ async fn start_full(
     let log = dir.join("requests");
     let probe = dir.join("entries");
     std::fs::write(dir.join("entries.taskA.release"), "").unwrap();
+    std::fs::write(dir.join("entries.taskB.release"), "").unwrap();
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
     let spec = SpawnSpec {
         command: vec!["python3".to_owned(), script.to_owned()],
@@ -92,7 +93,18 @@ async fn start_full(
             max_dispatches_per_second: 500.0,
         },
     };
+    let mut burst_function = function.clone();
+    "taskB".clone_into(&mut burst_function.name);
+    "taskB".clone_into(&mut burst_function.entry_point);
+    burst_function.trigger = Trigger::TaskQueue {
+        retry,
+        rate_limits: TaskRateLimits {
+            max_concurrent_dispatches: 100,
+            max_dispatches_per_second: 1.0,
+        },
+    };
     manifest.functions.push(function);
+    manifest.functions.push(burst_function);
     let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
     let runtime = FunctionsRuntime::with_codebases(
         vec![CodebaseSpec {
@@ -463,6 +475,73 @@ fn json_of_size(bytes: usize) -> String {
 const TASKS: &str = "/projects/demo-app/locations/us-central1/queues/taskA/tasks";
 
 #[tokio::test]
+async fn strict_runtime_uses_the_recorded_burst_at_one_dispatch_per_second() {
+    for (name, profile) in [
+        ("strict-burst", FunctionsHttpProfile::Strict),
+        ("emulator-burst", FunctionsHttpProfile::Emulator),
+    ] {
+        let h = start_full(
+            name,
+            profile,
+            NameReuse::Immediate,
+            600,
+            retry(1, 500),
+            true,
+            false,
+        )
+        .await;
+        let (addr, server) = tasks_listener(&h).await;
+        let due = LogicalInstant::from_unix_seconds(1_788_004_920)
+            .to_rfc3339()
+            .unwrap();
+        for _ in 0..12 {
+            let body = body_of(&json!({"scheduleTime": due})).to_string();
+            let (status, _, text) = wire(
+                addr,
+                "POST",
+                "/projects/demo-app/locations/us-central1/queues/taskB/tasks",
+                body.as_bytes(),
+            )
+            .await;
+            assert_eq!(status, 200, "{text}");
+        }
+        assert_eq!(h.runtime.run_tasks_now("taskB", None), 12);
+        let deliveries = || {
+            std::fs::read_to_string(&h.probe)
+                .unwrap_or_default()
+                .lines()
+                .count()
+        };
+        let initial = if name == "strict-burst" { 10 } else { 0 };
+        for seconds in 0..=2 {
+            if seconds > 0 {
+                h.clock
+                    .lock()
+                    .unwrap()
+                    .advance(fireemu_core_types::time::LogicalDuration::from_seconds(1))
+                    .unwrap();
+            }
+            let expected = initial + seconds;
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while deliveries() < expected {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap_or_else(|_| panic!("{name} at {seconds}s: {} deliveries", deliveries()));
+            assert_eq!(deliveries(), expected, "{name} at {seconds}s");
+            assert_eq!(
+                h.runtime.pending_tasks().len(),
+                12 - expected,
+                "{name} at {seconds}s"
+            );
+        }
+        server.abort();
+        h.stop().await;
+    }
+}
+
+#[tokio::test]
 async fn the_strict_listener_answers_json_in_both_directions_and_reads_a_task_of_a_mebibyte() {
     let h = start(
         "strict-wire",
@@ -551,6 +630,7 @@ async fn the_strict_listener_deletes_with_json_and_refuses_other_methods() {
     );
     let path = format!("{TASKS}/wire-del");
     assert_eq!(wire(addr, "GET", &path, b"").await.0, 405);
+    assert_eq!(wire(addr, "PUT", &path, b"").await.0, 405);
     assert_eq!(wire(addr, "POST", &path, b"{}").await.0, 405);
     let (status, head, body) = wire(addr, "DELETE", &path, b"").await;
     assert_eq!((status, body.as_str()), (200, "{}\n"));
@@ -614,17 +694,16 @@ async fn the_emulator_listener_keeps_plain_text_refusals_and_the_hundred_kibibyt
             .0,
         413
     );
-    // Every method on a task's own path gets the answer the emulator profile always gave.
-    for method in ["GET", "POST", "PATCH", "DELETE"] {
+    for method in ["GET", "PUT", "POST", "PATCH"] {
         let (status, head, body) = wire(addr, method, &format!("{TASKS}/never-was"), b"").await;
         assert_eq!(status, 404, "{method}");
         assert_eq!(
-            body, "Tried to remove a task that doesn't exist",
+            body, format!("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot {method} {TASKS}/never-was</pre>\n</body>\n</html>\n"),
             "{method}"
         );
         assert!(
             head.to_ascii_lowercase()
-                .contains("content-type: text/plain"),
+                .contains("content-type: text/html; charset=utf-8"),
             "{head}"
         );
     }
@@ -635,6 +714,277 @@ async fn the_emulator_listener_keeps_plain_text_refusals_and_the_hundred_kibibyt
             .contains("content-type: text/plain"),
         "{head}"
     );
+    server.abort();
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn emulator_delete_removes_a_pending_task_before_dispatch() {
+    let h = start_full(
+        "emulator-delete",
+        FunctionsHttpProfile::Emulator,
+        NameReuse::Retained,
+        60,
+        retry(1, 500),
+        true,
+        false,
+    )
+    .await;
+    let (addr, server) = tasks_listener(&h).await;
+    let due = LogicalInstant::from_unix_seconds(1_788_004_920)
+        .to_rfc3339()
+        .unwrap();
+    let queued = body_of(&json!({"name": format!("{BASE}/tasks/delete-me"), "scheduleTime": due}));
+    assert_eq!(
+        wire(addr, "POST", TASKS, queued.to_string().as_bytes())
+            .await
+            .0,
+        200
+    );
+    assert_eq!(h.runtime.pending_tasks().len(), 1);
+    let path = format!("{TASKS}/delete-me");
+    for method in ["GET", "PUT"] {
+        let (status, head, body) = wire(addr, method, &path, b"").await;
+        assert_eq!(status, 404);
+        assert!(head
+            .to_ascii_lowercase()
+            .contains("content-type: text/html; charset=utf-8"));
+        assert!(body.contains(&format!("Cannot {method} {path}")));
+        assert_eq!(h.runtime.pending_tasks().len(), 1);
+    }
+    let (status, head, body) = wire(addr, "DELETE", &path, b"").await;
+    assert_eq!((status, body.as_str()), (200, "{\"res\":\"OK\"}"));
+    assert!(head
+        .to_ascii_lowercase()
+        .contains("content-type: application/json; charset=utf-8"));
+    assert!(h.runtime.pending_tasks().is_empty());
+    assert_eq!(h.runtime.run_tasks_now("taskA", None), 0);
+    h.idle().await;
+    assert!(!h.probe.exists() || std::fs::read_to_string(&h.probe).unwrap().is_empty());
+    let (status, _, body) = wire(addr, "DELETE", &path, b"").await;
+    assert_eq!(
+        (status, body.as_str()),
+        (404, "Tried to remove a task that doesn't exist")
+    );
+    server.abort();
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn emulator_delete_cancels_pending_tasks_with_various_name_forms() {
+    let canonical = format!("{BASE}/tasks/x");
+    for (names, status, remaining) in [
+        (vec![Some(canonical.as_str())], 200, 0),
+        (vec![Some("x")], 404, 1),
+        (vec![Some("x"), Some(canonical.as_str())], 200, 1),
+        (vec![Some(canonical.as_str()), Some("x")], 200, 1),
+        (vec![None], 200, 0),
+    ] {
+        let h = start_full(
+            "emulator-delete-name-forms",
+            FunctionsHttpProfile::Emulator,
+            NameReuse::Retained,
+            60,
+            retry(1, 500),
+            true,
+            false,
+        )
+        .await;
+        let (addr, server) = tasks_listener(&h).await;
+        let due = LogicalInstant::from_unix_seconds(1_788_004_920)
+            .to_rfc3339()
+            .unwrap();
+        let mut path = format!("{TASKS}/x");
+        for name in names {
+            let mut extra = json!({"scheduleTime": due});
+            if let Some(name) = name {
+                extra["name"] = json!(name);
+            }
+            let queued = body_of(&extra);
+            let (status, _, body) = wire(addr, "POST", TASKS, queued.to_string().as_bytes()).await;
+            assert_eq!(status, 200);
+            if name.is_none() {
+                let response: Value = serde_json::from_str(&body).unwrap();
+                path = format!("/{}", response["task"]["name"].as_str().unwrap());
+            }
+        }
+        let (actual, _, body) = wire(addr, "DELETE", &path, b"").await;
+        assert_eq!(actual, status);
+        assert_eq!(
+            body,
+            if status == 200 {
+                "{\"res\":\"OK\"}"
+            } else {
+                "Tried to remove a task that doesn't exist"
+            }
+        );
+        let pending = h.runtime.pending_tasks();
+        assert_eq!(pending.len(), remaining);
+        assert!(pending.iter().all(|task| task.name == "x"));
+        let (status, _, body) = wire(addr, "DELETE", &path, b"").await;
+        assert_eq!(
+            (status, body.as_str()),
+            (404, "Tried to remove a task that doesn't exist")
+        );
+        h.clock
+            .lock()
+            .unwrap()
+            .advance(fireemu_core_types::time::LogicalDuration::from_seconds(61))
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        h.idle().await;
+        assert_eq!(
+            std::fs::read_to_string(&h.probe).unwrap_or_default(),
+            "taskA\n".repeat(remaining)
+        );
+        assert_eq!(wire(addr, "DELETE", &path, b"").await.0, 404);
+        server.abort();
+        h.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn emulator_delete_answers_ok_once_for_a_dispatched_task() {
+    let h = start(
+        "emulator-delete-dispatched",
+        FunctionsHttpProfile::Emulator,
+        NameReuse::Retained,
+        60,
+    )
+    .await;
+    let (addr, server) = tasks_listener(&h).await;
+    let queued = body_of(&json!({"name": format!("{BASE}/tasks/dispatched")}));
+    assert_eq!(
+        wire(addr, "POST", TASKS, queued.to_string().as_bytes())
+            .await
+            .0,
+        200
+    );
+    h.idle().await;
+    assert!(!std::fs::read_to_string(&h.probe).unwrap().is_empty());
+    let path = format!("{TASKS}/dispatched");
+    let (status, head, body) = wire(addr, "DELETE", &path, b"").await;
+    assert_eq!((status, body.as_str()), (200, "{\"res\":\"OK\"}"));
+    assert!(head
+        .to_ascii_lowercase()
+        .contains("content-type: application/json; charset=utf-8"));
+    for path in [&path, &format!("{TASKS}/never-enqueued")] {
+        let (status, _, body) = wire(addr, "DELETE", path, b"").await;
+        assert_eq!(
+            (status, body.as_str()),
+            (404, "Tried to remove a task that doesn't exist")
+        );
+    }
+    server.abort();
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn emulator_delete_keeps_task_records_in_the_enqueued_queue() {
+    let h = start_full(
+        "emulator-delete-queue-boundary",
+        FunctionsHttpProfile::Emulator,
+        NameReuse::Retained,
+        60,
+        retry(1, 500),
+        true,
+        false,
+    )
+    .await;
+    let (addr, server) = tasks_listener(&h).await;
+    let due = LogicalInstant::from_unix_seconds(1_788_004_920)
+        .to_rfc3339()
+        .unwrap();
+    let name = "projects/demo-app/locations/us-central1/queues/taskB/tasks/cross-queue";
+    let queued = body_of(&json!({"name": name, "scheduleTime": due}));
+    assert_eq!(
+        wire(addr, "POST", TASKS, queued.to_string().as_bytes())
+            .await
+            .0,
+        200
+    );
+    let other = format!("/{name}");
+    let path = format!("{TASKS}/cross-queue");
+    for path in [&other, &path] {
+        let (status, _, body) = wire(addr, "DELETE", path, b"").await;
+        assert_eq!(
+            (status, body.as_str()),
+            (404, "Tried to remove a task that doesn't exist")
+        );
+    }
+    let pending = h.runtime.pending_tasks();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].function, "taskA");
+    assert_eq!(pending[0].name, name);
+    assert_eq!(h.runtime.run_tasks_now("taskA", None), 1);
+    h.clock
+        .lock()
+        .unwrap()
+        .advance(fireemu_core_types::time::LogicalDuration::from_seconds(1))
+        .unwrap();
+    h.idle().await;
+    assert_eq!(std::fs::read_to_string(&h.probe).unwrap(), "taskA\n");
+    for path in [&other, &path] {
+        assert_eq!(wire(addr, "DELETE", path, b"").await.0, 404);
+    }
+    server.abort();
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn emulator_reset_discards_task_records() {
+    let h = start(
+        "emulator-delete-after-reset",
+        FunctionsHttpProfile::Emulator,
+        NameReuse::Retained,
+        60,
+    )
+    .await;
+    let (addr, server) = tasks_listener(&h).await;
+    let queued = body_of(&json!({"name": format!("{BASE}/tasks/before-reset")}));
+    assert_eq!(
+        wire(addr, "POST", TASKS, queued.to_string().as_bytes())
+            .await
+            .0,
+        200
+    );
+    h.idle().await;
+    h.runtime.reset();
+    assert_eq!(
+        wire(addr, "DELETE", &format!("{TASKS}/before-reset"), b"")
+            .await
+            .0,
+        404
+    );
+    server.abort();
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn strict_delete_of_a_dispatched_task_is_unchanged() {
+    let h = start(
+        "strict-delete-dispatched",
+        FunctionsHttpProfile::Strict,
+        NameReuse::Immediate,
+        600,
+    )
+    .await;
+    let (addr, server) = tasks_listener(&h).await;
+    let queued = body_of(&json!({"name": format!("{BASE}/tasks/dispatched")}));
+    assert_eq!(
+        wire(addr, "POST", TASKS, queued.to_string().as_bytes())
+            .await
+            .0,
+        200
+    );
+    h.idle().await;
+    assert!(!std::fs::read_to_string(&h.probe).unwrap().is_empty());
+    let path = format!("{TASKS}/dispatched");
+    for path in [&path, &path, &format!("{TASKS}/never-enqueued")] {
+        let (status, _, body) = wire(addr, "DELETE", path, b"").await;
+        assert_eq!(status, 404);
+        assert_eq!(body, "{\n  \"error\": {\n    \"code\": 404,\n    \"message\": \"Requested entity was not found.\",\n    \"status\": \"NOT_FOUND\"\n  }\n}\n");
+    }
     server.abort();
     h.stop().await;
 }

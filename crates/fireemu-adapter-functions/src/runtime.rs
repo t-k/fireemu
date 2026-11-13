@@ -738,6 +738,8 @@ fn source_name(source: EventSource) -> &'static str {
 struct Inner {
     /// Bounded per-function Cloud Tasks queues and conservative retained-data accounting.
     task_scheduler: crate::task_scheduler::TaskScheduler,
+    /// Emulator task names retained until their first deletion.
+    emulator_task_names: BTreeSet<(String, String)>,
     /// Supplies the id of a task that did not name itself.
     next_task: u64,
     outbox: Outbox,
@@ -1672,6 +1674,9 @@ impl FunctionsRuntime {
         let mut task_scheduler =
             crate::task_scheduler::TaskScheduler::from_manifest(&manifest, task_start);
         task_scheduler.set_name_reuse(config.task_name_reuse);
+        if profile == FunctionsHttpProfile::Strict {
+            task_scheduler.set_burst_rule(crate::task_scheduler::BurstRule::Production);
+        }
         let (updates, receiver) = tokio::sync::watch::channel(initial);
         let observer: Arc<fireemu_core_session::clock::ClockObserver> = Arc::new(move |snapshot| {
             updates.send_replace(snapshot);
@@ -1693,6 +1698,7 @@ impl FunctionsRuntime {
             dispatch_encoding_probe: Mutex::new(None),
             inner: Mutex::new(Inner {
                 task_scheduler,
+                emulator_task_names: BTreeSet::new(),
                 next_task: 0,
                 outbox: Outbox::new(),
                 payloads: BTreeMap::new(),
@@ -3773,14 +3779,23 @@ impl FunctionsRuntime {
             .saturating_add(project.len())
             .saturating_add(location.len())
             .saturating_add(queue_key_bytes);
-        let admission = self
+        let mut inner = self
             .inner
             .lock()
-            .map_err(|_| refuse(500, "runtime poisoned"))?
-            .task_scheduler
-            .enqueue_at(queue, task.clone(), retry, retained_bytes, self.task_now());
+            .map_err(|_| refuse(500, "runtime poisoned"))?;
+        let admission = inner.task_scheduler.enqueue_at(
+            queue,
+            task.clone(),
+            retry,
+            retained_bytes,
+            self.task_now(),
+        );
         match admission {
-            Ok(()) => {}
+            Ok(()) => {
+                inner
+                    .emulator_task_names
+                    .insert((queue.to_owned(), task.name.clone()));
+            }
             Err(AdmissionError::Duplicate | AdmissionError::QueueFull) => {
                 return Err(refuse(409, "A task with the same name already exists"));
             }
@@ -3791,6 +3806,7 @@ impl FunctionsRuntime {
                 return Err(refuse(503, "the Functions runtime is shutting down"));
             }
         }
+        drop(inner);
         let answer = crate::tasks::accepted_response(&task);
         self.wake.notify_one();
         Ok(answer)
@@ -3954,8 +3970,7 @@ impl FunctionsRuntime {
         Ok(production::answer(&admitted, &default_uri, http, encoded))
     }
 
-    /// The strict profile's deleteTask: a task that has not been dispatched yet is removed and its name stays taken as a
-    /// finished one; anything else is production's 404.
+    /// Removes a pending task; the profile determines the refusal format.
     ///
     /// # Errors
     /// The queue does not exist, or no pending task has that name.
@@ -3972,28 +3987,47 @@ impl FunctionsRuntime {
             status: refusal.http,
             body: refusal.body().to_string(),
         };
+        let missing = |message: &str, refusal: Refusal| {
+            if self.is_strict() {
+                json(refusal)
+            } else {
+                EnqueueRefusal {
+                    status: 404,
+                    body: message.to_owned(),
+                }
+            }
+        };
         let served = self.manifest.get(queue).is_some_and(|f| {
             matches!(f.trigger, Trigger::TaskQueue { .. }) && f.region == location
         }) && project == self.config.project;
         if !served {
-            return Err(json(Refusal::queue_missing()));
+            return Err(missing(
+                "Tried to remove a task from a non-existent queue",
+                Refusal::queue_missing(),
+            ));
         }
         let name = format!("projects/{project}/locations/{location}/queues/{queue}/tasks/{id}");
         let now_task = self.task_now();
-        let removed = self
-            .inner
-            .lock()
-            .map_err(|_| EnqueueRefusal {
-                status: 500,
-                body: "runtime poisoned".to_owned(),
-            })?
-            .task_scheduler
-            .delete_pending(queue, &name, now_task);
+        let mut inner = self.inner.lock().map_err(|_| EnqueueRefusal {
+            status: 500,
+            body: "runtime poisoned".to_owned(),
+        })?;
+        let mut removed =
+            inner
+                .task_scheduler
+                .delete_pending(queue, |stored| stored == name, now_task);
+        if !self.is_strict() {
+            removed |= inner.emulator_task_names.remove(&(queue.to_owned(), name));
+        }
+        drop(inner);
         if removed {
             self.wake.notify_one();
             Ok(())
         } else {
-            Err(json(Refusal::task_not_found()))
+            Err(missing(
+                "Tried to remove a task that doesn't exist",
+                Refusal::task_not_found(),
+            ))
         }
     }
 
@@ -5266,6 +5300,7 @@ impl FunctionsRuntime {
                 inner.schedule_recheck_pending = false;
                 // A task accepted before the reset must not reach the new session's handlers.
                 inner.task_scheduler.reset(self.task_now());
+                inner.emulator_task_names.clear();
                 for job in &mut inner.jobs {
                     job.cursor = now;
                 }

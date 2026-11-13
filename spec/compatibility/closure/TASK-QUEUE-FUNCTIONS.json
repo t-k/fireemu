@@ -1400,17 +1400,15 @@
       ],
       "productionEvidence": [
         {
-          "alias": "pass-1",
-          "fixturePath": "conformance/task-queue-production-pass-1.json",
-          "fixtureSha256": "9741ceb6a713a90a671a6f0253f91ec2f841450c315f6f5488f34efd63e38409"
+          "path": "conformance/task-queue-production-burst-pass-1.json",
+          "sha256": "daffc864935cb8074205aeda533cab4fe4268887d64e24fe15a75781e6549900"
         },
         {
-          "alias": "pass-2",
-          "fixturePath": "conformance/task-queue-production-pass-2.json",
-          "fixtureSha256": "385b47fe438c15e370dbca30f28ef69aaa66311d39c81d3e94fc9a8366850273"
+          "path": "conformance/task-queue-production-burst-strict-vs-pass-1.json",
+          "sha256": "58080f1208c10e0da0ea75e4197648210faca56aae3d6e4d1f786d6fa3c253c6"
         }
       ],
-      "reason": "The program sent the eight tasks of the rate queue about 1.4 seconds apart in both production runs, so the limit never held a task back and no spacing or burst was observed; the local limiter spaces them one second apart. Rate and burst are not claimed (the rate cases carry no timing claim)."
+      "reason": "The burst comparison is missing, invalid, does not rebuild from its projections, or does not match."
     },
     {
       "conditionId": "TASK-QUEUE-FUNCTIONS/delete-task",

@@ -253,20 +253,41 @@ impl QueueState {
     }
 
     fn refill(&mut self, now: TaskTime) {
-        if now.duration_since(self.last_refill) < TOKEN_REFRESH_INTERVAL {
+        // Only the emulator keeps firebase-tools taskQueue.js's one-second refresh.
+        if matches!(self.burst_rule, BurstRule::Emulator)
+            && now.duration_since(self.last_refill) < TOKEN_REFRESH_INTERVAL
+        {
             return;
         }
+        let token_ready = matches!(self.burst_rule, BurstRule::Production)
+            && self.next_refill().is_some_and(|deadline| now >= deadline);
         let elapsed = now.duration_since(self.last_refill).as_secs_f64();
         let rate = self.limits.max_dispatches_per_second;
         self.tokens = (self.tokens + elapsed * rate).min(self.burst_rule.capacity(rate));
+        // Keep readiness at the nanosecond-rounded deadline despite floating-point arithmetic.
+        if token_ready {
+            self.tokens = self.tokens.max(1.0);
+        }
         self.last_refill = now;
     }
 
     fn next_refill(&self) -> Option<TaskTime> {
-        (self.limits.max_concurrent_dispatches > 0
-            && self.limits.max_dispatches_per_second > 0.0
-            && !self.pending.is_empty())
-        .then_some(self.last_refill + TOKEN_REFRESH_INTERVAL)
+        if self.limits.max_concurrent_dispatches == 0
+            || self.limits.max_dispatches_per_second <= 0.0
+            || self.pending.is_empty()
+        {
+            return None;
+        }
+        match self.burst_rule {
+            BurstRule::Emulator => Some(self.last_refill + TOKEN_REFRESH_INTERVAL),
+            BurstRule::Production if self.tokens < 1.0 => self.last_refill.checked_add(
+                Duration::try_from_secs_f64(
+                    (1.0 - self.tokens) / self.limits.max_dispatches_per_second,
+                )
+                .ok()?,
+            ),
+            BurstRule::Production => None,
+        }
     }
 }
 
@@ -652,18 +673,19 @@ impl TaskScheduler {
             .values()
             .filter_map(QueueState::next_refill)
             .min();
-        // Native time knows when the earliest scheduled task falls due; the virtual axis is
-        // woken by the clock change that moves it instead.
-        let schedule_wake = match (now, epoch_nanos) {
-            (TaskTime::Real(at), Some(epoch)) => self
-                .queues
+        // Strict queues report the same schedule deadline on both clock axes; virtual time
+        // still advances only when the task clock changes. Preserve emulator wake-ups.
+        let schedule_wake = epoch_nanos.and_then(|epoch| {
+            self.queues
                 .values()
+                .filter(|queue| {
+                    matches!(now, TaskTime::Real(_))
+                        || matches!(queue.burst_rule, BurstRule::Production)
+                })
                 .filter_map(|queue| queue.next_schedule_in(epoch))
                 .min()
-                .and_then(|wait| at.checked_add(wait))
-                .map(TaskTime::Real),
-            _ => None,
-        };
+                .and_then(|wait| now.checked_add(wait))
+        });
         let next_wake = match (refill_wake, schedule_wake) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
@@ -1925,6 +1947,169 @@ mod tests {
             1,
         );
         assert_eq!(ready.len(), 1);
+    }
+
+    #[test]
+    fn strict_due_burst_dispatches_at_schedule_time() {
+        for (rule, burst, first_wake) in [
+            (super::BurstRule::Production, 10, 300_000_000_000),
+            (super::BurstRule::Emulator, 1, 1_000_000_000),
+        ] {
+            let start = super::TaskTime::Virtual(0);
+            let due = super::TaskTime::Virtual(300_000_000_000);
+            let epoch = nanos("2026-02-01T00:05:00.25Z");
+            let mut scheduler = TaskScheduler::from_manifest(
+                &manifest(TaskRateLimits {
+                    max_concurrent_dispatches: 20,
+                    max_dispatches_per_second: 1.0,
+                }),
+                start,
+            );
+            scheduler.set_burst_rule(rule);
+            for index in 0..20 {
+                let mut queued = task(&format!("task-{index}"));
+                queued.schedule_time = Some("2026-02-01T00:05:00.25Z".into());
+                scheduler
+                    .enqueue_at("queue", queued, TaskRetryConfig::default(), 1, start)
+                    .unwrap();
+            }
+            let (early, wake) = scheduler.dispatch_ready_at(
+                start,
+                Some(epoch - 300_000_000_000),
+                "demo-app",
+                |_| Some(DEFAULT_REGION.into()),
+                20,
+            );
+            assert!(early.is_empty(), "{rule:?}");
+            assert_eq!(wake, Some(super::TaskTime::Virtual(first_wake)), "{rule:?}");
+            let (early, wake) = scheduler.dispatch_ready_at(
+                super::TaskTime::Virtual(299_950_000_000),
+                Some(epoch - 50_000_000),
+                "demo-app",
+                |_| Some(DEFAULT_REGION.into()),
+                20,
+            );
+            assert!(early.is_empty(), "{rule:?}");
+            let expected = match rule {
+                super::BurstRule::Production => due,
+                super::BurstRule::Emulator => due + Duration::from_millis(950),
+            };
+            assert_eq!(wake, Some(expected), "{rule:?}");
+            let (early, _) = scheduler.dispatch_ready_at(
+                super::TaskTime::Virtual(299_999_999_999),
+                Some(epoch - 1),
+                "demo-app",
+                |_| Some(DEFAULT_REGION.into()),
+                20,
+            );
+            assert!(early.is_empty(), "{rule:?}");
+            let (dispatches, wake) = scheduler.dispatch_ready_at(
+                due,
+                Some(epoch),
+                "demo-app",
+                |_| Some(DEFAULT_REGION.into()),
+                20,
+            );
+            assert_eq!(dispatches.len(), burst, "{rule:?}");
+            let delay = match rule {
+                super::BurstRule::Production => 1000,
+                super::BurstRule::Emulator => 950,
+            };
+            assert_eq!(wake, Some(due + Duration::from_millis(delay)), "{rule:?}");
+        }
+    }
+
+    #[test]
+    fn strict_cadence_has_no_drift_with_late_wakeups() {
+        for (rule, burst) in [
+            (super::BurstRule::Production, 10),
+            (super::BurstRule::Emulator, 1),
+        ] {
+            let start = super::TaskTime::Virtual(0);
+            let due = start + Duration::from_secs(300);
+            let mut scheduler = TaskScheduler::from_manifest(
+                &manifest(TaskRateLimits {
+                    max_concurrent_dispatches: 120,
+                    max_dispatches_per_second: 1.0,
+                }),
+                start,
+            );
+            scheduler.set_burst_rule(rule);
+            for index in 0..burst + 110 {
+                let mut queued = task(&format!("task-{index}"));
+                queued.schedule_time = Some("2026-02-01T00:05:00Z".into());
+                scheduler
+                    .enqueue_at("queue", queued, TaskRetryConfig::default(), 1, start)
+                    .unwrap();
+            }
+            let epoch = nanos("2026-02-01T00:05:00Z");
+            let (dispatches, mut wake) = scheduler.dispatch_ready_at(
+                due,
+                Some(epoch),
+                "demo-app",
+                |_| Some(DEFAULT_REGION.into()),
+                120,
+            );
+            assert_eq!(dispatches.len(), burst, "{rule:?}");
+            for k in 1..=110 {
+                let now = wake.expect("pending tasks have a wake") + Duration::from_millis(4);
+                let expected_ms = match rule {
+                    super::BurstRule::Production => k * 1000 + 4,
+                    super::BurstRule::Emulator => k * 1004,
+                };
+                assert_eq!(now, due + Duration::from_millis(expected_ms), "{rule:?}, {k}");
+                let (dispatches, next) = scheduler.dispatch_ready_at(
+                    now,
+                    Some(epoch + i128::try_from(now.duration_since(due).as_nanos()).unwrap()),
+                    "demo-app",
+                    |_| Some(DEFAULT_REGION.into()),
+                    120,
+                );
+                assert_eq!(dispatches.len(), 1, "{rule:?}, {k}");
+                wake = next;
+            }
+            assert_eq!(wake, None, "{rule:?}");
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn strict_cadence_bounds_random_wakeup_lateness(
+            lateness in proptest::collection::vec(0u64..=50, 110),
+        ) {
+            let start = super::TaskTime::Virtual(0);
+            let due = start + Duration::from_secs(300);
+            let mut scheduler = TaskScheduler::from_manifest(
+                &manifest(TaskRateLimits {
+                    max_concurrent_dispatches: 120,
+                    max_dispatches_per_second: 1.0,
+                }),
+                start,
+            );
+            scheduler.set_burst_rule(super::BurstRule::Production);
+            for index in 0..120 {
+                scheduler.enqueue_at(
+                    "queue", task(&format!("task-{index}")), TaskRetryConfig::default(), 1, start,
+                ).unwrap();
+            }
+            let (dispatches, mut wake) = scheduler.dispatch_ready_at(
+                due, None, "demo-app", |_| Some(DEFAULT_REGION.into()), 120,
+            );
+            proptest::prop_assert_eq!(dispatches.len(), 10);
+            for (index, late_ms) in lateness.into_iter().enumerate() {
+                let expected = due + Duration::from_secs(index as u64 + 1);
+                proptest::prop_assert_eq!(wake, Some(expected));
+                let now = wake.unwrap() + Duration::from_millis(late_ms);
+                let (dispatches, next) = scheduler.dispatch_ready_at(
+                    now, None, "demo-app", |_| Some(DEFAULT_REGION.into()), 120,
+                );
+                proptest::prop_assert_eq!(dispatches.len(), 1);
+                proptest::prop_assert!(now >= expected);
+                proptest::prop_assert!(now <= expected + Duration::from_millis(50));
+                wake = next;
+            }
+            proptest::prop_assert_eq!(wake, None);
+        }
     }
 
     #[test]

@@ -207,3 +207,38 @@ test("a timing allowance used by a strict row is a known difference of the condi
   docs.strict2 = doc(row("a"), row("b"));
   assert.deepEqual(conditionEvidence(condition(), docs, evidence).knownDifferences, []);
 });
+
+test("burst evidence verifies only a matching comparison rebuilt from the projections", async () => {
+  const { burstEvidence, FILES } = await import("./closure-evidence.mjs");
+  const { compareBurst } = await import("./burst-compare.mjs");
+  const { readFileSync } = await import("node:fs");
+  const production = JSON.parse(
+    readFileSync(new URL("../../task-queue-production-burst-pass-1.json", import.meta.url)),
+  );
+  const local = { ...production, profile: "strict" };
+  const files = {
+    [FILES.burstProduction]: JSON.stringify(production),
+    [FILES.burstLocal]: JSON.stringify(local),
+    [FILES.burstComparison]: JSON.stringify(compareBurst(production, local)),
+  };
+  const read = (path) => {
+    if (!(path in files)) throw new Error("missing");
+    return files[path];
+  };
+  const target = condition({ conditionId: "TASK-QUEUE-FUNCTIONS/max-dispatches-per-second" });
+  const derive = () =>
+    conditionEvidence(target, ok(), evidence, { burst: () => burstEvidence(read) });
+  assert.equal(derive().status, "VERIFIED");
+  assert.deepEqual(
+    derive().productionEvidence.map((item) => item.path),
+    [FILES.burstProduction, FILES.burstComparison],
+  );
+  delete files[FILES.burstComparison];
+  assert.equal(derive().status, "NOT_COMPARED");
+  const mismatch = { ...local, offsetsMs: local.offsetsMs.slice(0, 119) };
+  files[FILES.burstLocal] = JSON.stringify(mismatch);
+  files[FILES.burstComparison] = JSON.stringify(compareBurst(production, mismatch));
+  assert.equal(derive().status, "NOT_COMPARED");
+  files[FILES.burstComparison] = JSON.stringify(compareBurst(production, local));
+  assert.equal(derive().status, "NOT_COMPARED");
+});

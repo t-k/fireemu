@@ -32,6 +32,8 @@ export const REPLAY_ATTEMPTS = Object.freeze({ "window-six": 20 });
 
 export const LOCAL_RUN = "0000000000000000";
 const READY_DEADLINE_MS = 30_000;
+/** How far ahead of the burst program's start its tasks are due: room for 120 creates and the fixture's start. */
+const BURST_LEAD_MS = 60_000;
 const here = fileURLToPath(new URL(".", import.meta.url));
 const conformance = join(here, "../..");
 
@@ -161,6 +163,7 @@ export async function runLocal({
   waitSeconds = 120,
   steps = PROGRAM,
   scale = 1,
+  burst = false,
 }) {
   const root = mkdtempSync(join(tmpdir(), "task-queue-local-"));
   let started;
@@ -186,6 +189,20 @@ export async function runLocal({
         },
       ]),
     );
+    const due = burst ? Date.now() + BURST_LEAD_MS : null;
+    if (burst) {
+      const rate = PROGRAM.find((step) => step.key === "rate-a");
+      steps = Array.from({ length: 120 }, (_, i) => {
+        const key = `burst-${String(i + 1).padStart(3, "0")}`;
+        return {
+          ...rate,
+          key,
+          id: key,
+          role: "tqrate",
+          schedule: { raw: new Date(due).toISOString() },
+        };
+      });
+    }
     const program = {};
     for (const spec of steps) {
       if (spec.pauseBefore)
@@ -210,25 +227,64 @@ export async function runLocal({
           layout: answer.layout,
         },
       };
-      await new Promise((r) => setTimeout(r, 200));
+      if (!burst) await new Promise((r) => setTimeout(r, 200));
     }
+    // Like the recorder's burst-late: a create answered after the due instant would make the burst unobservable.
+    if (burst && Object.values(program).some((step) => step.answeredAt >= due))
+      throw new Error("burst-late: a create was answered after the due instant");
     // Wait for every accepted task's first delivery (and the attempts of the retry cases).
     const fns = functionsOf(LOCAL_RUN);
     const want = Object.entries(program)
       .filter(([key, step]) => step.kind === "create" && step.class === "2xx" && minStarts(key) > 0)
       .map(([key]) => [key, Math.max(minStarts(key), REPLAY_ATTEMPTS[key] ?? 0)]);
-    const deadline = Date.now() + waitSeconds * 1000;
+    const deadline = burst ? due + 240_000 : Date.now() + waitSeconds * 1000;
     let frames = [];
     while (Date.now() < deadline) {
       frames = parseFramesFromText(started.log.text, fns).frames;
       const seen = {};
       for (const { frame } of frames)
         if (frame.kind === "start") seen[frame.case] = (seen[frame.case] ?? 0) + 1;
-      if (want.every(([key, n]) => (seen[key] ?? 0) >= n)) break;
+      if (
+        burst
+          ? steps.every(({ key }) =>
+              frames.some(
+                ({ frame }) =>
+                  frame.kind === "start" &&
+                  frame.case === key &&
+                  Number(frame.context?.retryCount) === 0,
+              ),
+            )
+          : want.every(([key, n]) => (seen[key] ?? 0) >= n)
+      )
+        break;
       await new Promise((r) => setTimeout(r, 500));
     }
     await new Promise((r) => setTimeout(r, 1500));
     frames = parseFramesFromText(started.log.text, fns).frames;
+    if (burst) {
+      const starts = frames.filter(
+        ({ frame }) =>
+          frame.kind === "start" &&
+          steps.some(({ key }) => key === frame.case) &&
+          Number(frame.context?.retryCount) === 0,
+      );
+      if (
+        new Set(starts.map(({ frame }) => frame.case)).size !== 120 ||
+        starts.length !== 120 ||
+        starts.some(({ frame }) => !Number.isFinite(Date.parse(frame.at)))
+      )
+        throw new Error("burst observation incomplete or invalid");
+      return {
+        kind: "task-queue-burst-projection-v1",
+        program: "burst",
+        profile,
+        tasks: 120,
+        offsetsMs: starts.map(({ frame }) => Date.parse(frame.at) - due).sort((a, b) => a - b),
+        anyAttemptRetryCounts: null,
+        outcome: "tq-recorded",
+        observationComplete: true,
+      };
+    }
     const judged = judge({ runId: LOCAL_RUN, program, frames });
     return {
       runId: LOCAL_RUN,
@@ -247,6 +303,7 @@ export async function runLocal({
 
 export async function localProjection(options) {
   const result = await runLocal(options);
+  if (options.burst) return result;
   return projectRecording({
     result,
     alias: options.alias ?? options.profile,
@@ -264,13 +321,23 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const option = (name) => process.argv[process.argv.indexOf(name) + 1];
   const profile = option("--profile");
   const out = option("--out");
+  const program = process.argv.includes("--program") ? option("--program") : null;
+  if (program !== null && program !== "burst") throw new Error("--program burst");
+  if (program === "burst" && profile !== "strict")
+    throw new Error("burst requires --profile strict");
   if (!["strict", "emulator"].includes(profile)) throw new Error("--profile strict|emulator");
   if (!out || !process.env.FIREEMU_BIN)
     throw new Error("--out <new file> and FIREEMU_BIN are required");
+  if (existsSync(resolve(out))) throw new Error("--out must not already exist");
   const binary = resolve(process.env.FIREEMU_BIN);
   // The digest of the binary that served the replay is part of the file, so that the evidence names its build.
   const binarySha256 = createHash("sha256").update(readFileSync(binary)).digest("hex");
-  const projection = await localProjection({ binary, profile, meta: { binarySha256 } });
+  const projection = await localProjection({
+    binary,
+    profile,
+    burst: program === "burst",
+    meta: { binarySha256 },
+  });
   (await import("node:fs")).writeFileSync(
     resolve(out),
     JSON.stringify(projection, null, 2) + "\n",

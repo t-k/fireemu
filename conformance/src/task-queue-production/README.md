@@ -33,3 +33,14 @@ A recording is sent only by the coordinator, after a review of the frozen packet
 ## The committed comparison files
 
 The three comparison files (`../../task-queue-production-run-comparison.json` and `...-strict-vs-pass-{1,2}.json`) carry `kind: "task-queue-comparison-v1"` and are derived by `compare-cli.mjs`. They are reformatted by `oxfmt` after being written, so they are not byte-identical to the tool's output; `published.test.mjs` rebuilds them from the committed projections and compares the parsed values, which is what a reviewer should compare. The first delivery of a case is compared by its lateness after the task's ETA (`lateMs`), each retry gap within the tolerance, and the answer by its layout (content type, style and field order) as well as its content. `release-replay.mjs` and `release-judge.mjs` are the release run R38: the judge takes timing as a tolerance (twice the committed one) and requires the same cases, structure and parts as the committed files.
+
+The burst probe records 120 tasks due at the same instant on the rate-limited queue. Generate its strict local projection and comparison with:
+
+```sh
+FIREEMU_BIN=<fireemu binary> node conformance/src/task-queue-production/local.mjs --profile strict --program burst --out conformance/task-queue-production-burst-local-strict.json
+node conformance/src/task-queue-production/burst-compare.mjs conformance/task-queue-production-burst-pass-1.json conformance/task-queue-production-burst-local-strict.json --out conformance/task-queue-production-burst-strict-vs-pass-1.json
+node conformance/src/task-queue-production/closure-evidence.mjs --write
+node conformance/src/task-queue-production/closure-evidence.mjs --check
+```
+
+The comparison checks the initial burst, the subsequent cadence within the production recording's spread plus 250 ms, and the number of starts. The original `rate-a` through `rate-h` cases retain no timing claim.

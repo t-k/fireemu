@@ -109,6 +109,8 @@
     "conformance/src/task-queue-production/release-replay.mjs": "d06d805dc8d1b4622fab0f2e6e54ac84b30d9b33351c058c39f975a765e912f0",
     "conformance/src/task-queue-production/strict-replay.test.mjs": "1bb99c18a324e95223effe30d7e79b7d812b9d78742d397990a3a8dc3d03244d",
     "conformance/task-queue-functions/functions/index.js": "d9f5b45af21db1b2afe5dd9f05679dbf2ad19e683e3bf41b1c2981e4b77c4dbf",
+    "conformance/task-queue-production-burst-pass-1.json": "daffc864935cb8074205aeda533cab4fe4268887d64e24fe15a75781e6549900",
+    "conformance/task-queue-production-burst-strict-vs-pass-1.json": "58080f1208c10e0da0ea75e4197648210faca56aae3d6e4d1f786d6fa3c253c6",
     "conformance/task-queue-production-local-strict.json": "a8189faebb9514d049a7b30e14fe59b08045880f06ecc180ef663e6d0b0b6302",
     "conformance/task-queue-production-pass-1.json": "9741ceb6a713a90a671a6f0253f91ec2f841450c315f6f5488f34efd63e38409",
     "conformance/task-queue-production-pass-2.json": "385b47fe438c15e370dbca30f28ef69aaa66311d39c81d3e94fc9a8366850273",

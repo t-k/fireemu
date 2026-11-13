@@ -259,14 +259,16 @@ impl QueueState {
         {
             return;
         }
-        let token_ready = matches!(self.burst_rule, BurstRule::Production)
-            && self.next_refill().is_some_and(|deadline| now >= deadline);
         let elapsed = now.duration_since(self.last_refill).as_secs_f64();
         let rate = self.limits.max_dispatches_per_second;
-        self.tokens = (self.tokens + elapsed * rate).min(self.burst_rule.capacity(rate));
-        // Keep readiness at the nanosecond-rounded deadline despite floating-point arithmetic.
-        if token_ready {
-            self.tokens = self.tokens.max(1.0);
+        if matches!(self.burst_rule, BurstRule::Production) && rate.to_bits() == 1.0_f64.to_bits() {
+            let balance = Duration::try_from_secs_f64(self.tokens).unwrap_or(Duration::MAX);
+            self.tokens = balance
+                .saturating_add(now.duration_since(self.last_refill))
+                .as_secs_f64()
+                .min(self.burst_rule.capacity(rate));
+        } else {
+            self.tokens = (self.tokens + elapsed * rate).min(self.burst_rule.capacity(rate));
         }
         self.last_refill = now;
     }
@@ -280,12 +282,22 @@ impl QueueState {
         }
         match self.burst_rule {
             BurstRule::Emulator => Some(self.last_refill + TOKEN_REFRESH_INTERVAL),
-            BurstRule::Production if self.tokens < 1.0 => self.last_refill.checked_add(
-                Duration::try_from_secs_f64(
-                    (1.0 - self.tokens) / self.limits.max_dispatches_per_second,
-                )
-                .ok()?,
-            ),
+            BurstRule::Production if self.tokens < 1.0 => {
+                let deficit = 1.0 - self.tokens;
+                let rate = self.limits.max_dispatches_per_second;
+                if rate.to_bits() == 1.0_f64.to_bits() {
+                    let balance = Duration::try_from_secs_f64(self.tokens).ok()?;
+                    return self
+                        .last_refill
+                        .checked_add(Duration::from_secs(1).checked_sub(balance)?);
+                }
+                let seconds = deficit / rate;
+                let mut wait = Duration::try_from_secs_f64(seconds).ok()?;
+                if wait.as_secs_f64() < seconds || wait.as_secs_f64() * rate < deficit {
+                    wait = wait.checked_add(Duration::from_nanos(1))?;
+                }
+                self.last_refill.checked_add(wait)
+            }
             BurstRule::Production => None,
         }
     }
@@ -869,7 +881,10 @@ impl TaskScheduler {
                 } else if queue.tokens < 1.0 {
                     (
                         "rateLimit",
-                        Some(queue.last_refill + TOKEN_REFRESH_INTERVAL),
+                        match queue.burst_rule {
+                            BurstRule::Production => queue.next_refill(),
+                            BurstRule::Emulator => Some(queue.last_refill + TOKEN_REFRESH_INTERVAL),
+                        },
                     )
                 } else {
                     ("ready", None)
@@ -2057,7 +2072,11 @@ mod tests {
                     super::BurstRule::Production => k * 1000 + 4,
                     super::BurstRule::Emulator => k * 1004,
                 };
-                assert_eq!(now, due + Duration::from_millis(expected_ms), "{rule:?}, {k}");
+                assert_eq!(
+                    now,
+                    due + Duration::from_millis(expected_ms),
+                    "{rule:?}, {k}"
+                );
                 let (dispatches, next) = scheduler.dispatch_ready_at(
                     now,
                     Some(epoch + i128::try_from(now.duration_since(due).as_nanos()).unwrap()),
@@ -2072,7 +2091,76 @@ mod tests {
         }
     }
 
+    #[test]
+    fn strict_fractional_rate_conserves_tokens_at_deadlines() {
+        let start = super::TaskTime::Virtual(0);
+        let mut scheduler = TaskScheduler::from_manifest(
+            &manifest(TaskRateLimits {
+                max_concurrent_dispatches: 20,
+                max_dispatches_per_second: 7.5,
+            }),
+            start,
+        );
+        scheduler.set_burst_rule(super::BurstRule::Production);
+        for index in 0..10 {
+            scheduler
+                .enqueue_at(
+                    "queue",
+                    task(&format!("task-{index}")),
+                    TaskRetryConfig::default(),
+                    1,
+                    start,
+                )
+                .unwrap();
+        }
+        let (_, mut wake) =
+            scheduler.dispatch_ready_at(start, None, "demo", |_| Some(DEFAULT_REGION.into()), 20);
+        assert_eq!(
+            scheduler.idle_projection(start, None)["waiting"][0]["elapsedDeadlineNanos"],
+            "133333334"
+        );
+        let mut count = 0;
+        while let Some(now) = wake {
+            let (dispatches, next) =
+                scheduler.dispatch_ready_at(now, None, "demo", |_| Some(DEFAULT_REGION.into()), 20);
+            count += dispatches.len();
+            let earned = now.duration_since(start).as_nanos() * 15 / 2_000_000_000;
+            assert!((count as u128) <= earned);
+            wake = next;
+        }
+        assert_eq!(count, 10);
+    }
+
     proptest::proptest! {
+        #[test]
+        fn strict_dispatches_conserve_tokens_with_late_wakes(
+            rate_eighths in 1u32..=8_000,
+            lateness in proptest::collection::vec(0u64..=50, 100),
+        ) {
+            let rate = f64::from(rate_eighths) / 8.0;
+            let start = super::TaskTime::Virtual(0);
+            let mut scheduler = TaskScheduler::from_manifest(
+                &manifest(TaskRateLimits { max_concurrent_dispatches: 200, max_dispatches_per_second: rate }), start,
+            );
+            scheduler.set_burst_rule(super::BurstRule::Production);
+            scheduler.queues.get_mut("queue").unwrap().tokens = 0.0;
+            for index in 0..200 {
+                scheduler.enqueue_at("queue", task(&format!("task-{index}")), TaskRetryConfig::default(), 1, start).unwrap();
+            }
+            let (_, mut wake) = scheduler.dispatch_ready_at(start, None, "demo", |_| Some(DEFAULT_REGION.into()), 200);
+            let mut count = 0;
+            for late in lateness {
+                let Some(deadline) = wake else { break };
+                let now = deadline + Duration::from_millis(late);
+                let (dispatches, next) = scheduler.dispatch_ready_at(now, None, "demo", |_| Some(DEFAULT_REGION.into()), 200);
+                count += dispatches.len();
+                let elapsed_nanos = now.duration_since(start).as_nanos();
+                let earned = elapsed_nanos * u128::from(rate_eighths) / 8_000_000_000;
+                proptest::prop_assert!((count as u128) <= earned, "count={} earned={} rate={}", count, earned, rate);
+                wake = next;
+            }
+        }
+
         #[test]
         fn strict_cadence_bounds_random_wakeup_lateness(
             lateness in proptest::collection::vec(0u64..=50, 110),

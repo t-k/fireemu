@@ -1640,7 +1640,9 @@ async fn a_future_task_starts_recovery_of_an_idle_dead_runner() {
         runtime.task_queue_stats()["queue:demo-app-us-central1-taskA"]["numberOfTasks"],
         1
     );
-    assert!(std::fs::read_to_string(&probe).unwrap_or_default().is_empty());
+    assert!(std::fs::read_to_string(&probe)
+        .unwrap_or_default()
+        .is_empty());
     runtime.shutdown().await;
     let _ = std::fs::remove_dir_all(dir);
 }

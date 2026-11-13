@@ -279,3 +279,59 @@ test("resource evidence requires successful matching identity or planned media",
   const { client } = wire(async () => ({ status: 200, headers: {}, body: Buffer.from("fire") }));
   assert.equal((await client.wire(requests(target).A2)).showsResource, true);
 });
+
+test("redaction recognizes the exact minimum key-shaped value in headers and bodies", async () => {
+  const prefix = ["AI", "za"].join("");
+  const short = prefix + "x".repeat(19);
+  const minimum = prefix + "x".repeat(20);
+  assert.equal(redactHeaders({ "x-value": short })["x-value"], short);
+  assert.equal(redactHeaders({ "x-value": minimum })["x-value"], "<redacted>");
+  for (const [body, withheld] of [
+    [short, false],
+    [minimum, true],
+  ]) {
+    const { client, entries } = wire(async () => ({
+      status: 200,
+      headers: {},
+      body: Buffer.from(body),
+    }));
+    const result = await client.wire(requests(target).P1);
+    assert.equal(result.withheld, withheld);
+    assert.equal(result.unknown, withheld);
+    assert.equal(entries.at(-1).bodyBytes, body.length);
+    assert.equal(entries.at(-1).bodyBase64, withheld ? "" : Buffer.from(body).toString("base64"));
+  }
+});
+
+test("journal records unreadable bodies and transport failures distinctly", async () => {
+  for (const body of [null, undefined]) {
+    const { client, entries } = wire(async () => ({ status: 200, headers: {}, body }));
+    const result = await client.wire(requests(target).P1);
+    assert.equal(result.unreadable, true);
+    assert.equal(result.bodyBytes, null);
+    assert.equal(entries.at(-1).bodyBytes, null);
+    assert.equal(entries.at(-1).bodyBase64, "");
+  }
+  const { client, entries } = wire(async () => {
+    throw new Error("offline failure");
+  });
+  const result = await client.wire(requests(target).P1);
+  assert.equal(result.status, null);
+  assert.equal(entries.at(-1).status, null);
+  assert.equal(entries.at(-1).unknown, true);
+});
+
+test("resource evidence stops at the success status boundary", async () => {
+  const request = requests(target)["K-read-t-cors"];
+  const body = Buffer.from(JSON.stringify({ bucket: target.tempBucket, name: "cors/o.txt" }));
+  for (const [status, expected] of [
+    [199, undefined],
+    [200, true],
+    [299, true],
+    [300, undefined],
+    [301, undefined],
+  ]) {
+    const { client } = wire(async () => ({ status, headers: {}, body }));
+    assert.equal((await client.wire(request)).showsResource, expected, String(status));
+  }
+});

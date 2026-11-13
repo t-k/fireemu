@@ -247,3 +247,110 @@ test("comparison rejects a single unknown row on either side", () => {
   assert.equal(compare([unknown], [row])[0].verdict, "NEEDS-REVIEW");
   assert.equal(compare([row], [row, row])[0].verdict, "NEEDS-REVIEW");
 });
+
+test("settlement records independent creation and deletion evidence", () => {
+  const event = (action, status, extra = {}) => ({
+    phase: "after",
+    resource: "r",
+    action,
+    status,
+    ...extra,
+  });
+  const only = (...events) => settlement(events).unresolved[0];
+  assert.deepEqual(only(event("create", 503)), {
+    resource: "r",
+    confirmed: false,
+    unknownCreate: true,
+    unknownDelete: false,
+    deleted: false,
+    absent: false,
+    reason: "unconfirmed create",
+  });
+  assert.deepEqual(only(event("delete", 503)), {
+    resource: "r",
+    confirmed: false,
+    unknownCreate: false,
+    unknownDelete: true,
+    deleted: false,
+    absent: false,
+    reason: "unknown delete",
+  });
+  assert.deepEqual(only(event("create", 200)), {
+    resource: "r",
+    confirmed: true,
+    unknownCreate: false,
+    unknownDelete: false,
+    deleted: false,
+    absent: false,
+    reason: "created, not deleted and read back absent",
+  });
+  assert.equal(only(event("create", 200), event("delete", 204)).deleted, true);
+  assert.equal(
+    only(event("create", 200), event("read", 404, { session: "a2" }), event("create", 200)).absent,
+    false,
+  );
+  assert.equal(
+    only(event("create", 200), event("read", 404, { session: "a2" }), event("delete", 503)).absent,
+    false,
+  );
+  assert.equal(
+    only(event("create", 200), event("read", 404, { session: "a2" }), event("delete", 204)).absent,
+    false,
+  );
+  assert.equal(
+    only(event("create", 503), event("read", 404, { session: "a2" })).unknownCreate,
+    true,
+  );
+  assert.equal(only(event("create", 200), event("delete", 503), event("read", 404)).absent, false);
+  assert.equal(only(event("create", 200), event("read", 200)).confirmed, true);
+  assert.equal(
+    only(event("create", 503), event("read", 503, { showsResource: true })).unknownCreate,
+    true,
+  );
+});
+
+test("row extraction preserves null fields and exact media byte layout", () => {
+  const row = judgeAnswer(answer(JSON.stringify({ error: { code: 404, message: "missing" } })));
+  assert.deepEqual(row.json, { code: 404, message: "missing", reason: null });
+  assert.equal(row.xml, null);
+  const media = judgeAnswer(answer("fire", { case: "C5", status: 200 }));
+  assert.equal(media.json, null);
+  assert.equal(media.xml, null);
+  assert.equal(media.bodyBytes, 4);
+  assert.equal(media.known, true);
+  for (const extra of [{ bodyBytes: 0 }, { bodyBytes: 5 }, { bodyBase64: "ZmlyZQ==\n" }])
+    assert.equal(judgeAnswer(answer("fire", { case: "C5", status: 200, ...extra })).known, false);
+  for (const body of ["fir", "fires", "Fire"])
+    assert.equal(judgeAnswer(answer(body, { case: "C5", status: 200 })).shape, "unrecorded");
+});
+
+test("comparison command succeeds only for a nonempty set of matches", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const dir = mkdtempSync(join(tmpdir(), "strictness-compare-"));
+  try {
+    const production = join(dir, "production.json");
+    const journal = join(dir, "journal.jsonl");
+    const before = { phase: "before", n: 1, case: "C5", method: "GET" };
+    const after = { ...answer("fire", { case: "C5", status: 200 }), phase: "after", n: 1 };
+    const invoke = () =>
+      spawnSync(
+        process.execPath,
+        [fileURLToPath(new URL("./compare.mjs", import.meta.url)), production, journal],
+        { encoding: "utf8" },
+      );
+    writeFileSync(journal, [before, after].map(JSON.stringify).join("\n") + "\n");
+    writeFileSync(production, JSON.stringify([judgeAnswer(after)]));
+    assert.equal(invoke().status, 0);
+    writeFileSync(production, JSON.stringify([{ ...judgeAnswer(after), status: 201 }]));
+    assert.equal(invoke().status, 1);
+    writeFileSync(production, "[]");
+    writeFileSync(journal, "\n");
+    assert.equal(invoke().status, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

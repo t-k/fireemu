@@ -255,3 +255,42 @@ test("request classification rejects independently changed scope and request fie
   ])
     assert.throws(() => targetOf({ ...target, local }), GuardError);
 });
+
+test("planned Firebase and CORS requests retain their individual dialect and headers", () => {
+  const plan = requests(target);
+  for (const id of ["A11", "A12", "A13", "A14", "F1", "F2"])
+    assert.equal(new URL(plan[id].url).hostname, "firebasestorage.googleapis.com", id);
+  for (const id of ["A9", "A10", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8"])
+    assert.equal(new URL(plan[id].url).hostname, "storage.googleapis.com", id);
+  assert.equal(plan.C2.headers.origin, "http://localhost:3000");
+  assert.equal(plan.C3.headers.origin, "http://localhost:3000");
+  assert.equal(plan.C7.headers.origin, "http://localhost:3000");
+  assert.equal(plan.C2.headers["access-control-request-headers"], "content-type");
+  assert.equal(plan.C1.headers["access-control-request-headers"], undefined);
+  assert.equal(plan.C8.auth, "none");
+  assert.equal(plan.F1.auth, "malformed");
+  assert.equal(plan.F2.auth, "bearer");
+});
+
+test("each loopback origin restriction rejects an independent near miss", () => {
+  for (const local of [
+    "ftp://localhost",
+    "http://example.com",
+    "http://user@localhost",
+    "http://:pass@localhost",
+    "http://localhost/path",
+    "http://localhost/?q=1",
+    "http://localhost/#fragment",
+  ])
+    assert.throws(() => targetOf({ ...target, local }), GuardError, local);
+  for (const local of ["http://localhost:9199", "http://127.0.0.1:9199", "http://[::1]:9199"])
+    assert.equal(targetOf({ ...target, local }).local, local);
+  const request = authenticated(requests(target).P1);
+  for (const url of [
+    request.url.replace("https://", "https://user@"),
+    request.url.replace("https://", "https://:pass@"),
+    request.url + "#x",
+    request.url + "\\x",
+  ])
+    assert.throws(() => classifyRequest(target, { ...request, url }), GuardError);
+});

@@ -564,3 +564,60 @@ test("--send without the launch-script flag is refused before any file or reques
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("preconditions reject independently invalid metadata and CORS answers", async () => {
+  for (const [id, fault] of [
+    ["P1", { status: 403, body: Buffer.from('{"location":"US"}') }],
+    ["P1", { status: 200, body: Buffer.from("{}") }],
+    ["W2", { status: 403, body: Buffer.from(JSON.stringify({ cors: CORS })) }],
+    ["W2", { status: 200, body: Buffer.from("{}") }],
+    ["R2", { status: 403, body: Buffer.from("{}") }],
+    ["R2", { status: 200, body: Buffer.from("invalid") }],
+    ["R2", { status: 200, body: Buffer.from('{"cors":[]}') }],
+  ]) {
+    const { report } = await run({ faults: { [id]: fault } });
+    assert.equal(report.completed, false, id);
+    assert.ok(report.violations.includes(id), id);
+  }
+});
+
+test("readback requires every absent response and an empty prefix listing", async () => {
+  const endedAt = 1_000_000;
+  const previous = [
+    {
+      phase: "header",
+      runId: target.runId,
+      project: target.project,
+      defaultBucket: target.defaultBucket,
+    },
+    { phase: "summary", endedAt },
+  ];
+  for (const id of [
+    "A2-bucket",
+    "A2-prefix",
+    "A2-object",
+    "A2-cors",
+    "A2-t-y",
+    "A2-m-x",
+    "A2-m-y",
+  ]) {
+    for (const fault of id === "A2-prefix"
+      ? [{ status: 200, body: Buffer.from('{"items":[{}]}') }, { status: 503 }]
+      : [{ status: 200 }, { status: 503 }]) {
+      const world = createFakeWorld(target, { faults: { [id]: fault } });
+      const client = createWire({ target, net: world.net, journal: { append() {} } });
+      const result = await readback({ target, client, previous, now: () => endedAt + 600_000 });
+      assert.equal(result.readbackVerified, false, id);
+      assert.equal(result.closureReady, false, id);
+    }
+  }
+});
+
+test("cleanup does not delete a bucket whose creation was refused", async () => {
+  const { report, world } = await run({ faults: { W1: { status: 409 } } });
+  assert.equal(report.completed, false);
+  assert.equal(
+    world.log.some((request) => ["K1", "K3", "K-retry"].includes(request.case)),
+    false,
+  );
+});

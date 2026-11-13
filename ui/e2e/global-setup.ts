@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { delimiter, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { spawnOwnedProcess, stopOwnedProcess } from "../src/lib/processTarget";
@@ -93,7 +93,15 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     args,
     process.platform,
     resolve(here, "bin/process-supervisor"),
-    { cwd: repo },
+    {
+      cwd: repo,
+      env: {
+        ...process.env,
+        NODE_PATH: [process.env.NODE_PATH, resolve(repo, "conformance/node_modules")]
+          .filter(Boolean)
+          .join(delimiter),
+      },
+    },
   );
   const { child } = owned;
   let banner = "";

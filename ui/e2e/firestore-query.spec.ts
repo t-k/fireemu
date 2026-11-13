@@ -178,11 +178,11 @@ test("late results cannot replace a newer query or cross a named database scope"
   await expect(page.getByTestId("query-results")).toContainText("latest");
   await expect(page.getByTestId("query-results")).not.toContainText('late"');
   await page.getByTestId("database-input").fill("named-db");
-  await page.getByTestId("database-input").press("Tab");
+  await page.getByRole("button", { name: "Open database" }).click();
   await expect(page.getByTestId("query-results")).toHaveCount(0);
   await expect(page.getByTestId("query-panel")).toContainText("Database named-db");
   await page.getByTestId("database-input").fill("(default)");
-  await page.getByTestId("database-input").press("Tab");
+  await page.getByRole("button", { name: "Open database" }).click();
   await expect(page.getByTestId("query-results")).toHaveCount(0);
   await expect(page.getByTestId("query-executed")).toHaveCount(0);
   await page.getByTestId("session-select").selectOption("trial");
@@ -201,10 +201,10 @@ test("late results cannot replace a newer query or cross a named database scope"
   await page.getByRole("button", { name: "Run query", exact: true }).click();
   await expect(page.getByTestId("query-loading")).toBeVisible();
   await page.getByTestId("database-input").fill("named-db");
-  await page.getByTestId("database-input").press("Tab");
+  await page.getByRole("button", { name: "Open database" }).click();
   await expect(page.getByTestId("query-panel")).toContainText("Database named-db");
   await page.getByTestId("database-input").fill("(default)");
-  await page.getByTestId("database-input").press("Tab");
+  await page.getByRole("button", { name: "Open database" }).click();
   await expect(page.getByTestId("query-panel")).toContainText("Database (default)");
   const scopeResponse = page.waitForResponse((response) => response.url().endsWith(":runQuery"));
   releaseScope?.();

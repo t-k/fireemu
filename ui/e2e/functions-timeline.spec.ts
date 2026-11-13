@@ -46,23 +46,23 @@ test("follows a real event with the keyboard and shows only its trusted logs", a
   expect(events.some((event) => retainedIds.includes(event))).toBe(false);
   const timeline = page.getByTestId("event-timeline");
   await expect(
-    timeline.getByRole("button", {
+    timeline.getByRole("link", {
       name: `Select event ${retainedIds[0]!} / mirrorTodo`,
       exact: true,
     }),
   ).toHaveCount(1);
   for (const event of events)
     await expect(
-      timeline.getByRole("button", { name: `Select event ${event} / mirrorTodo`, exact: true }),
+      timeline.getByRole("link", { name: `Select event ${event} / mirrorTodo`, exact: true }),
     ).toHaveCount(1);
   const event = events[0]!;
-  const first = timeline.getByRole("button", {
+  const first = timeline.getByRole("link", {
     name: `Select event ${event} / mirrorTodo`,
     exact: true,
   });
   await first.focus();
   await page.keyboard.press("Enter");
-  await expect(first).toHaveAttribute("aria-pressed", "true");
+  await expect(first).toHaveAttribute("aria-current", "true");
   await expect(page.getByTestId("timeline-phases")).toContainText("registered");
   await expect(page.getByTestId("timeline-phases")).toContainText("completed");
   const snapshot = (await api(request, "GET", "functions")) as FunctionsOverview;
@@ -79,7 +79,7 @@ test("follows a real event with the keyboard and shows only its trusted logs", a
   for (const log of other)
     await expect(page.getByTestId("timeline-logs")).not.toContainText(log.line);
   await page.getByLabel("Filter by event source").selectOption("firestore");
-  await expect(first).toHaveAttribute("aria-pressed", "true");
+  await expect(first).toHaveAttribute("aria-current", "true");
   await expect(page.getByTestId("timeline-outcomes").locator("li")).toHaveCount(1);
   await page.getByTestId("timeline-detail").scrollIntoViewIfNeeded();
   await page.screenshot({ path: info.outputPath("functions-timeline.png"), fullPage: true });
@@ -119,10 +119,10 @@ test("keeps two interleaved retry histories separate and filters the selected at
   const timeline = page.getByTestId("event-timeline");
   for (const event of events)
     await expect(
-      timeline.getByRole("button", { name: `Select event ${event} / flaky`, exact: true }),
+      timeline.getByRole("link", { name: `Select event ${event} / flaky`, exact: true }),
     ).toHaveCount(1);
   await timeline
-    .getByRole("button", { name: `Select event ${events[0]!} / flaky`, exact: true })
+    .getByRole("link", { name: `Select event ${events[0]!} / flaky`, exact: true })
     .click();
   await expect(page.getByTestId("timeline-outcomes").locator("li")).toHaveCount(3);
   await page.getByLabel("Filter by attempt").selectOption("2");

@@ -60,13 +60,14 @@ fn checked_in_evidence_rejects_each_bound_input_tamper() {
             .expect("copied evidence baseline must validate before each tamper");
         let path = temporary.path.join(relative);
         let mut bytes = fs::read(&path).expect("read copied bound input");
-        bytes.push(
-            if relative.as_str() == "verification/quint/evidence/cargo-authority.json" {
-                b' '
-            } else {
-                b'!'
-            },
-        );
+        if relative.as_str() == "verification/quint/evidence/cargo-authority.json" {
+            let mut authority: serde_json::Value =
+                serde_json::from_slice(&bytes).expect("valid authority");
+            authority["target"] = serde_json::Value::String("tampered-target".to_owned());
+            bytes = serde_json::to_vec(&authority).expect("serialize authority");
+        } else {
+            bytes.push(b'!');
+        }
         fs::write(&path, bytes).expect("tamper copied bound input");
         let error = validate_evidence_json(EVIDENCE, descriptor(), Some(&temporary.path))
             .expect_err("tampered input must invalidate evidence");

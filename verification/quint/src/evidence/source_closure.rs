@@ -217,7 +217,7 @@ mod tests {
             production_inputs(self.directory.path(), &["root/src/lib.rs"], &self.authority)
         }
 
-        fn digests(&self) -> Result<BTreeMap<String, String>, String> {
+        fn digests(&self) -> Result<BTreeMap<String, super::super::InputDigest>, String> {
             let inputs: Vec<_> = self.inputs()?.into_iter().collect();
             super::super::compute_digests(self.directory.path(), &inputs, None)
         }

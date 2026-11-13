@@ -220,7 +220,7 @@ fn firestore_value_changes_invalidate_dependent_model_evidence() {
             .expect("untampered fixture must validate");
         let path = fixture.path.join(TARGET);
         let mut bytes = fs::read(&path).expect("read value source");
-        bytes.extend_from_slice(b"\n// Value-only mutation.\n");
+        bytes.extend_from_slice(b"\nconst _: () = ();\n");
         fs::write(path, bytes).expect("mutate value source only");
         let error = validate_evidence_json(&json, descriptor, Some(&fixture.path))
             .expect_err("value-only change must stale evidence");
@@ -259,7 +259,7 @@ fn transitive_helper_tampering_and_inventory_changes_stale_evidence() {
             match operation {
                 "edit" => {
                     let mut bytes = fs::read(&path).expect("read helper");
-                    bytes.extend_from_slice(b"\n// Semantic source mutation.\n");
+                    bytes.extend_from_slice(b"\nconst _: () = ();\n");
                     fs::write(&path, bytes).expect("edit helper");
                 }
                 "add" => fs::write(

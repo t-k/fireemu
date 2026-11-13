@@ -71,7 +71,7 @@ pub struct Evidence {
     /// Sorted repository-relative inputs bound by SHA-256.
     pub bound_inputs: Vec<String>,
     /// SHA-256 digests keyed by repository-relative input path.
-    pub digests: BTreeMap<String, String>,
+    pub digests: BTreeMap<String, InputDigest>,
     /// Safety property names checked by the baseline.
     pub invariants: Vec<String>,
     /// Temporal property names checked by the baseline.
@@ -86,6 +86,16 @@ pub struct Evidence {
     pub projection_fields: Vec<String>,
     /// Bounded generated-trace campaign configuration.
     pub simulation: SimulationEvidence,
+}
+
+/// Digest algorithm and value for one bound input.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct InputDigest {
+    /// Canonicalization applied before SHA-256.
+    pub kind: String,
+    /// Lowercase hexadecimal SHA-256.
+    pub value: String,
 }
 
 /// Tool versions bound into evidence.
@@ -223,8 +233,7 @@ pub fn validate_evidence_json(
     descriptor: &'static ModelDescriptor,
     repository_root: Option<&Path>,
 ) -> Result<Evidence, String> {
-    let evidence: Evidence =
-        serde_json::from_str(json).map_err(|error| format!("invalid evidence JSON: {error}"))?;
+    let evidence = parse_evidence(json, descriptor)?;
     validate_semantics(&evidence, descriptor, repository_root, None)?;
     Ok(evidence)
 }
@@ -247,8 +256,7 @@ pub fn validate_evidence_file_with_cargo_authority(
 ) -> Result<Evidence, String> {
     let json = fs::read_to_string(path)
         .map_err(|error| format!("cannot read evidence {}: {error}", path.display()))?;
-    let evidence: Evidence =
-        serde_json::from_str(&json).map_err(|error| format!("invalid evidence JSON: {error}"))?;
+    let evidence = parse_evidence(&json, descriptor)?;
     validate_semantics(
         &evidence,
         descriptor,
@@ -256,6 +264,22 @@ pub fn validate_evidence_file_with_cargo_authority(
         cargo_authority,
     )?;
     Ok(evidence)
+}
+
+fn parse_evidence(json: &str, descriptor: &ModelDescriptor) -> Result<Evidence, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(json).map_err(|error| format!("invalid evidence JSON: {error}"))?;
+    if value
+        .get("digests")
+        .and_then(|value| value.as_object())
+        .is_some_and(|digests| digests.values().any(|digest| digest.get("kind").is_none()))
+    {
+        return Err(format!(
+            "evidence digest kind missing; regenerate {}",
+            descriptor.name
+        ));
+    }
+    serde_json::from_value(value).map_err(|error| format!("invalid evidence JSON: {error}"))
 }
 
 fn validate_semantics(
@@ -500,7 +524,7 @@ fn compute_digests(
     repository_root: &Path,
     relative_paths: &[String],
     cargo_authority: Option<&Path>,
-) -> Result<BTreeMap<String, String>, String> {
+) -> Result<BTreeMap<String, InputDigest>, String> {
     relative_paths
         .iter()
         .map(|relative| {
@@ -523,9 +547,220 @@ fn compute_digests(
             }
             let bytes = fs::read(&path)
                 .map_err(|error| format!("cannot read bound input {}: {error}", path.display()))?;
-            Ok((relative.clone(), format!("{:x}", Sha256::digest(bytes))))
+            Ok((relative.clone(), input_digest(relative, &bytes)?))
         })
         .collect()
+}
+
+/// Whether `path` has the given extension, compared without regard to ASCII case.
+fn has_extension(path: &str, extension: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .is_some_and(|found| found.eq_ignore_ascii_case(extension))
+}
+
+fn input_digest(path: &str, bytes: &[u8]) -> Result<InputDigest, String> {
+    let (kind, normalized) = if has_extension(path, "json") {
+        fn strip(value: &mut serde_json::Value) {
+            match value {
+                serde_json::Value::Object(map) => {
+                    map.retain(|key, _| {
+                        ![
+                            "description",
+                            "title",
+                            "examples",
+                            "$comment",
+                            "markdownDescription",
+                        ]
+                        .contains(&key.as_str())
+                    });
+                    for value in map.values_mut() {
+                        strip(value);
+                    }
+                }
+                serde_json::Value::Array(values) => {
+                    for value in values {
+                        strip(value);
+                    }
+                }
+                _ => {}
+            }
+        }
+        // Sort explicitly even if serde_json is built with preserve_order enabled.
+        fn sorted(value: serde_json::Value) -> serde_json::Value {
+            match value {
+                serde_json::Value::Object(map) => {
+                    let entries: BTreeMap<_, _> =
+                        map.into_iter().map(|(k, v)| (k, sorted(v))).collect();
+                    serde_json::Value::Object(entries.into_iter().collect())
+                }
+                serde_json::Value::Array(values) => {
+                    serde_json::Value::Array(values.into_iter().map(sorted).collect())
+                }
+                other => other,
+            }
+        }
+        let mut value: serde_json::Value = serde_json::from_slice(bytes)
+            .map_err(|error| format!("invalid JSON bound input {path}: {error}"))?;
+        strip(&mut value);
+        (
+            "json-semantic",
+            serde_json::to_vec(&sorted(value)).map_err(|error| error.to_string())?,
+        )
+    } else if has_extension(path, "rs") {
+        ("rust-semantic", normalize_rust(bytes)?)
+    } else if path.starts_with(".github/workflows/") && has_extension(path, "yml") {
+        let text = std::str::from_utf8(bytes)
+            .map_err(|error| format!("invalid workflow {path}: {error}"))?;
+        let mut output = String::new();
+        for line in text.split_inclusive('\n') {
+            let content = line.strip_suffix('\n').unwrap_or(line);
+            if content.trim_start().starts_with('#') {
+                continue;
+            }
+            output.push_str(content.trim_end());
+            if line.ends_with('\n') {
+                output.push('\n');
+            }
+        }
+        ("yaml-workflow", output.into_bytes())
+    } else {
+        ("sha256", bytes.to_vec())
+    };
+    Ok(InputDigest {
+        kind: kind.to_owned(),
+        value: format!("{:x}", Sha256::digest(normalized)),
+    })
+}
+
+#[allow(clippy::too_many_lines)]
+fn normalize_rust(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    let mut space = false;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_whitespace() {
+            space = true;
+            i += 1;
+            continue;
+        }
+        if bytes[i..].starts_with(b"//") {
+            i += 2;
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            space = true;
+            continue;
+        }
+        if bytes[i..].starts_with(b"/*") {
+            i += 2;
+            let mut depth = 1usize;
+            while i < bytes.len() && depth > 0 {
+                if bytes[i..].starts_with(b"/*") {
+                    depth += 1;
+                    i += 2;
+                } else if bytes[i..].starts_with(b"*/") {
+                    depth -= 1;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            if depth != 0 {
+                return Err("unterminated Rust block comment".to_owned());
+            }
+            space = true;
+            continue;
+        }
+        if space && !out.is_empty() {
+            out.push(b' ');
+        }
+        space = false;
+        let start = i;
+        // Recognize raw strings, including byte and C raw strings.
+        let prefix = if bytes[i..].starts_with(b"br") || bytes[i..].starts_with(b"cr") {
+            2
+        } else {
+            usize::from(bytes[i] == b'r')
+        };
+        if prefix > 0 {
+            let mut quote = i + prefix;
+            while quote < bytes.len() && bytes[quote] == b'#' {
+                quote += 1;
+            }
+            if quote < bytes.len() && bytes[quote] == b'"' {
+                let hashes = quote - i - prefix;
+                i = quote + 1;
+                loop {
+                    if i >= bytes.len() {
+                        return Err("unterminated Rust raw string".to_owned());
+                    }
+                    if bytes[i] == b'"'
+                        && i + 1 + hashes <= bytes.len()
+                        && bytes[i + 1..i + 1 + hashes].iter().all(|b| *b == b'#')
+                    {
+                        i += 1 + hashes;
+                        break;
+                    }
+                    i += 1;
+                }
+                out.extend_from_slice(&bytes[start..i]);
+                continue;
+            }
+        }
+        // A quote is a character literal only when a closing quote follows one character or escape.
+        let quote = if (matches!(bytes[i], b'b' | b'c') && bytes.get(i + 1) == Some(&b'"'))
+            || (bytes[i] == b'b' && bytes.get(i + 1) == Some(&b'\''))
+        {
+            i + 1
+        } else {
+            i
+        };
+        let is_char = bytes[quote] == b'\'' && {
+            let mut end = quote + 1;
+            if bytes.get(end) == Some(&b'\\') {
+                end += 1;
+                if bytes.get(end) == Some(&b'u') && bytes.get(end + 1) == Some(&b'{') {
+                    end += 2;
+                    while end < bytes.len() && bytes[end] != b'}' {
+                        end += 1;
+                    }
+                    end += 1;
+                } else if bytes.get(end) == Some(&b'x') {
+                    end += 3;
+                } else {
+                    end += 1;
+                }
+            } else if end < bytes.len() {
+                end += 1;
+                while end < bytes.len() && bytes[end] & 0xc0 == 0x80 {
+                    end += 1;
+                }
+            }
+            bytes.get(end) == Some(&b'\'')
+        };
+        if bytes[quote] == b'"' || is_char {
+            let delimiter = bytes[quote];
+            i = quote + 1;
+            while i < bytes.len() {
+                if bytes[i] == b'\\' {
+                    i = (i + 2).min(bytes.len());
+                } else if bytes[i] == delimiter {
+                    i += 1;
+                    break;
+                } else {
+                    i += 1;
+                }
+            }
+            if bytes.get(i.wrapping_sub(1)) != Some(&delimiter) {
+                return Err("unterminated Rust literal".to_owned());
+            }
+        } else {
+            i += 1;
+        }
+        out.extend_from_slice(&bytes[start..i]);
+    }
+    Ok(out)
 }
 
 fn strings(values: &[&str]) -> Vec<String> {
@@ -537,6 +772,68 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn semantic_digests_ignore_only_the_requested_changes() {
+        let json = |text: &str| input_digest("schema.json", text.as_bytes()).unwrap();
+        let baseline =
+            json(r#"{"type":"string","enum":["a"],"default":"a","nested":{"description":"old"}}"#);
+        assert_eq!(
+            baseline,
+            json(
+                r#"{"nested":{"description":"new","title":"x","examples":[1],"$comment":"x","markdownDescription":"x"},"default":"a","enum":["a"],"type":"string"}"#
+            )
+        );
+        for changed in [
+            r#"{"type":"number","enum":["a"],"default":"a","nested":{}}"#,
+            r#"{"type":"string","enum":["b"],"default":"a","nested":{}}"#,
+            r#"{"type":"string","enum":["a"],"default":"b","nested":{}}"#,
+        ] {
+            assert_ne!(baseline, json(changed));
+        }
+
+        let rust = |text: &str| input_digest("source.rs", text.as_bytes()).unwrap();
+        let source =
+            r##"let a = r#"// raw"#; let b = b"// byte"; let c = '\''; let d = "// string";"##;
+        assert_eq!(
+            rust(source),
+            rust(&format!("// heading\n{source} // trailing\n"))
+        );
+        assert_eq!(
+            rust("let x = 1; /* outer /* nested */ end */ let y = 2;"),
+            rust("let x = 1; let y = 2;")
+        );
+        assert_ne!(rust(source), rust(&source.replace("// string", "changed")));
+        assert_ne!(rust(source), rust(&source.replace("// raw", "changed")));
+        assert_ne!(rust(source), rust(&source.replace("// byte", "changed")));
+        assert_ne!(rust(source), rust(&source.replace(r"'\''", "'x'")));
+        assert_eq!(
+            rust("fn f<'a>(x: &'a str) {}"),
+            rust("fn f<'a>(x: &'a str) {} // comment")
+        );
+
+        let workflow =
+            |text: &str| input_digest(".github/workflows/test.yml", text.as_bytes()).unwrap();
+        let base = workflow("name: test\njobs:  \n  build: true\n");
+        assert_eq!(
+            base,
+            workflow("# comment\nname: test  \n  # another\njobs:\n  build: true\n")
+        );
+        assert_ne!(base, workflow("name: test\njobs:\n  build: false\n"));
+        assert_eq!(input_digest("other.txt", b"x").unwrap().kind, "sha256");
+    }
+
+    #[test]
+    fn legacy_digests_require_regeneration() {
+        let descriptor = crate::model::model("EventDelivery").unwrap();
+        let legacy = r#"{"digests":{"old.rs":"abc"}}"#;
+        let error = parse_evidence(legacy, descriptor).unwrap_err();
+        assert!(error.contains("regenerate EventDelivery"), "{error}");
+        let missing_kind = r#"{"digests":{"old.rs":{"value":"abc"}}}"#;
+        assert!(parse_evidence(missing_kind, descriptor)
+            .unwrap_err()
+            .contains("regenerate EventDelivery"));
+    }
 
     #[test]
     fn production_roots_bind_previously_omitted_transitive_helpers() {
@@ -599,8 +896,8 @@ mod tests {
         let staged = temporary.path.join("staged/cargo-authority.json");
         fs::create_dir_all(live.parent().expect("live parent")).expect("create live parent");
         fs::create_dir_all(staged.parent().expect("staged parent")).expect("create staged parent");
-        fs::write(&live, b"live").expect("write live authority");
-        fs::write(&staged, b"staged").expect("write staged authority");
+        fs::write(&live, b"{\"live\":true}").expect("write live authority");
+        fs::write(&staged, b"{\"staged\":true}").expect("write staged authority");
 
         let digests = compute_digests(
             &temporary.path,
@@ -611,7 +908,7 @@ mod tests {
 
         assert_eq!(
             digests["verification/quint/evidence/cargo-authority.json"],
-            format!("{:x}", Sha256::digest(b"staged"))
+            input_digest(CARGO_AUTHORITY_INPUT, b"{\"staged\":true}").unwrap()
         );
     }
 

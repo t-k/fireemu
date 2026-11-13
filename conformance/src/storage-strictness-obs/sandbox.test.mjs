@@ -10,6 +10,9 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
 
 const sandboxed = process.env.NEGCACHE_SANDBOX === "1";
 const skipUnlessSandboxed = !sandboxed && "runs under the mutation harness's OS sandbox only";

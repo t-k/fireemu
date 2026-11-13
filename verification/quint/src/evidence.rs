@@ -25,6 +25,20 @@ const BACKEND: &str = "tlc";
 const TRACES_PER_SEED: usize = 100;
 const MAX_STEPS: usize = 20;
 const CARGO_AUTHORITY_INPUT: &str = "verification/quint/evidence/cargo-authority.json";
+// Only locked external derive/attribute macros that transform token input without reading
+// files from the invoking crate belong here. Local proc-macros are never allowed.
+const TOKEN_ONLY_PROC_MACROS: &[&str] = &[
+    "async-trait",
+    "displaydoc",
+    "futures-macro",
+    "pin-project-internal",
+    "prost-derive",
+    "serde_derive",
+    "thiserror-impl",
+    "tokio-macros",
+    "tracing-attributes",
+    "zerocopy-derive",
+];
 const COMMON_DIGEST_PATHS: &[&str] = &[
     ".github/workflows/quint.yml",
     "rust-toolchain.toml",
@@ -475,7 +489,7 @@ pub fn expected_bound_inputs(
     )
     .map_err(|error| format!("invalid source closure Cargo authority: {error}"))?;
     let explicit_inputs = inputs.clone();
-    let closure = source_closure::production_inputs(
+    let (closure, has_untrusted_proc_macro) = source_closure::production_inputs(
         repository_root,
         descriptor.production_sources,
         &authority,
@@ -495,7 +509,8 @@ pub fn expected_bound_inputs(
             .map_err(|error| format!("cannot read source closure manifest {manifest}: {error}"))?;
         // Conservatively recognize key candidates, including quoted and dotted TOML keys.
         // Escapes may conceal keys; ambiguous manifests cannot justify exclusions.
-        if package.build_script.is_some()
+        if has_untrusted_proc_macro
+            || package.build_script.is_some()
             || closure.contains(&directory.join("build.rs").to_string_lossy().into_owned())
             || contents.contains('\\')
             || contents

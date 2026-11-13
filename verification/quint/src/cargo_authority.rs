@@ -41,6 +41,8 @@ pub struct AuthorityPackage {
     /// Repository-relative custom build target, when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_script: Option<String>,
+    /// Whether any Cargo target is a proc-macro, including for external packages.
+    pub proc_macro: bool,
     /// Enabled features for this resolved node.
     pub features: Vec<String>,
     /// Canonical identities of resolved normal and build dependencies.
@@ -192,6 +194,17 @@ fn authority_from_metadata(
         } else {
             None
         };
+        let targets = package["targets"]
+            .as_array()
+            .ok_or_else(|| "cargo metadata package has no targets array".to_owned())?;
+        let mut proc_macro = false;
+        for target in targets {
+            let kinds = string_array(target, "kind")?;
+            if kinds.is_empty() {
+                return Err("cargo metadata target has no target kinds".to_owned());
+            }
+            proc_macro |= kinds.iter().any(|kind| kind == "proc-macro");
+        }
         packages.push(AuthorityPackage {
             id: canonical_by_raw_id[&raw_id].clone(),
             name: string_field(package, "name")?.to_owned(),
@@ -199,6 +212,7 @@ fn authority_from_metadata(
             source,
             manifest,
             build_script: build_script(repository_root, package)?,
+            proc_macro,
             features,
             dependencies,
         });
@@ -206,7 +220,7 @@ fn authority_from_metadata(
     packages.sort_by(|left, right| left.id.cmp(&right.id));
 
     Ok(CargoAuthority {
-        schema_version: 1,
+        schema_version: 2,
         root_package: ROOT_PACKAGE.to_owned(),
         target: TARGET.to_owned(),
         packages,
@@ -367,7 +381,8 @@ mod tests {
                 "name": name,
                 "version": "1.0.0",
                 "source": source,
-                "manifest_path": format!("/repository/{name}/Cargo.toml")
+                "manifest_path": format!("/repository/{name}/Cargo.toml"),
+                "targets": [{"kind": [if id == "build" { "proc-macro" } else { "lib" }]}]
             })
         };
         let dependency = |package: &str, kind: serde_json::Value| {
@@ -413,5 +428,41 @@ mod tests {
         assert!(names.contains("normal-dependency"));
         assert!(names.contains("build-dependency"));
         assert!(!names.contains("dev-dependency"));
+        assert_eq!(authority.schema_version, 2);
+        for package in &authority.packages {
+            assert_eq!(package.proc_macro, package.name == "build-dependency");
+            if package.proc_macro {
+                assert!(package.source.is_some());
+                assert!(package.manifest.is_none());
+            }
+        }
+
+        let mut serialized = serde_json::to_value(&authority).expect("serialize authority");
+        serialized["packages"][0]
+            .as_object_mut()
+            .expect("package")
+            .remove("procMacro");
+        assert!(serde_json::from_value::<CargoAuthority>(serialized).is_err());
+
+        for targets in [
+            serde_json::Value::Null,
+            serde_json::json!([{}]),
+            serde_json::json!([{"kind": null}]),
+            serde_json::json!([{"kind": []}]),
+            serde_json::json!([{"kind": [false]}]),
+            serde_json::json!([{"kind": ["proc-macro"]}, {}]),
+        ] {
+            let mut malformed = metadata.clone();
+            malformed["packages"][2]["targets"] = targets;
+            assert!(
+                authority_from_metadata(
+                    root,
+                    &serde_json::to_vec(&malformed).expect("serialize malformed metadata"),
+                    &[],
+                )
+                .is_err(),
+                "malformed external target classification must fail closed"
+            );
+        }
     }
 }

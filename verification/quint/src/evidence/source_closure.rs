@@ -10,8 +10,8 @@ pub(super) fn production_inputs(
     root: &Path,
     sources: &[&str],
     authority: &CargoAuthority,
-) -> Result<BTreeSet<String>, String> {
-    if authority.schema_version != 1
+) -> Result<(BTreeSet<String>, bool), String> {
+    if authority.schema_version != 2
         || authority.root_package != "fireemu-verification-quint"
         || authority.target != "x86_64-unknown-linux-gnu"
     {
@@ -49,6 +49,7 @@ pub(super) fn production_inputs(
     }
     let mut visited = BTreeSet::new();
     let mut inputs = BTreeSet::new();
+    let mut has_untrusted_proc_macro = false;
     while let Some(id) = pending.pop() {
         if !visited.insert(id) {
             continue;
@@ -57,11 +58,14 @@ pub(super) fn production_inputs(
             .get(id)
             .ok_or_else(|| format!("unresolved source closure package {id}"))?;
         pending.extend(package.dependencies.iter().map(String::as_str));
+        has_untrusted_proc_macro |= package.proc_macro
+            && (package.source.is_none()
+                || !super::TOKEN_ONLY_PROC_MACROS.contains(&package.name.as_str()));
         if let Some(manifest) = &package.manifest {
             inventory_package(root, package, manifest, &mut inputs)?;
         }
     }
-    Ok(inputs)
+    Ok((inputs, has_untrusted_proc_macro))
 }
 
 fn inventory_package(
@@ -193,6 +197,7 @@ mod tests {
                         source: None,
                         manifest: Some(format!("{name}/Cargo.toml")),
                         build_script: None,
+                        proc_macro: false,
                         features: vec![],
                         dependencies: match name {
                             "root" => vec!["normal".to_owned()],
@@ -205,7 +210,7 @@ mod tests {
             Self {
                 directory,
                 authority: CargoAuthority {
-                    schema_version: 1,
+                    schema_version: 2,
                     root_package: "fireemu-verification-quint".to_owned(),
                     target: "x86_64-unknown-linux-gnu".to_owned(),
                     packages,
@@ -215,6 +220,7 @@ mod tests {
 
         fn inputs(&self) -> Result<BTreeSet<String>, String> {
             production_inputs(self.directory.path(), &["root/src/lib.rs"], &self.authority)
+                .map(|(inputs, _)| inputs)
         }
 
         fn digests(&self) -> Result<BTreeMap<String, super::super::InputDigest>, String> {
@@ -491,6 +497,7 @@ mod tests {
         assert_eq!(
             inputs,
             production_inputs(fixture.directory.path(), &["root/src/lib.rs"], &reordered)
+                .map(|(inputs, _)| inputs)
                 .expect("reordered graph")
         );
     }
@@ -567,6 +574,106 @@ mod tests {
         }
 
         (fixture, descriptor)
+    }
+
+    #[test]
+    fn external_proc_macros_guard_the_entire_model_unless_allow_listed() {
+        for (name, reachable, proc_macro, retains) in [
+            ("include_dir_macros", true, true, true),
+            ("unknown-macro", true, true, true),
+            ("serde_derive", true, true, false),
+            ("include_dir_macros", false, true, false),
+            ("ordinary-library", true, false, false),
+        ] {
+            let (mut fixture, descriptor) = compile_time_guard_fixture();
+            let root = fixture.directory.path();
+            fs::create_dir(root.join("root/src/fixtures")).expect("fixture directory");
+            fs::write(
+                root.join("root/src/fixtures/mod.rs"),
+                "pub const VALUE: u8 = 1;\n",
+            )
+            .expect("test-only fixture");
+            fs::write(
+                root.join("root/src/lib.rs"),
+                if name == "serde_derive" {
+                    "#[cfg(test)] mod fixtures;\n#[derive(serde_derive::Serialize)] pub struct Value;\n"
+                } else {
+                    "#[cfg(test)] mod fixtures;\npub static FIXTURES: include_dir::Dir<'static> = include_dir::include_dir!(\"$CARGO_MANIFEST_DIR/src/fixtures\");\n"
+                },
+            )
+            .expect("directory embedding invocation");
+            // A reachable local build dependency reaches an external facade and its macro.
+            if reachable {
+                fixture.authority.packages[2]
+                    .dependencies
+                    .push("include_dir".to_owned());
+            }
+            fixture.authority.packages.push(AuthorityPackage {
+                id: "include_dir".to_owned(),
+                name: "include_dir".to_owned(),
+                version: "0.7.4".to_owned(),
+                source: Some("registry+fixture".to_owned()),
+                manifest: None,
+                build_script: None,
+                proc_macro: false,
+                features: vec![],
+                dependencies: vec![name.to_owned()],
+            });
+            fixture.authority.packages.push(AuthorityPackage {
+                id: name.to_owned(),
+                name: name.to_owned(),
+                version: "1".to_owned(),
+                source: Some("registry+fixture".to_owned()),
+                manifest: None,
+                build_script: None,
+                proc_macro,
+                features: vec![],
+                dependencies: vec![],
+            });
+            for source in ["registry+fixture", "git+https://example.invalid/macros"] {
+                fixture
+                    .authority
+                    .packages
+                    .last_mut()
+                    .expect("macro package")
+                    .source = Some(source.to_owned());
+                fs::write(
+                    root.join(super::super::CARGO_AUTHORITY_INPUT),
+                    serde_json::to_vec(&fixture.authority).expect("serialize authority"),
+                )
+                .expect("authority with external macro");
+                let bound = super::super::expected_bound_inputs(root, &descriptor, None)
+                    .expect("inventory with external macro");
+                for path in [
+                    "root/src/fixtures/mod.rs",
+                    "normal/src/probe.rs",
+                    "normal/tests/input.txt",
+                ] {
+                    assert_eq!(
+                        bound.iter().any(|input| input == path),
+                        retains,
+                        "{name}/{reachable}/{proc_macro}/{source}: {path}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn local_proc_macro_with_an_allow_listed_name_still_disables_exclusions() {
+        let (mut fixture, descriptor) = compile_time_guard_fixture();
+        let root = fixture.directory.path();
+        fixture.authority.packages[1].name = "serde_derive".to_owned();
+        fixture.authority.packages[1].proc_macro = true;
+        fs::write(
+            root.join(super::super::CARGO_AUTHORITY_INPUT),
+            serde_json::to_vec(&fixture.authority).expect("serialize authority"),
+        )
+        .expect("authority with local proc-macro target");
+        let bound = super::super::expected_bound_inputs(root, &descriptor, None)
+            .expect("inventory with local proc-macro target");
+        assert!(bound.iter().any(|input| input == "root/src/probe.rs"));
+        assert!(bound.iter().any(|input| input == "normal/tests/input.txt"));
     }
 
     #[test]
@@ -676,6 +783,12 @@ pub fn measured(_: proc_macro::TokenStream) -> proc_macro::TokenStream {
     #[test]
     fn incomplete_or_ambiguous_graphs_fail_closed() {
         let mut fixture = Fixture::new();
+        fixture.authority.schema_version = 1;
+        assert!(fixture
+            .inputs()
+            .expect_err("legacy authority")
+            .contains("unsupported source closure Cargo authority"));
+        fixture.authority.schema_version = 2;
         fixture.authority.packages[0]
             .dependencies
             .push("missing".to_owned());

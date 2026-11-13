@@ -210,7 +210,7 @@
     },
     "verification/quint/src/evidence.rs": {
       "kind": "rust-semantic",
-      "value": "65313300108bdbafee1aea2c71661b79d77f122e55803f351f4ea4d1c284415c"
+      "value": "4829ae5091254f3a44838298bcf94747fb820311f1f25c6edd22b6fd48392963"
     },
     "verification/quint/src/evidence/source_closure.rs": {
       "kind": "rust-semantic",
@@ -222,7 +222,7 @@
     },
     "verification/quint/src/main.rs": {
       "kind": "rust-semantic",
-      "value": "f6d110437fce1f0fcd819b4de5c0fdc2abc1ddf82bfd1fd6a758438b2b3293f0"
+      "value": "32a6b902789dab5dfbcbe9640254b3ef3a91df8186bbfc9a20461dac299f2269"
     },
     "verification/quint/src/model.rs": {
       "kind": "rust-semantic",

@@ -360,6 +360,66 @@ describe("Firestore live updates with delayed responses", () => {
     },
   );
 
+  it("stops after a fallback membership response without updateTime", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => {
+        throw new Error("Unexpected network request");
+      }),
+    );
+    appState.setSessions([{ name: "default", project: "p" }]);
+    appState.setSession("default");
+    const root = "projects/p/databases/(default)/documents";
+    const alice = {
+      name: `${root}/users/alice`,
+      fields: { value: { stringValue: "value0" } },
+    };
+    let emit!: (event: SseEvent) => void;
+    vi.mocked(subscribe).mockImplementation((_path, onEvent) => {
+      emit = onEvent;
+      return vi.fn();
+    });
+    let releaseMembership!: (page: DocumentPage) => void;
+    vi.mocked(listDocuments)
+      .mockReturnValueOnce(okAsync({ documents: [alice] }))
+      .mockImplementation(() =>
+        ResultAsync.fromSafePromise(
+          new Promise<DocumentPage>((resolve) => {
+            releaseMembership = resolve;
+          }),
+        ),
+      );
+    vi.mocked(getDocument).mockReturnValue(
+      okAsync({ ...alice, fields: { value: { stringValue: "value1" } } }),
+    );
+    const history = createMemoryHistory();
+    history.set({ value: "/users" });
+    render(() =>
+      createComponent(MemoryRouter, {
+        history,
+        get children() {
+          return createComponent(Route, { path: "/:path", component: Firestore });
+        },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    emit({
+      event: "commit",
+      data: JSON.stringify({ changes: [{ path: alice.name, kind: "updated" }] }),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getDocument).toHaveBeenCalledExactlyOnceWith(root, "users/alice");
+    expect(listDocuments).toHaveBeenCalledTimes(2);
+    releaseMembership({
+      documents: [{ ...alice, fields: { value: { stringValue: "value2" } } }],
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(listDocuments).toHaveBeenCalledTimes(2);
+    expect(getDocument).toHaveBeenCalledTimes(1);
+  });
+
   it.each(["created", "updated"] as const)(
     "applies every completed response while %s events continue every 151 ms",
     async (kind) => {

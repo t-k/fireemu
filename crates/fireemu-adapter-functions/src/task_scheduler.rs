@@ -209,7 +209,7 @@ impl BurstRule {
         }
     }
 
-    /// A new or reset queue starts full under the production rule. In the recording the queue
+    /// At the two recorded rates (1 and 500), a new or reset queue starts full under the production rule. In the recording the queue
     /// existed for at least 300 s before the tasks became due (the program sends its creates
     /// first and the due time is 300 s after the program start), so at rate 1 its bucket had
     /// long refilled to capacity whatever it started with; starting full reproduces the observed

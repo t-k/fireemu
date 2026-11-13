@@ -131,6 +131,38 @@ fn a_finalizing_chunk_refused_by_the_bound_reports_a_rollback_that_failed() {
 }
 
 #[test]
+fn object_capture_does_not_copy_pending_uploads() {
+    let mut f = Fixture::new(4);
+    let name = ObjectName::try_new("committed").unwrap();
+    f.store
+        .put(
+            &f.bucket,
+            &name,
+            b"abc".to_vec(),
+            NewMetadata::default(),
+            Precondition::default(),
+            NOW,
+        )
+        .unwrap();
+    let id = f.session("pending");
+    f.store.append_upload(&id, 0, b"pending", NOW).unwrap();
+    assert_eq!(f.files(), 1);
+    fail_next(Op::Copy);
+    let captured = f.store.capture_bucket_objects(|_| true);
+    assert!(captured.uploads.is_empty());
+    assert_eq!(captured.retained_upload_bytes, 0);
+    let object = captured.get(&f.bucket, &name).unwrap();
+    assert_eq!(object, f.store.get(&f.bucket, &name).unwrap());
+    assert_eq!(captured.body_bytes(object).unwrap().as_ref(), b"abc");
+    assert_eq!(f.files(), 1);
+    assert!(matches!(
+        f.store.capture_buckets(|_| true),
+        Err(StorageError::SpillFailed(_))
+    ));
+    assert_eq!(f.received(&id), b"pending");
+}
+
+#[test]
 fn a_failed_capture_changes_nothing_and_leaves_no_file() {
     let mut f = Fixture::new(4);
     let first = f.session("first");

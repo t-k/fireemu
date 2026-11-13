@@ -1969,7 +1969,7 @@
     },
     "crates/fireemu/src/functions.rs": {
       "kind": "sha256",
-      "value": "662db43f8c97dbaaa5f49bd7cebe651363312dcbc892f8f115ae6e74e4a361f6"
+      "value": "a96f53ed2ea7ad06ef975f55c64efdc17ba4f3a816f40befebb7301388070ff2"
     },
     "crates/fireemu/src/functions/isolation.rs": {
       "kind": "sha256",

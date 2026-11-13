@@ -294,3 +294,24 @@ test("each loopback origin restriction rejects an independent near miss", () => 
   ])
     assert.throws(() => classifyRequest(target, { ...request, url }), GuardError);
 });
+
+test("targetOf refuses a wrong project and a wrong default bucket each on its own", () => {
+  assert.throws(
+    () =>
+      targetOf({
+        project: "other-project",
+        defaultBucket: "other-project.firebasestorage.app",
+        runId: "ss-00000000",
+      }),
+    GuardError,
+  );
+  assert.throws(
+    () =>
+      targetOf({
+        project: "fireemu-oracle-query",
+        defaultBucket: "fireemu-oracle-query.appspot.com",
+        runId: "ss-00000000",
+      }),
+    GuardError,
+  );
+});

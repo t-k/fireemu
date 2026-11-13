@@ -354,3 +354,36 @@ test("comparison command succeeds only for a nonempty set of matches", async () 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("each unknown signal alone makes a create unconfirmed: a before-only entry, an unknown flag, an unknown status", () => {
+  const r = "/storage/v1/b/fireemu-obs-ss-00000000";
+  const cases = [
+    [{ phase: "before", n: 1, action: "create", resource: r }],
+    [{ phase: "after", n: 1, action: "create", resource: r, status: 200, unknown: true }],
+    [{ phase: "after", n: 1, action: "create", resource: r, status: 503 }],
+    [{ phase: "after", n: 1, action: "create", resource: r, status: 302 }],
+  ];
+  for (const entries of cases) {
+    const reasons = settlement(entries).unresolved.map((s) => s.reason);
+    assert.deepEqual(reasons, ["unconfirmed create"], JSON.stringify(entries));
+  }
+});
+
+test("an A2 read that answers 200 without the resource never settles a confirmed create as absent", () => {
+  const r = "/storage/v1/b/fireemu-obs-ss-00000000";
+  const entries = [
+    { phase: "after", n: 1, action: "create", resource: r, status: 200 },
+    {
+      phase: "after",
+      n: 1,
+      session: "a2",
+      action: "read",
+      resource: r,
+      status: 200,
+      showsResource: false,
+    },
+  ];
+  assert.equal(settlement(entries).unresolved.length, 1);
+  entries[1] = { ...entries[1], status: 404 };
+  assert.equal(settlement(entries).unresolved.length, 0);
+});

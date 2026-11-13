@@ -25,6 +25,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 - Pub/Sub: two v5 REST negative-cache recordings refine the variable window edge and record the recent-200 exemption at seven seconds; the deterministic model remains unchanged and the remaining open cases are documented.
 
 - Functions: a callable nested in an HTTP function refuses App Check tokens the daemon did not verify when App Check is enabled.
+- Storage, strict profile: match STORAGE-STRICTNESS-OBS run `ss-48adbd8e` for missing-bucket JSON, media, XML and Firebase answers, XML bucket CORS and independent JSON API CORS; confirm malformed Firebase credentials are anonymous for Rules evaluation and send `Content-Length: 0` on Firebase DELETE. The emulator profile is unchanged.
 
 ## [0.50.0] - 2026-11-12
 

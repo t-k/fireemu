@@ -245,13 +245,7 @@ pub fn frame(shape: &Shape, mut response: StorageResponse) -> (StorageResponse, 
     (response, true)
 }
 
-/// What a browser needs to read an answer: the request's `Origin` reflected and the official
-/// emulator's list of exposed headers (which names the `X-Goog-Upload-*` headers the Firebase SDK
-/// reads), on every answer, both dialects, every status. Every recording was made without an
-/// `Origin`, so what production sends to one is not recorded; this follows the official emulator
-/// and replaces the recorded CORS headers of the plan (the wildcard of the v0 JSON answers and
-/// its two exposed headers would hide the upload headers from a browser). A request without an
-/// `Origin` keeps the recorded set untouched.
+/// Base browser CORS for framed answers: reflect Origin and expose the emulator's upload headers. The server applies C6-C7 only to buckets with nonempty CORS rules, without changing this framing. Requests without Origin keep their recorded header set.
 fn reflect_origin(shape: &Shape, response: &mut StorageResponse) {
     let Some(origin) = &shape.origin else {
         return;

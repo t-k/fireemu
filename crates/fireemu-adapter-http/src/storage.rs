@@ -2615,6 +2615,7 @@ impl StorageState {
         let parent = store_arc
             .lock()
             .map_err(|_| "auth store poisoned".to_owned())?;
+        // RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case F1): Firebase not-a-jwt is anonymous; denying Rules answer 403 Permission denied. Well-formed tokens still require verification.
         // Check the signature before routing; audience and tenant routing still precede the selected store's claim and account checks.
         // Under strict only the recorded shape is an anonymous caller: `Firebase ` followed by a
         // non-empty value without a dot (stage 3 v9, `token-malformed`: the recorded value is 32
@@ -3656,7 +3657,24 @@ pub fn handle_framed(state: &StorageState, req: StorageRequest) -> (StorageRespo
         .is_strict()
         .then(|| production_shape(state, &req))
         .flatten();
-    let response = handle_request(state, req);
+    let method = req.method.clone();
+    let mut missing_xml_bucket = false;
+    let mut response = handle_request(state, req, &mut missing_xml_bucket);
+    // RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case A9): no emulator CORS on the XML NoSuchBucket answer.
+    if state.is_strict()
+        && shape.is_none()
+        && matches!(method.as_str(), "GET" | "PUT")
+        && response.status == 404
+        && missing_xml_bucket
+    {
+        // RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case A10): PUT also carries Vary: Origin.
+        if method == "PUT" {
+            response
+                .headers
+                .push(("vary".to_owned(), "Origin".to_owned()));
+        }
+        return (response, true);
+    }
     match shape {
         Some(shape) => crate::storage_production::frame(&shape, response),
         None => (response, false),
@@ -3680,7 +3698,7 @@ fn is_end_user_read(
 }
 
 /// What the strict profile's framing needs from a request, or `None` for a request the
-/// recordings do not cover (the form upload, the ACL, the bucket listing, the XML-style read and
+/// recordings do not cover (the form upload, the bucket listing, the XML-style read and
 /// the rules route keep the headers their handlers give them).
 fn production_shape(
     state: &StorageState,
@@ -3688,6 +3706,8 @@ fn production_shape(
 ) -> Option<crate::storage_production::Shape> {
     use crate::storage_production::{Shape, Wire};
     let route = route(&req.method, &req.path).ok()?;
+    let acl_get =
+        req.method == "GET" && matches!(self::route("POST", &req.path), Ok(Route::GcsAcl { .. }));
     let get = req.method == "GET";
     let (wire, list, object_read) = match route {
         Route::FbBucket { .. } => (Wire::Firebase, get, false),
@@ -3695,6 +3715,8 @@ fn production_shape(
         Route::GcsList { .. } => (Wire::Gcs, get, false),
         Route::GcsObject { .. } => (Wire::Gcs, false, get),
         Route::GcsCopy { .. } | Route::GcsUpload { .. } => (Wire::Gcs, false, false),
+        // RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case A8): ACL missing-bucket errors use the JSON API framing too.
+        _ if acl_get => (Wire::Gcs, false, false),
         _ => return None,
     };
     let params = query_params(&req.query);
@@ -3719,7 +3741,11 @@ fn production_shape(
 }
 
 #[allow(clippy::too_many_lines)]
-fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse {
+fn handle_request(
+    state: &StorageState,
+    req: StorageRequest,
+    missing_xml_bucket: &mut bool,
+) -> StorageResponse {
     let params = query_params(&req.query);
     let host = req.host.clone().unwrap_or_else(|| "127.0.0.1".to_owned());
     let Ok(route) = route(&req.method, &req.path) else {
@@ -3895,7 +3921,24 @@ fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse 
             }
             match state.rules.undeclared_buckets() {
                 UndeclaredBuckets::Refuse => {
-                    if let Some(refused) = missing_bucket_refusal(state, &route) {
+                    // GET ACL is otherwise an emulator fallthrough; check its actual bucket without changing that existing route's behavior.
+                    let acl_get = (req.method == "GET")
+                        .then(|| self::route("POST", &req.path).ok())
+                        .flatten()
+                        .filter(|route| matches!(route, Route::GcsAcl { .. }));
+                    if let Some(mut refused) =
+                        missing_bucket_refusal(state, acl_get.as_ref().unwrap_or(&route))
+                    {
+                        // Mark the refusal explicitly; object bytes must never select missing-bucket framing.
+                        *missing_xml_bucket =
+                            matches!(route, Route::XmlStyle { .. } | Route::FormUpload { .. });
+                        // RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case A2): a JSON API media read has a plain HTML-typed bucket error.
+                        if matches!(route, Route::GcsObject { .. })
+                            && req.method == "GET"
+                            && params.get("alt").map(String::as_str) == Some("media")
+                        {
+                            refused = html_text(404, "The specified bucket does not exist.");
+                        }
                         return production_framing(dialect, refused);
                     }
                 }
@@ -4134,10 +4177,17 @@ fn unknown_bucket_written(state: &StorageState, route: &Route, method: &str) -> 
     (!exists).then(|| bucket.clone())
 }
 
-/// The bucket a request addresses and whether it is the Firebase API (`/v0`), for the CORS
+/// The bucket a request addresses and whether it is the Firebase API (`/v0`) or JSON API, for the CORS
 /// decision: the bucket of the route `method` and `path` resolve to. A preflight names no method
 /// of its own, so each verb a browser may ask for is tried. `None` for a path that names no bucket.
-pub(crate) fn cors_bucket(method: &str, path: &str) -> Option<(String, bool)> {
+/// Whether a JSON API request has the shape the STORAGE-STRICTNESS-OBS recording observed for JSON
+/// API CORS (cases C6-C8): a `GET` of an object (metadata or `alt=media`), or a preflight of that
+/// object URL. Other JSON API routes keep the base behaviour (UNRECORDED).
+pub(crate) fn is_recorded_json_cors_shape(method: &str, path: &str) -> bool {
+    matches!(method, "GET" | "OPTIONS") && matches!(route("GET", path), Ok(Route::GcsObject { .. }))
+}
+
+pub(crate) fn cors_bucket(method: &str, path: &str) -> Option<(String, bool, bool)> {
     let methods: &[&str] = if method == "OPTIONS" {
         // POST first: the upload route is not a bucket named `upload` for the object read.
         &["POST", "GET", "PUT", "DELETE"]
@@ -4145,7 +4195,9 @@ pub(crate) fn cors_bucket(method: &str, path: &str) -> Option<(String, bool)> {
         std::slice::from_ref(&method)
     };
     methods.iter().find_map(|m| {
-        let bucket = match route(m, path).ok()? {
+        let route = route(m, path).ok()?;
+        let json_api = is_json_api_route(&route);
+        let bucket = match route {
             Route::FbBucket { bucket }
             | Route::FbObject { bucket, .. }
             | Route::GcsList { bucket }
@@ -4158,21 +4210,21 @@ pub(crate) fn cors_bucket(method: &str, path: &str) -> Option<(String, bool)> {
             | Route::GcsUpload { bucket }
             | Route::FormUpload { bucket }
             | Route::XmlStyle { bucket, .. } => bucket,
-            Route::SetRules | Route::FbRoot | Route::GcsListBuckets | Route::NotImplemented => {
+            Route::GcsListBuckets | Route::SetRules | Route::FbRoot | Route::NotImplemented => {
                 return None
             }
         };
-        Some((bucket, path.starts_with("/v0/")))
+        Some((bucket, path.starts_with("/v0/"), json_api))
     })
 }
 
 /// `storage.undeclaredBuckets: "refuse"` (strict only): a request naming a bucket that does not
 /// exist (see [`bucket_exists`]) is answered as Cloud Storage answers a bucket nobody created,
 /// whichever operation it is: 404 `The specified bucket does not exist.` on the JSON API
-/// (RECORDED for the bucket resource in FE v5, the object routes UNRECORDED), the XML API's
-/// `NoSuchBucket` document (UNRECORDED, documented) and the Firebase dialect's not-found
-/// envelope (UNRECORDED). A copy or rewrite checks both of its buckets. A resumable
-/// continuation belongs to a session whose start checked its bucket.
+/// RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case A1): the JSON object error; A3-A8 cover list, upload, delete, copy, rewrite and ACL.
+/// RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case A9): the XML `NoSuchBucket` document, also recorded for PUT in A10.
+/// RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case A11): the Firebase not-found envelope, also recorded for upload in A12.
+/// A copy or rewrite checks both buckets. A resumable continuation belongs to a session whose start checked its bucket; continuations and form uploads were not recorded here.
 fn missing_bucket_refusal(state: &StorageState, route: &Route) -> Option<StorageResponse> {
     let named: Vec<(&String, BucketSurface)> = match route {
         Route::FbBucket { bucket } | Route::FbObject { bucket, .. } => {
@@ -4197,15 +4249,13 @@ fn missing_bucket_refusal(state: &StorageState, route: &Route) -> Option<Storage
     let store = state.store().ok()?;
     named.into_iter().find_map(|(bucket, surface)| {
         let parsed = BucketName::try_new(bucket).ok()?;
-        (!bucket_exists(state, &store, &parsed)).then(|| missing_bucket_response(surface, bucket))
+        (!bucket_exists(state, &store, &parsed)).then(|| missing_bucket_response(surface))
     })
 }
 
-fn missing_bucket_response(surface: BucketSurface, bucket: &str) -> StorageResponse {
+fn missing_bucket_response(surface: BucketSurface) -> StorageResponse {
     match surface {
-        BucketSurface::Firebase => {
-            production_error(404, &format!("Not Found. Could not access bucket {bucket}"))
-        }
+        BucketSurface::Firebase => production_error(404, "Not Found."),
         BucketSurface::Json => {
             gcs_json_error(404, "The specified bucket does not exist.", "notFound")
         }
@@ -4934,7 +4984,12 @@ fn fb_delete(state: &StorageState, principal: &Principal, bucket: &str, name: &s
     store
         .delete(&b, &n, Precondition::default(), state.now())
         .map_err(fb_core_err)?;
-    Ok(StorageResponse::empty(204))
+    // RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case F2): Firebase DELETE sends Content-Length: 0.
+    Ok(if state.is_strict() {
+        StorageResponse::empty(204).with_header("content-length", "0")
+    } else {
+        StorageResponse::empty(204)
+    })
 }
 
 /// The Firebase dialect's POST / PUT on `/o` and object URLs: download-token management,
@@ -7642,8 +7697,7 @@ fn xml_style_get(
         .body_shared(&meta)
         .map_err(|e| gcs_core_err(StorageError::SpillFailed(e.to_string())))?;
     drop(store);
-    // The XML API's answers were not recorded, so both profiles keep the official emulator's
-    // (no strict range style, no strict media headers).
+    // XML range and media-header behavior remain unrecorded here, so both profiles keep the emulator framing. RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case C5): GET CORS is applied separately by the server.
     Ok(send_file_bytes(bytes, &meta, req, None))
 }
 

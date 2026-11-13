@@ -18,10 +18,13 @@
 //!
 //! RECORDED (storage-signed-put, two recordings on a bucket with no CORS configuration): the
 //! answers of the XML API to an `OPTIONS` preflight and to a `PUT` that carried an `Origin` are
-//! `200` with no `Access-Control-*` header. UNRECORDED: every answer of a bucket that has a
-//! configuration (the echoed origin against `*`, the value of `Access-Control-Allow-Methods`, the
-//! default of `maxAgeSeconds`, the status of a preflight no rule matches); they follow the
-//! documentation. No key material or request data is logged here.
+//! `200` with no `Access-Control-*` header.
+//! RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case C1): wildcard origin, rule method list, empty Allow-Headers and default max age.
+//! RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case C2): echoed origin, ordered methods, configured header spelling and max age.
+//! RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case C3): an unmatched preflight returns 200 with Vary: Origin.
+//! RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case C4): a wildcard responseHeader reflects the requested headers.
+//! RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case C5): wildcard actual-read headers; R3 records no headers or Vary after removing CORS.
+//! No key material or request data is logged here.
 
 use serde_json::Value;
 
@@ -170,15 +173,27 @@ impl BucketCors {
             ("access-control-allow-origin".to_owned(), value),
             (
                 "access-control-allow-methods".to_owned(),
-                request_method.to_owned(),
+                rule.methods.join(","),
             ),
         ];
-        if let Some(requested) = request_headers.filter(|_| !wanted.is_empty()) {
-            headers.push((
-                "access-control-allow-headers".to_owned(),
-                requested.to_owned(),
-            ));
-        }
+        let allowed = if wanted.is_empty() {
+            String::new()
+        } else if rule.response_headers.iter().any(|h| h == "*") {
+            request_headers.unwrap_or_default().to_owned()
+        } else {
+            // C2 records one configured/requested header. UNRECORDED beyond that shape: assume configured order and comma joining, as recorded for Allow-Methods, including only requested headers.
+            rule.response_headers
+                .iter()
+                .filter(|header| {
+                    wanted
+                        .iter()
+                        .any(|wanted| header.eq_ignore_ascii_case(wanted))
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        headers.push(("access-control-allow-headers".to_owned(), allowed));
         headers.push((
             "access-control-max-age".to_owned(),
             rule.max_age_seconds.to_string(),
@@ -347,11 +362,11 @@ mod tests {
     }
 
     #[test]
-    fn a_preflight_needs_every_requested_header_in_the_response_header_list() {
+    fn a_preflight_needs_every_requested_header_with_unrecorded_multi_header_assumptions() {
         let c = cors(&json!([{
             "origin": ["http://localhost:3000"],
             "method": ["PUT"],
-            "responseHeader": ["Content-Type", "X-Goog-Content-Length-Range"],
+            "responseHeader": ["Content-Type", "X-Goog-Content-Length-Range", "X-Unrequested"],
             "maxAgeSeconds": 120,
         }]));
         let hit = c
@@ -362,9 +377,17 @@ mod tests {
             )
             .unwrap();
         assert_eq!(header(&hit, "access-control-allow-methods"), Some("PUT"));
+        // UNRECORDED assumption beyond C2's single header: requested headers use configured spelling and order, joined with commas without spaces.
         assert_eq!(
             header(&hit, "access-control-allow-headers"),
-            Some("content-type, x-goog-content-length-range")
+            Some("Content-Type,X-Goog-Content-Length-Range")
+        );
+        let single = c
+            .preflight("http://localhost:3000", "PUT", Some("content-type"))
+            .unwrap();
+        assert_eq!(
+            header(&single, "access-control-allow-headers"),
+            Some("Content-Type")
         );
         assert_eq!(header(&hit, "access-control-max-age"), Some("120"));
         assert_eq!(
@@ -378,7 +401,7 @@ mod tests {
         );
         assert_eq!(c.preflight("http://localhost:3000", "GET", None), None);
         let bare = c.preflight("http://localhost:3000", "PUT", None).unwrap();
-        assert_eq!(header(&bare, "access-control-allow-headers"), None);
+        assert_eq!(header(&bare, "access-control-allow-headers"), Some(""));
     }
 
     #[test]

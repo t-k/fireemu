@@ -388,7 +388,7 @@
     },
     "crates/fireemu-adapter-functions/src/task_scheduler.rs": {
       "kind": "sha256",
-      "value": "4c06929dbf206b156e5e66583e6542c9675d1eefe151725bda723ffc356682b8"
+      "value": "11015a86ddb997986ce047e67344d8d325d4551016a7543b545a93825238532e"
     },
     "crates/fireemu-adapter-functions/src/tasks.rs": {
       "kind": "sha256",

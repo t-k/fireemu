@@ -153,6 +153,17 @@ test("the source copy is the committed fixture with the run's suffix and nothing
   assert.deepEqual(JSON.parse(readFileSync(join(prepared.fixtureDir, "suffix.json"), "utf8")), {
     suffix: RUN.slice(0, 6),
   });
+  const burst = prepareSource({
+    repoRoot: repo,
+    commit,
+    target: tempDir("tq-burst-target-"),
+    runId: RUN,
+    program: "burst",
+  });
+  assert.deepEqual(JSON.parse(readFileSync(join(burst.fixtureDir, "suffix.json"), "utf8")), {
+    suffix: RUN.slice(0, 6),
+    roles: ["tqrate"],
+  });
   assert.equal(
     readFileSync(join(prepared.fixtureDir, "index.js"), "utf8"),
     readFileSync(join(conformance, "task-queue-functions/functions/index.js"), "utf8"),
@@ -428,6 +439,25 @@ test("CLI writes distinguish functionId and queue name but retain real resends",
       .join("\n");
     assert.ok(cliWritesFromOutput(queryIds).every((w) => w.class === "ok"));
   }
+});
+
+test("CLI query identities keep different function writes separate", () => {
+  const url = "https://cloudfunctions.googleapis.com/v2/projects/p/locations/r/functions";
+  const output = functionsOf(RUN)
+    .slice(0, 2)
+    .map(
+      (id) =>
+        `>>> [apiv2][query] POST ${url} ${JSON.stringify({ functionId: id })}\n` +
+        `<<< [apiv2][status] POST ${url} 200`,
+    )
+    .join("\n");
+  const writes = cliWritesFromOutput(output);
+  assert.equal(writes.length, 2);
+  assert.deepEqual(
+    writes.map((write) => write.identity),
+    functionsOf(RUN).slice(0, 2),
+  );
+  assert.ok(writes.every((write) => write.class === "ok"));
 });
 
 test("burst discovery and CLI deletion require only the selected role", () => {

@@ -146,6 +146,44 @@ test("burst missing one distinct attempt-zero frame stays incomplete at the boun
   assert.equal(Date.parse(polls.at(-1).dispatchAt), result.burst.anchorMs + 240_000);
 });
 
+test("burst keeps the earlier start when a later duplicate frame appears first in the log", async () => {
+  let added = false;
+  let earlierStartMs;
+  const { result } = await go(
+    {
+      program: "burst",
+      hooks: {
+        "POST logging.googleapis.com/v2/entries:list": ({ w }) => {
+          if (added) return;
+          const original = w.entries.find(
+            (entry) =>
+              entry.textPayload?.includes('"case":"burst-001"') &&
+              entry.textPayload.includes('"kind":"start"') &&
+              entry.textPayload.includes('"retryCount":0'),
+          );
+          if (!original) return;
+          added = true;
+          earlierStartMs = Date.parse(original.timestamp);
+          const later = new Date(Date.parse(original.timestamp) + 1000).toISOString();
+          const frame = JSON.parse(original.textPayload.slice(original.textPayload.indexOf("{")));
+          frame.at = later;
+          const prefix = original.textPayload.slice(0, original.textPayload.indexOf("{"));
+          w.entries.unshift({
+            ...original,
+            insertId: "later-duplicate-start",
+            timestamp: later,
+            textPayload: prefix + JSON.stringify(frame),
+          });
+        },
+      },
+    },
+    { program: "burst" },
+  );
+  const start = result.burst.starts.find((entry) => entry.id === taskId(RUN, "burst-001"));
+  assert.ok(start);
+  assert.equal(start.startMs, earlierStartMs);
+});
+
 test("duplicate starts and retry attempts cannot replace a missing attempt-zero start", async () => {
   let added = false;
   const { result } = await go(

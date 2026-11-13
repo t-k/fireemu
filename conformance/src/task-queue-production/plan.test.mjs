@@ -57,6 +57,7 @@ test("the eight roles make eight function ids, each a role and the suffix, and a
     functionsOf(RUN),
     ROLE_IDS.map((r) => r + "012345"),
   );
+  assert.throws(() => functionsOf(RUN, "bursty"), /unknown program/);
   for (const role of ROLE_IDS) {
     assert.equal(functionOfRole(RUN, role), role + "012345");
     assert.equal(roleOf(role + "012345"), role);

@@ -1,5 +1,6 @@
 // materializeLocal copies the fixture into a scratch root. The release job installs the fixture's own node_modules (npm ci) before
 // the replay, so the copy must not carry that directory along: the symlink to the installation would then fail with EEXIST.
+import "./record/isolation.mjs";
 import assert from "node:assert/strict";
 import { lstatSync, mkdirSync, readlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

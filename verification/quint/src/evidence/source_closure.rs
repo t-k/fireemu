@@ -570,7 +570,7 @@ mod tests {
             .expect("inventory without build script");
         assert!(!baseline.iter().any(|input| input.ends_with("/probe.rs")));
         for path in descriptor.additional_evidence_inputs {
-            assert!(!baseline.iter().any(|input| input == path));
+            assert!(baseline.iter().any(|input| input == path));
         }
 
         (fixture, descriptor)
@@ -644,17 +644,14 @@ mod tests {
                 .expect("authority with external macro");
                 let bound = super::super::expected_bound_inputs(root, &descriptor, None)
                     .expect("inventory with external macro");
-                for path in [
-                    "root/src/fixtures/mod.rs",
-                    "normal/src/probe.rs",
-                    "normal/tests/input.txt",
-                ] {
+                for path in ["root/src/fixtures/mod.rs", "normal/src/probe.rs"] {
                     assert_eq!(
                         bound.iter().any(|input| input == path),
                         retains,
                         "{name}/{reachable}/{proc_macro}/{source}: {path}"
                     );
                 }
+                assert!(bound.iter().any(|input| input == "normal/tests/input.txt"));
             }
         }
     }

@@ -474,12 +474,315 @@ pub fn expected_bound_inputs(
             .map_err(|error| format!("cannot read source closure Cargo authority: {error}"))?,
     )
     .map_err(|error| format!("invalid source closure Cargo authority: {error}"))?;
+    let explicit_inputs = inputs.clone();
     inputs.extend(source_closure::production_inputs(
         repository_root,
         descriptor.production_sources,
         &authority,
     )?);
-    Ok(inputs.into_iter().collect())
+    // Directory exclusions use package roots, not arbitrary directories named "tests" in src.
+    inputs.retain(|input| {
+        !authority
+            .packages
+            .iter()
+            .filter_map(|package| package.manifest.as_deref())
+            .filter_map(|manifest| Path::new(manifest).parent())
+            .any(|directory| {
+                ["tests", "benches", "examples"]
+                    .iter()
+                    .any(|name| Path::new(input).starts_with(directory.join(name)))
+            })
+    });
+
+    // Tokenize only to prove file-level exclusions. Digests still cover every byte of bound files.
+    // Unknown syntax and alternate references retain files; literals and comments cannot supply cfg.
+    let mut sources = BTreeMap::new();
+    let mut unparsed = BTreeSet::new();
+    for input in &inputs {
+        if input.ends_with(".rs") {
+            source_closure::checked_path(repository_root, input, false)?;
+            let bytes = fs::read(repository_root.join(input))
+                .map_err(|error| format!("cannot read source inventory {input}: {error}"))?;
+            let Ok(source) = String::from_utf8(bytes) else {
+                unparsed.insert(input.as_str());
+                continue;
+            };
+            sources.insert(input.as_str(), source);
+        }
+    }
+    let mut syntax = BTreeMap::new();
+    'source: for (&path, source) in &sources {
+        let bytes = source.as_bytes();
+        let mut tokens = Vec::new();
+        let mut i = 0;
+        while i < bytes.len() {
+            let start = i;
+            if bytes[i].is_ascii_whitespace() {
+                i += 1;
+                continue;
+            }
+            if bytes[i..].starts_with(b"//") {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            if bytes[i..].starts_with(b"/*") {
+                let mut depth = 1;
+                i += 2;
+                while i < bytes.len() && depth > 0 {
+                    if bytes[i..].starts_with(b"/*") {
+                        depth += 1;
+                        i += 2;
+                    } else if bytes[i..].starts_with(b"*/") {
+                        depth -= 1;
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+                if depth != 0 {
+                    unparsed.insert(path);
+                    continue 'source;
+                }
+                continue;
+            }
+            let raw_prefix = if bytes[i..].starts_with(b"br") || bytes[i..].starts_with(b"cr") {
+                2
+            } else if bytes[i] == b'r' {
+                1
+            } else {
+                0
+            };
+            let mut raw_quote = i + raw_prefix;
+            if raw_prefix != 0 {
+                while raw_quote < bytes.len() && bytes[raw_quote] == b'#' {
+                    raw_quote += 1;
+                }
+            }
+            if raw_prefix != 0 && bytes.get(raw_quote) == Some(&b'"') {
+                let terminator = format!("\"{}", "#".repeat(raw_quote - i - raw_prefix));
+                let Some(end) = source[raw_quote + 1..].find(&terminator) else {
+                    unparsed.insert(path);
+                    continue 'source;
+                };
+                i = raw_quote + 1 + end + terminator.len();
+            } else if bytes[i] == b'"'
+                || (bytes[i] == b'\''
+                    && (bytes.get(i + 1) == Some(&b'\\')
+                        || source[i + 1..]
+                            .chars()
+                            .next()
+                            .is_some_and(|ch| bytes.get(i + 1 + ch.len_utf8()) == Some(&b'\''))))
+            {
+                let quote = bytes[i];
+                i += 1;
+                while i < bytes.len() && bytes[i] != quote {
+                    if bytes[i] == b'\\' {
+                        i += 1;
+                    }
+                    i += 1;
+                }
+                if i >= bytes.len() {
+                    unparsed.insert(path);
+                    continue 'source;
+                }
+                i += 1;
+            } else if bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] >= 128 {
+                i += 1;
+                while i < bytes.len()
+                    && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] >= 128)
+                {
+                    i += 1;
+                }
+            } else {
+                i += 1;
+            }
+            tokens.push((start, &source[start..i]));
+        }
+        syntax.insert(path, tokens);
+    }
+    let mut candidates: BTreeMap<String, (String, BTreeSet<(&str, usize)>)> = BTreeMap::new();
+    for (&parent, tokens) in &syntax {
+        let path = Path::new(parent);
+        if !authority
+            .packages
+            .iter()
+            .filter_map(|package| package.manifest.as_deref())
+            .filter_map(|manifest| Path::new(manifest).parent())
+            .any(|directory| path.starts_with(directory.join("src")))
+        {
+            continue;
+        }
+        let source = &sources[parent];
+        let mut depth = 0usize;
+        for (index, &(offset, token)) in tokens.iter().enumerate() {
+            if matches!(token, "{" | "(" | "[") {
+                depth += 1;
+            }
+            if matches!(token, "}" | ")" | "]") {
+                depth = depth.saturating_sub(1);
+            }
+            if depth != 0 || token != "mod" {
+                continue;
+            }
+            let Some(&(name_offset, name)) = tokens.get(index + 1) else {
+                continue;
+            };
+            if tokens.get(index + 2).map(|(_, token)| *token) != Some(";") {
+                continue;
+            }
+            let line_start = source[..offset]
+                .rfind('\n')
+                .map_or(0, |position| position + 1);
+            if !matches!(
+                source[line_start..offset].trim(),
+                "" | "pub" | "pub(crate)" | "pub(super)" | "pub(self)"
+            ) {
+                continue;
+            }
+            let mut test_only = false;
+            let mut redirected = false;
+            let mut end = line_start;
+            while end > 0 {
+                let start = source[..end - 1]
+                    .rfind('\n')
+                    .map_or(0, |position| position + 1);
+                let line = source[start..end].trim();
+                if line == "#[cfg(test)]" {
+                    test_only |= tokens
+                        .iter()
+                        .any(|&(offset, token)| offset >= start && offset < end && token == "#");
+                }
+                if line.starts_with("#[") {
+                    redirected |= line
+                        .split(|ch: char| !ch.is_alphanumeric() && ch != '_')
+                        .any(|word| word == "path");
+                }
+                if !(line.starts_with("///") || (line.starts_with("#[") && line.ends_with(']'))) {
+                    // A multiline attribute is not proof of the narrow convention.
+                    if line.ends_with(']') {
+                        test_only = false;
+                    }
+                    break;
+                }
+                end = start;
+            }
+            if !test_only || redirected {
+                continue;
+            }
+            let directory = if matches!(
+                path.file_name().and_then(|name| name.to_str()),
+                Some("lib.rs" | "main.rs" | "mod.rs")
+            ) {
+                path.parent().expect("source parent").to_path_buf()
+            } else {
+                path.with_extension("")
+            };
+            let alternatives = [
+                directory.join(format!("{name}.rs")),
+                directory.join(name).join("mod.rs"),
+            ];
+            let present: Vec<_> = alternatives
+                .iter()
+                .filter_map(|path| path.to_str())
+                .filter(|path| inputs.contains(*path))
+                .collect();
+            if present.len() != 1 || explicit_inputs.contains(present[0]) {
+                continue;
+            }
+            candidates
+                .entry(present[0].to_owned())
+                .or_insert_with(|| (name.to_owned(), BTreeSet::new()))
+                .1
+                .insert((parent, name_offset));
+        }
+    }
+    // Iterate because a retained candidate can itself refer to another candidate.
+    loop {
+        let mut retained = BTreeSet::new();
+        if unparsed.iter().any(|path| !candidates.contains_key(*path)) {
+            return Ok(inputs.iter().cloned().collect());
+        }
+        for (&parent, tokens) in &syntax {
+            if candidates.contains_key(parent) {
+                continue;
+            }
+            let parent_path = Path::new(parent);
+            let module_directory = if matches!(
+                parent_path.file_name().and_then(|name| name.to_str()),
+                Some("lib.rs" | "main.rs" | "mod.rs")
+            ) {
+                parent_path.parent().expect("source parent").to_path_buf()
+            } else {
+                parent_path.with_extension("")
+            };
+            for (index, &(offset, token)) in tokens.iter().enumerate() {
+                // Only literal includes and the repository's fixed manifest-relative concat form
+                // have an inspectable destination. Any computed destination keeps all candidates.
+                if matches!(token, "include" | "include_str" | "include_bytes")
+                    && tokens.get(index + 1).map(|(_, token)| *token) == Some("!")
+                {
+                    let tail: Vec<_> = tokens[index + 2..]
+                        .iter()
+                        .take(13)
+                        .map(|(_, token)| *token)
+                        .collect();
+                    let literal = match tail.as_slice() {
+                        ["(", literal, ")", ..] => Some(*literal),
+                        ["(", "concat", "!", "(", "env", "!", "(", "\"CARGO_MANIFEST_DIR\"", ")", ",", literal, ")", ")"] => {
+                            Some(*literal)
+                        }
+                        _ => None,
+                    };
+                    if !literal.is_some_and(|literal| {
+                        literal.starts_with('"')
+                            && literal.ends_with('"')
+                            && !literal.contains('\\')
+                    }) {
+                        retained.extend(candidates.keys().cloned());
+                    }
+                }
+                if token == "path"
+                    && index > 0
+                    && matches!(tokens[index - 1].1, "[" | ",")
+                    && tokens.get(index + 1).map(|(_, token)| *token) == Some("=")
+                    && !tokens.get(index + 2).is_some_and(|(_, literal)| {
+                        literal.starts_with('"')
+                            && literal.ends_with('"')
+                            && !literal.contains('\\')
+                    })
+                {
+                    retained.extend(candidates.keys().cloned());
+                }
+                for (candidate, (name, declarations)) in &candidates {
+                    if (token == name
+                        && Path::new(candidate).starts_with(&module_directory)
+                        && !declarations.contains(&(parent, offset))
+                        && !(index > 0
+                            && tokens[index - 1].1 == "mod"
+                            && tokens.get(index + 1).map(|(_, token)| *token) == Some("{")))
+                        || (token.contains('"')
+                            && (token.contains(&format!("{name}.rs"))
+                                || token.contains(&format!("{name}/"))))
+                    {
+                        retained.insert(candidate.clone());
+                    }
+                }
+            }
+        }
+        if retained.is_empty() {
+            break;
+        }
+        for path in retained {
+            candidates.remove(&path);
+        }
+    }
+    let excluded: BTreeSet<_> = candidates.into_keys().collect();
+    Ok(inputs
+        .into_iter()
+        .filter(|input| !excluded.contains(input))
+        .collect())
 }
 
 fn expected_bounds(descriptor: &ModelDescriptor) -> Result<BTreeMap<String, String>, String> {

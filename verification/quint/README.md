@@ -53,6 +53,8 @@ Mutation manifests under `mutations/` use tool-neutral `M-FORMAL-*` identifiers.
 
 Evidence under `evidence/` binds the model, checker configuration, mutation manifest, pinned toolchain, loopback provider source, Rust-owned server and publication policy, dedicated CI workflow, tool versions, properties, scenarios, action coverage, projection negative checks, seeds, bounds, and production sources. `cargo-authority.json` records only the locked normal dependency graph reachable from `fireemu-verification-quint`, with repository-relative workspace paths. Unrelated workspace dependencies, Cargo profiles, and CI jobs are intentionally outside this authority.
 
+New unit tests go into separate `#[cfg(test)] mod x;` files so adding a test does not stale Quint evidence; existing inline test modules move when their file is next changed.
+
 Run `cargo run -p fireemu-verification-quint -- check-evidence` from the repository root to report stale model evidence and the command to regenerate each affected model. This read-only check exits with status 1 if any registered model has missing or stale evidence and 0 if all evidence digests and required input inventories match. Missing or empty evidence directories are stale.
 
 Refresh the complete evidence set only after every baseline, deterministic scenario, generated campaign, projection negative check, and real mutation campaign passes:

@@ -4,11 +4,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use fireemu_verification_quint::evidence::{validate_evidence_file, validate_evidence_json};
+use fireemu_verification_quint::evidence::{
+    current_input_digest, expected_bound_inputs, validate_evidence_file, validate_evidence_json,
+};
 use fireemu_verification_quint::model::{all_models, model, ModelDescriptor};
 
 const EVIDENCE: &str = include_str!("../evidence/EventDelivery.json");
-const TAMPER_TARGETS: [&str; 10] = [
+const TAMPER_TARGETS: [&str; 9] = [
     ".github/workflows/quint.yml",
     "rust-toolchain.toml",
     "crates/fireemu-core-events/src/state.rs",
@@ -18,7 +20,6 @@ const TAMPER_TARGETS: [&str; 10] = [
     "verification/quint/configs/EventDelivery.json",
     "verification/quint/mutations/EventDelivery.json",
     "verification/quint/src/event_delivery.rs",
-    "verification/quint/tests/event_delivery_connect.rs",
 ];
 
 fn repository_root() -> PathBuf {
@@ -318,4 +319,263 @@ fn evidence_validation_without_repository_inventory_fails_closed() {
     let error = validate_evidence_json(EVIDENCE, descriptor(), None)
         .expect_err("source-bound evidence requires repository inventory");
     assert!(error.contains("repository root is required"), "{error}");
+}
+
+#[test]
+fn test_only_file_edits_preserve_evidence_and_other_references_remain_bound() {
+    let root = repository_root();
+    let descriptor = descriptor();
+    let inputs = expected_bound_inputs(&root, descriptor, None).expect("current inputs");
+    let inputs: Vec<_> = inputs.iter().map(String::as_str).collect();
+    for (declaration, other_source, relative, bound) in [
+        ("", "", "tests/binding_probe.rs", false),
+        ("", "", "benches/binding_probe.rs", false),
+        ("", "", "examples/binding_probe.rs", false),
+        (
+            "#[cfg(test)]\nmod binding_probe;\n",
+            "",
+            "src/binding_probe.rs",
+            false,
+        ),
+        (
+            "#[cfg(test)]\n#[allow(dead_code)]\n/// Test module.\nmod binding_probe;\n",
+            "",
+            "src/binding_probe.rs",
+            false,
+        ),
+        (
+            "#[cfg(test)]\nmod binding_probe;\n",
+            "",
+            "src/binding_probe/mod.rs",
+            false,
+        ),
+        (
+            "#[cfg(test)]\nmod binding_probe;\n#[cfg(test)]\nmod binding_probe;\n",
+            "",
+            "src/binding_probe.rs",
+            false,
+        ),
+        (
+            "#[cfg(test)]\nmod binding_probe;\nmod binding_probe;\n",
+            "",
+            "src/binding_probe.rs",
+            true,
+        ),
+        (
+            "#[cfg(test)]\n#[path = \"binding_probe.rs\"]\nmod redirected;\n",
+            "",
+            "src/binding_probe.rs",
+            true,
+        ),
+        (
+            "#[cfg(test)]\nmod binding_probe;\n#[path = \"binding_probe.rs\"]\nmod redirected;\n",
+            "",
+            "src/binding_probe.rs",
+            true,
+        ),
+        (
+            "#[cfg(test)]\nmod binding_probe;\n",
+            "#[path = \"binding_probe.rs\"]\nmod redirected;\n",
+            "src/binding_probe.rs",
+            true,
+        ),
+        (
+            "#[cfg(test)]\nmod binding_probe;\ninclude!(\"binding_probe.rs\");\n",
+            "",
+            "src/binding_probe.rs",
+            true,
+        ),
+        (
+            "#[cfg(test)]\nmod binding_probe;\n",
+            "include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/binding_probe.rs\"));\n",
+            "src/binding_probe.rs",
+            true,
+        ),
+        (
+            "#[cfg(test)]\nmod binding_probe;\n",
+            "include!(env!(\"GENERATED_SOURCE\"));\n",
+            "src/binding_probe.rs",
+            true,
+        ),
+        (
+            "#[path = \"elsewhere.rs\"]\n#[cfg(test)]\nmod binding_probe;\n",
+            "",
+            "src/binding_probe.rs",
+            true,
+        ),
+        (
+            "#[cfg(all(test))]\nmod binding_probe;\n",
+            "",
+            "src/binding_probe.rs",
+            true,
+        ),
+        (
+            "/*\n#[cfg(test)]\nmod binding_probe;\n*/\n",
+            "",
+            "src/binding_probe.rs",
+            true,
+        ),
+        (
+            "const TEXT: &str = r#\"\n#[cfg(test)]\nmod binding_probe;\n\"#;\n",
+            "",
+            "src/binding_probe.rs",
+            true,
+        ),
+        ("mod binding_probe;\n", "", "src/binding_probe.rs", true),
+        ("", "", "src/state.rs", true),
+    ] {
+        let fixture = OwnedTestRepository::copy_inputs(&inputs).expect("copy current inputs");
+        let parent = fixture.path.join("crates/fireemu-core-events/src/lib.rs");
+        let mut source = fs::read_to_string(&parent).expect("parent module");
+        source.push_str(declaration);
+        fs::write(parent, source).expect("declare probe module");
+        if !other_source.is_empty() {
+            fs::write(
+                fixture.path.join("crates/fireemu-core-events/src/other.rs"),
+                other_source,
+            )
+            .expect("other source reference");
+        }
+        let relative = format!("crates/fireemu-core-events/{relative}");
+        let path = fixture.path.join(&relative);
+        fs::create_dir_all(path.parent().expect("probe parent")).expect("probe directory");
+        if !path.exists() {
+            fs::write(&path, "pub fn probe() {}\n").expect("probe source");
+        }
+        let required =
+            expected_bound_inputs(&fixture.path, descriptor, None).expect("fixture inputs");
+        assert_eq!(
+            required.contains(&relative),
+            bound,
+            "{declaration:?} / {other_source:?} / {relative}"
+        );
+        let mut evidence: serde_json::Value =
+            serde_json::from_str(EVIDENCE).expect("evidence metadata");
+        evidence["boundInputs"] = serde_json::to_value(&required).expect("bound inputs");
+        evidence["digests"] = serde_json::to_value(
+            required
+                .iter()
+                .map(|relative| {
+                    (
+                        relative.clone(),
+                        current_input_digest(&fixture.path, relative).expect("current digest"),
+                    )
+                })
+                .collect::<std::collections::BTreeMap<_, _>>(),
+        )
+        .expect("digests");
+        let json = serde_json::to_string(&evidence).expect("fixture evidence");
+        validate_evidence_json(&json, descriptor, Some(&fixture.path)).expect("current baseline");
+        let original = fs::read(&path).expect("probe bytes");
+        let mut edited = original.clone();
+        edited.extend_from_slice(b"\n#[cfg(test)] mod added_inline { #[test] fn new_test() {} }\n");
+        fs::write(&path, edited).expect("edit probe");
+        let result = validate_evidence_json(&json, descriptor, Some(&fixture.path));
+        if bound {
+            assert!(result
+                .expect_err("production edit must stale evidence")
+                .contains("digest mismatch"));
+        } else {
+            result.expect("test-only edit must preserve evidence");
+        }
+        fs::write(&path, original).expect("restore probe");
+        evidence["boundInputs"]
+            .as_array_mut()
+            .expect("inputs")
+            .retain(|value| value != "crates/fireemu-core-events/src/state.rs");
+        evidence["digests"]
+            .as_object_mut()
+            .expect("digests")
+            .remove("crates/fireemu-core-events/src/state.rs");
+        let error = validate_evidence_json(&evidence.to_string(), descriptor, Some(&fixture.path))
+            .expect_err("omitted production input must be rejected");
+        assert!(error.contains("bound inputs mismatch"), "{error}");
+    }
+}
+
+#[test]
+fn test_only_edits_preserve_every_models_evidence() {
+    let root = repository_root();
+    for descriptor in all_models() {
+        let inputs = expected_bound_inputs(&root, descriptor, None).expect("current inputs");
+        assert!(!inputs.iter().any(|path| path == descriptor.connect_test));
+        let moved_modules = [
+            (
+                "crates/fireemu-core-auth/src/mfa.rs",
+                "crates/fireemu-core-auth/src/mfa/critical_mutant_gaps.rs",
+            ),
+            (
+                "crates/fireemu-adapter-functions/src/runtime.rs",
+                "crates/fireemu-adapter-functions/src/runtime/restart_budget_tests.rs",
+            ),
+            (
+                "crates/fireemu-adapter-functions/src/runtime.rs",
+                "crates/fireemu-adapter-functions/src/runtime/task_completion_tests.rs",
+            ),
+            (
+                "crates/fireemu-adapter-functions/src/runtime.rs",
+                "crates/fireemu-adapter-functions/src/runtime/schedule_capacity_tests.rs",
+            ),
+            (
+                "crates/fireemu-adapter-functions/src/runtime.rs",
+                "crates/fireemu-adapter-functions/src/runtime/storage_event_instant_tests.rs",
+            ),
+            (
+                "crates/fireemu-adapter-functions/src/runtime.rs",
+                "crates/fireemu-adapter-functions/src/runtime/event_frame_member_tests.rs",
+            ),
+        ];
+        for (_, child) in moved_modules {
+            assert!(
+                !inputs.iter().any(|path| path == child),
+                "{} still binds {child}",
+                descriptor.name
+            );
+        }
+        let paths: Vec<_> = inputs.iter().map(String::as_str).collect();
+        let fixture = OwnedTestRepository::copy_inputs(&paths).expect("copy inputs");
+        let mut evidence: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(root.join(format!(
+                "verification/quint/evidence/{}.json",
+                descriptor.name
+            )))
+            .expect("evidence metadata"),
+        )
+        .expect("valid metadata");
+        evidence["boundInputs"] = serde_json::to_value(&inputs).expect("inputs");
+        evidence["digests"] = serde_json::to_value(
+            inputs
+                .iter()
+                .map(|relative| {
+                    (
+                        relative.clone(),
+                        current_input_digest(&fixture.path, relative).expect("current digest"),
+                    )
+                })
+                .collect::<std::collections::BTreeMap<_, _>>(),
+        )
+        .expect("digests");
+        let json = evidence.to_string();
+        validate_evidence_json(&json, descriptor, Some(&fixture.path)).expect("current baseline");
+        for (parent, child) in moved_modules {
+            if !inputs.iter().any(|path| path == parent) {
+                continue;
+            }
+            let path = fixture.path.join(child);
+            fs::create_dir_all(path.parent().expect("module parent")).expect("module directory");
+            // Even unfinished test edits must not change the production inventory.
+            for bytes in ["#[test] fn added_test() {}\n", "/* unfinished test edit"] {
+                fs::write(&path, bytes).expect("edit separate test module");
+                validate_evidence_json(&json, descriptor, Some(&fixture.path))
+                    .unwrap_or_else(|error| panic!("{} / {child}: {error}", descriptor.name));
+            }
+        }
+        let path = fixture.path.join(descriptor.connect_test);
+        fs::create_dir_all(path.parent().expect("test parent")).expect("test directory");
+        for bytes in ["// Original test.\n", "// Changed test.\n"] {
+            fs::write(&path, bytes).expect("edit test file");
+            validate_evidence_json(&json, descriptor, Some(&fixture.path))
+                .unwrap_or_else(|error| panic!("{}: {error}", descriptor.name));
+        }
+    }
 }

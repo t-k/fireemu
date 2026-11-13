@@ -22,6 +22,7 @@
   },
   "boundInputs": [
     ".github/workflows/quint.yml",
+    "crates/fireemu-adapter-grpc/tests/rules.rs",
     "crates/fireemu-core-limits/Cargo.toml",
     "crates/fireemu-core-limits/src/evaluate.rs",
     "crates/fireemu-core-limits/src/generated/firebase_auth_2026_08_30.rs",
@@ -47,6 +48,7 @@
     "crates/fireemu-core-rules/src/runtime.rs",
     "crates/fireemu-core-rules/src/scope.rs",
     "crates/fireemu-core-rules/src/value.rs",
+    "crates/fireemu-core-rules/tests/activation.rs",
     "crates/fireemu-core-types/Cargo.toml",
     "crates/fireemu-core-types/src/admission.rs",
     "crates/fireemu-core-types/src/codec.rs",
@@ -81,12 +83,17 @@
     "verification/quint/src/process.rs",
     "verification/quint/src/publication.rs",
     "verification/quint/src/ruleset_activation.rs",
-    "verification/quint/src/server.rs"
+    "verification/quint/src/server.rs",
+    "verification/quint/tests/ruleset_activation_connect.rs"
   ],
   "digests": {
     ".github/workflows/quint.yml": {
       "kind": "sha256",
       "value": "2e641886ee0d832f95e570f33eead54964a6151bf14c2fc54d5fe10cb8d4cc53"
+    },
+    "crates/fireemu-adapter-grpc/tests/rules.rs": {
+      "kind": "sha256",
+      "value": "909c35bad2641968d331661e1dbea3197706acdcd9841bd34c4e30f8c94ed171"
     },
     "crates/fireemu-core-limits/Cargo.toml": {
       "kind": "sha256",
@@ -187,6 +194,10 @@
     "crates/fireemu-core-rules/src/value.rs": {
       "kind": "sha256",
       "value": "3bb882f272b729a3f900d9e3e143f63ed9d60ddf5c7fca035e8adf599a9ad677"
+    },
+    "crates/fireemu-core-rules/tests/activation.rs": {
+      "kind": "sha256",
+      "value": "4fa248cb65ad632631e9fe5a75a634c8f4b8aa4058de2b86ed94419828d753be"
     },
     "crates/fireemu-core-types/Cargo.toml": {
       "kind": "sha256",
@@ -294,11 +305,11 @@
     },
     "verification/quint/src/evidence.rs": {
       "kind": "sha256",
-      "value": "7649b8feaff5405968765b8b538b895df3e2a6dcb884dd1eb666914d24084a20"
+      "value": "49d5d84a90ba872eba203bdab4570ed27e130facd726f05dacd46d37b526a524"
     },
     "verification/quint/src/evidence/source_closure.rs": {
       "kind": "sha256",
-      "value": "2b2374039fc7f1030014d3a547c797f632d245fb6cee4da67cc60d2450ed5275"
+      "value": "7f5ca6295d95717d0138951a4e00508d1ad9ede99873e3cd46f5605baf23e479"
     },
     "verification/quint/src/lib.rs": {
       "kind": "sha256",
@@ -327,6 +338,10 @@
     "verification/quint/src/server.rs": {
       "kind": "sha256",
       "value": "b0d10768918bf0449419d9e6384a574e14db01f651264e6037856c3367e05c0a"
+    },
+    "verification/quint/tests/ruleset_activation_connect.rs": {
+      "kind": "sha256",
+      "value": "389b2b15a5f13fcd7682ac5cd7d7e6b1c71e164326622cc664fa79bb86374cf3"
     }
   },
   "invariants": [

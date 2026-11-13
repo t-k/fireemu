@@ -246,7 +246,7 @@
     },
     "verification/quint/tests/event_delivery_evidence.rs": {
       "kind": "rust-semantic",
-      "value": "89173d8d83b16aee4161ebaa0b5856bec7b91fb00de66fd7dff8bbd27e9d9587"
+      "value": "09c1aaf53877c8c9d305ed741840ff5fa4b80f4fed9841bc0b0c6715fd57aa91"
     }
   },
   "invariants": [

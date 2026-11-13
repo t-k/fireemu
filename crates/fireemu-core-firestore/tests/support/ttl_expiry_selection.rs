@@ -163,9 +163,7 @@ fn selection_is_path_ordered_frozen_and_exact_at_the_last_page() {
         expected[3..]
     );
     assert!(selection.is_exhausted());
-    assert!(selection
-        .next_page(std::num::NonZeroUsize::new(3).unwrap())
-        .is_empty());
+    assert_eq!(selection.next_page(std::num::NonZeroUsize::new(3).unwrap()), []);
     assert_index(&state);
 }
 #[test]
@@ -193,7 +191,7 @@ fn imports_clone_snapshots_field_changes_and_disable_rebuild_exact_membership() 
         }
     }
     assert!(policies.disable(&group, &FieldPath::parse("expires").unwrap()));
-    assert!(capture(&mut state, &policies, timestamp(50), 1).is_empty());
+    assert_eq!(capture(&mut state, &policies, timestamp(50), 1), []);
     assert!(state.ttl_expiry_indexes.is_empty());
     policies
         .enable(group.clone(), FieldPath::parse("other.at").unwrap())
@@ -455,7 +453,7 @@ fn a_field_replaced_between_selections_rebuilds_without_an_intermediate_disabled
             ("other".into(), Value::Timestamp(timestamp(0))),
         ]),
     );
-    assert!(capture(&mut state, &catalog(), timestamp(50), 1).is_empty());
+    assert_eq!(capture(&mut state, &catalog(), timestamp(50), 1), []);
     let group = CollectionId::try_new("items").unwrap();
     let mut replacement = crate::ttl::TtlCatalog::new();
     replacement

@@ -7413,7 +7413,7 @@ fn oob_authorization_preserves_delivery_and_authenticated_admin_generation() {
             assert!(response["oobCode"].is_string());
             assert!(response["oobLink"].is_string());
             assert_eq!(response["email"], "oob-other@example.com");
-            assert!(drain(&lines).is_empty());
+            assert_eq!(drain(&lines).len(), 0);
             let result = handle_with(
                 &s,
                 "POST",
@@ -7475,7 +7475,7 @@ fn oob_link_flag_type_errors_are_atomic_on_project_and_tenant_admin_routes() {
         &json!({"email": tenant_email, "password": "hunter22"}),
     );
     assert_eq!(status, 200, "{created}");
-    assert!(drain(&lines).is_empty());
+    assert_eq!(drain(&lines).len(), 0);
 
     for (path, email) in [(project_path, project_email), (tenant_path, tenant_email)] {
         for value in [json!("true"), json!(1), json!([]), json!({})] {
@@ -7529,7 +7529,7 @@ fn email_action_links_are_announced_once_unless_the_link_is_returned() {
     let (s, lines) = recording_state();
     let user = sign_up(&s, "notice@example.com");
     let id_token = user["idToken"].as_str().unwrap().to_owned();
-    assert!(drain(&lines).is_empty(), "sign-up issues no code");
+    assert_eq!(drain(&lines).len(), 0, "sign-up issues no code");
 
     let (status, body) = post(
         &s,
@@ -7547,7 +7547,7 @@ fn email_action_links_are_announced_once_unless_the_link_is_returned() {
     );
     // Reading the inspection route announces nothing, and neither does a second read.
     let _ = get(&s, &format!("{EMU}/oobCodes"));
-    assert!(drain(&lines).is_empty());
+    assert_eq!(drain(&lines).len(), 0);
 
     // The Admin link generators receive the link in the response and print nothing.
     let (status, link) = admin(
@@ -7557,7 +7557,7 @@ fn email_action_links_are_announced_once_unless_the_link_is_returned() {
     );
     assert_eq!(status, 200, "{link}");
     assert!(link["oobLink"].is_string());
-    assert!(drain(&lines).is_empty());
+    assert_eq!(drain(&lines).len(), 0);
 
     let (status, body) = post(
         &s,
@@ -7617,7 +7617,7 @@ fn email_action_links_are_announced_once_unless_the_link_is_returned() {
         &json!({"requestType": "PASSWORD_RESET", "email": "nobody@example.com"}),
     );
     assert_eq!(status, 400);
-    assert!(drain(&lines).is_empty());
+    assert_eq!(drain(&lines).len(), 0);
 }
 
 /// The outstanding SMS code whose `field` (`phoneNumber`, `sessionInfo`) is `value`.
@@ -7704,7 +7704,7 @@ fn sms_codes_are_announced_per_number_for_sign_in_enrollment_and_mfa_sign_in() {
         );
         assert_eq!(status, 200, "{done}");
     }
-    assert!(drain(&lines).is_empty());
+    assert_eq!(drain(&lines).len(), 0);
 
     // The second factor step of a sign-in.
     let (status, pending) = post(
@@ -7713,7 +7713,7 @@ fn sms_codes_are_announced_per_number_for_sign_in_enrollment_and_mfa_sign_in() {
         &json!({"email": "two@example.com", "password": "hunter22"}),
     );
     assert_eq!(status, 200, "{pending}");
-    assert!(drain(&lines).is_empty());
+    assert_eq!(drain(&lines).len(), 0);
     let (status, started) = post(
         &s,
         &format!("{V2}/accounts/mfaSignIn:start"),
@@ -7765,7 +7765,7 @@ fn tenant_action_links_name_the_tenant() {
         admin_link.ends_with("&continueUrl=https%3A%2F%2Fapp.example%2Fx&tenantId=customer-a"),
         "{admin_link}"
     );
-    assert!(drain(&lines).is_empty());
+    assert_eq!(drain(&lines).len(), 0);
 
     let (status, body) = post(
         &s,
@@ -9569,7 +9569,7 @@ fn assert_saml_fixture_cookie_lifecycle(
         attributes,
     );
     if tenant.is_some() {
-        assert!(s.store.lock().unwrap().users_by_creation().is_empty());
+        assert_eq!(s.store.lock().unwrap().users_by_creation().len(), 0);
     }
 }
 

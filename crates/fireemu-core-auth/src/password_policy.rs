@@ -296,7 +296,7 @@ mod tests {
                 ViolationCode::MissingNonAlphanumericCharacter,
             ]
         );
-        assert!(policy.violations("ValidPassword9!").is_empty());
+        assert_eq!(policy.violations("ValidPassword9!"), vec![]);
         assert!(policy
             .violations(&"A1!".repeat(11))
             .contains(&ViolationCode::MaximumPasswordLength));
@@ -316,7 +316,7 @@ mod tests {
             default_allowed_non_alphanumeric(),
         )
         .unwrap();
-        assert!(policy.violations("😀😀😀").is_empty());
+        assert_eq!(policy.violations("😀😀😀"), vec![]);
         assert_eq!(
             policy.violations("😀😀😀😀")[0],
             ViolationCode::MaximumPasswordLength

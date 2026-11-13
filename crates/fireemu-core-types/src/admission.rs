@@ -50,7 +50,7 @@ mod tests {
             EventAdmissionError::PayloadTooLarge("large".to_owned()),
         ] {
             let message = error.message().to_owned();
-            assert!(!message.is_empty());
+            assert_ne!(message, "");
             assert_eq!(error.to_string(), message);
         }
         assert_eq!(

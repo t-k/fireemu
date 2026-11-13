@@ -10,6 +10,7 @@ use std::task::{Context, Poll};
 
 use bytes::Bytes;
 use fireemu_adapter_support::connection::{DrainBounds, GracefulClose};
+use fireemu_core_app_check::header::APP_CHECK_HEADER;
 use http_body_util::combinators::UnsyncBoxBody;
 use http_body_util::{BodyExt, Full, StreamBody};
 use hyper::body::{Frame, Incoming};
@@ -435,7 +436,8 @@ pub async fn forward(
         if !is_framable_name(k) || !is_framable_value(v) {
             return Err(format!("refusing to forward the unframable header {k:?}"));
         }
-        if is_hop_by_hop(k, &connection_named)
+        if (is_hop_by_hop(k, &connection_named)
+            && !k.eq_ignore_ascii_case(VERIFIED_APP_CHECK_HEADER))
             || k.eq_ignore_ascii_case("content-length")
             || k.eq_ignore_ascii_case("expect")
         {
@@ -547,7 +549,8 @@ fn streaming_request(
                 "refusing to forward the unframable header {name:?}"
             ));
         }
-        if is_hop_by_hop(name, &connection_named)
+        if (is_hop_by_hop(name, &connection_named)
+            && !name.eq_ignore_ascii_case(VERIFIED_APP_CHECK_HEADER))
             || name.eq_ignore_ascii_case("content-length")
             || name.eq_ignore_ascii_case("expect")
         {
@@ -1057,7 +1060,7 @@ fn sanitize_credentials(
     // The credential fields are collected separately and lossily: a value that is not
     // renderable as text must still count as an instance, or a second copy could hide behind
     // one byte the general collection dropped (spec 7.3).
-    let presented_app_check = field_values(raw, fireemu_core_app_check::header::APP_CHECK_HEADER);
+    let presented_app_check = field_values(raw, APP_CHECK_HEADER);
     let presented_auth = field_values(raw, "authorization");
     match trust.sanitize(&crate::callable::CallableRequest {
         function,
@@ -1133,6 +1136,7 @@ fn marked_callable_in_code(runtime: &FunctionsRuntime, function: &str) -> bool {
 /// endpoint is a Bearer of a user of the project (tools/runner-node/nested-callable.mjs). Every
 /// caller-supplied copy is removed before the daemon sets its own.
 const VERIFIED_CREDENTIAL_HEADER: &str = "x-fireemu-credential-verified";
+const VERIFIED_APP_CHECK_HEADER: &str = "x-fireemu-appcheck-verified";
 
 fn verified_single_credential(runtime: &FunctionsRuntime, raw: &hyper::HeaderMap) -> bool {
     matches!(
@@ -1933,9 +1937,9 @@ async fn respond(
     // `onRequest` function, strict profile, no App Check) runs the callable's wrapper too, so
     // its requests pass the same Bearer check. A preflight is the SDK's CORS handling and
     // carries no credential check, as for a callable.
-    let code_callable = marked_callable_in_code(&runtime, function);
     if profile == FunctionsHttpProfile::Strict
-        && ((callable && !callable_preflight) || (code_callable && method != "OPTIONS"))
+        && (callable || marked_callable_in_code(&runtime, function))
+        && method != "OPTIONS"
     {
         if let Some(denial) = strict_callable_credential_refusal(
             &runtime,
@@ -1954,6 +1958,7 @@ async fn respond(
             !k.as_str()
                 .eq_ignore_ascii_case(crate::invoker::OWNER_TOKEN_HEADER)
                 && !k.as_str().eq_ignore_ascii_case(VERIFIED_CREDENTIAL_HEADER)
+                && !k.as_str().eq_ignore_ascii_case(VERIFIED_APP_CHECK_HEADER)
         })
         .filter_map(|(k, v)| {
             v.to_str()
@@ -1979,6 +1984,10 @@ async fn respond(
             }
         }
     };
+    if !callable {
+        let app_check = field_values(req.headers(), APP_CHECK_HEADER);
+        add_app_check_verification_header(&runtime, function, &app_check, &mut headers);
+    }
     if profile == FunctionsHttpProfile::Strict {
         let verified = plain_http && verified_single_credential(&runtime, req.headers());
         add_strict_forwarding_headers(&mut headers, peer_ip, verified);
@@ -1987,20 +1996,46 @@ async fn respond(
         Ok(body) => body,
         Err(answer) => return Ok(*answer),
     };
-    let path_and_query = match query {
-        Some(q) => format!("{path}?{q}"),
-        None => path,
-    };
     invoke_runner(
         &runtime,
         &target,
         &method,
-        &path_and_query,
+        &query.map_or_else(|| path.clone(), |q| format!("{path}?{q}")),
         &headers,
         &body,
         HttpIngressMode { profile, streaming },
     )
     .await
+}
+
+pub(crate) fn add_app_check_verification_header(
+    runtime: &FunctionsRuntime,
+    function: &str,
+    app_check: &[String],
+    headers: &mut Vec<(String, String)>,
+) {
+    if let Some(trust) = runtime.callable_trust() {
+        let decision = trust.sanitize(&crate::callable::CallableRequest {
+            function,
+            enforce_app_check: false,
+            consume_app_check_token: false,
+            headers: &[],
+            app_check,
+            authorization: &[],
+            now: runtime.now(),
+        });
+        let verified = matches!(
+            decision,
+            crate::callable::CallableDecision::Forward {
+                app_check: crate::callable::CredentialState::Valid,
+                ..
+            }
+        );
+        headers.push((
+            VERIFIED_APP_CHECK_HEADER.to_owned(),
+            if verified { "1" } else { "0" }.to_owned(),
+        ));
+    }
 }
 
 /// Every instance of one field, in wire order, with an unrenderable value as an empty string.

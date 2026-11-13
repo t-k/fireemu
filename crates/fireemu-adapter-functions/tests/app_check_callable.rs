@@ -26,6 +26,7 @@ use fireemu_core_app_check::verify::BaselineMode;
 use fireemu_core_auth::jwt::encode_unsigned;
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::{AuthStore, NewUser};
+use fireemu_core_functions::manifest::{TaskRateLimits, TaskRetryConfig};
 use fireemu_core_rules::runtime::RulesetSlot;
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
@@ -834,6 +835,7 @@ async fn start_with_env_marking(
     marked: &[&str],
 ) -> Harness {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
+    let task_echo = env.iter().any(|(key, _)| key == "FIREEMU_FAKE_TASK_ECHO");
     let spec = SpawnSpec {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
@@ -845,6 +847,17 @@ async fn start_with_env_marking(
         .expect("the fake runner starts");
     let mut manifest =
         parse_manifest(runner.hello().manifest.as_ref().expect("a manifest")).expect("it parses");
+    if task_echo {
+        manifest
+            .functions
+            .iter_mut()
+            .find(|f| f.name == "echo")
+            .unwrap()
+            .trigger = fireemu_core_functions::manifest::Trigger::TaskQueue {
+            retry: TaskRetryConfig::default(),
+            rate_limits: TaskRateLimits::default(),
+        };
+    }
     for function in &mut manifest.functions {
         if marked.contains(&function.name.as_str()) {
             function.platform_options.strict_callable_ingress = true;
@@ -855,6 +868,7 @@ async fn start_with_env_marking(
         manifest,
         FunctionsConfig {
             project: PROJECT.into(),
+            functions_host: Some("127.0.0.1:5001".into()),
             ..FunctionsConfig::for_tests(1000, "runner-secret".into())
         },
         clock.clone(),
@@ -906,6 +920,96 @@ async fn start_with_env_marking(
         runtime,
         server,
     }
+}
+
+#[tokio::test]
+async fn direct_http_marks_forged_app_check_for_plain_and_queue_targets() {
+    use fireemu_adapter_functions::http::FunctionsHttpProfile::{Emulator, Strict};
+
+    for profile in [Emulator, Strict] {
+        for queue_mapped in [false, true] {
+            let env = if queue_mapped {
+                vec![("FIREEMU_FAKE_TASK_ECHO".into(), "1".into())]
+            } else {
+                vec![]
+            };
+            let h = start_with_env(true, env, profile, false).await;
+            h.runtime.set_owner_token("test-owner".to_owned());
+            let response = h
+                .request(
+                    "POST",
+                    "echo",
+                    &[
+                        ("x-fireemu-owner-token", "test-owner"),
+                        ("x-firebase-appcheck", "forged.token.signature"),
+                        ("x-fireemu-appcheck-verified", "1"),
+                    ],
+                )
+                .await;
+            assert_eq!(response.status, 200, "{profile:?}, queue={queue_mapped}");
+            let body: Value = serde_json::from_slice(&response.body).expect("echo body");
+            assert_eq!(echoed(&body, "x-fireemu-appcheck-verified"), ["0"]);
+            h.stop().await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn task_dispatch_marks_a_forged_app_check_token_as_unverified() {
+    let log = std::env::temp_dir().join(format!(
+        "fireemu-task-appcheck-{}.jsonl",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&log);
+    let h = start_with_env(
+        true,
+        vec![
+            ("FIREEMU_FAKE_TASK_ECHO".into(), "1".into()),
+            (
+                "FIREEMU_FAKE_REQUEST_LOG".into(),
+                log.to_string_lossy().into_owned(),
+            ),
+        ],
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator,
+        false,
+    )
+    .await;
+    let dispatcher = tokio::spawn(h.runtime.clone().dispatch_loop());
+    h.runtime
+        .enqueue_task(
+            PROJECT,
+            "us-central1",
+            "echo",
+            &serde_json::json!({"task": {
+                "httpRequest": {"url": "", "body": "e30=", "headers": {
+                    "X-Firebase-AppCheck": "forged.token.signature",
+                    "X-Fireemu-AppCheck-Verified": "1"
+                }}
+            }}),
+        )
+        .unwrap();
+    let entry = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Ok(text) = std::fs::read_to_string(&log) {
+                if let Some(line) = text.lines().next() {
+                    if let Ok(entry) = serde_json::from_str::<Value>(line) {
+                        break entry;
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("task reaches runner");
+    assert_eq!(
+        entry["headers"]["x-firebase-appcheck"],
+        "forged.token.signature"
+    );
+    assert_eq!(entry["headers"]["x-fireemu-appcheck-verified"], "0");
+    dispatcher.abort();
+    h.stop().await;
+    std::fs::remove_file(log).unwrap();
 }
 
 impl Harness {
@@ -2405,14 +2509,186 @@ async fn marker_sent(h: &Harness, headers: &[(&str, &str)]) -> Vec<String> {
     echoed(&body, VERIFIED_CREDENTIAL_FIELD)
 }
 
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn strict_nested_callable_refuses_forged_app_check_and_accepts_admitted_token() {
+    use fireemu_adapter_functions::http::FunctionsHttpProfile::Strict;
+    use std::path::Path;
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let sdk = std::env::var("FE_SOURCE_SDK_ROOT").unwrap_or_else(|_| {
+        root.join("conformance/node_modules/firebase-functions")
+            .to_string_lossy()
+            .into_owned()
+    });
+    let dir = root.join(format!(
+        "target/codex-out/nested-app-check-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("package.json"), r#"{"main":"index.cjs"}"#).unwrap();
+    std::fs::write(dir.join("index.cjs"), format!("
+const {{ onRequest, onCall }} = require({sdk_path});
+exports.nested = onRequest({{ cors: false }}, onCall({{ enforceAppCheck: true }}, (request) => ({{ app: request.app ?? null }})));
+", sdk_path = serde_json::json!(Path::new(&sdk).join("lib/v2/providers/https.js").to_string_lossy()))).unwrap();
+    let spec = SpawnSpec {
+        command: vec![
+            "node".into(),
+            root.join("tools/runner-node/index.mjs")
+                .to_string_lossy()
+                .into_owned(),
+            "--source".into(),
+            dir.to_string_lossy().into_owned(),
+        ],
+        cwd: None,
+        env: [
+            ("GCLOUD_PROJECT", PROJECT),
+            (
+                "NODE_PATH",
+                Path::new(&sdk).parent().unwrap().to_str().unwrap(),
+            ),
+            ("FIREEMU_RUNNER_SECRET", "runner-secret"),
+            ("FIREEMU_HTTP_PROFILE", "strict"),
+            ("FIREBASE_DEBUG_MODE", "true"),
+            (
+                "FIREBASE_DEBUG_FEATURES",
+                r#"{"skipTokenVerification":true}"#,
+            ),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.into(), value.into()))
+        .collect(),
+        hello_timeout: Duration::from_secs(60),
+    };
+    let runner = Runner::spawn_spec(&spec)
+        .await
+        .expect("the real runner starts");
+    let manifest =
+        parse_manifest(runner.hello().manifest.as_ref().expect("a manifest")).expect("it parses");
+    let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
+    let runtime = FunctionsRuntime::new(
+        manifest,
+        FunctionsConfig {
+            project: PROJECT.into(),
+            ..FunctionsConfig::for_tests(1000, "runner-secret".into())
+        },
+        clock.clone(),
+        Arc::new(runner),
+        Some(spec),
+    );
+    let gate = gate();
+    let auth = Arc::new(Mutex::new(AuthStore::new(
+        PROJECT,
+        SplitMix64::new(3),
+        TotpPolicy::default(),
+    )));
+    let verifier = Arc::new(RulesEnforcer::new(
+        Arc::new(RulesetSlot::default()),
+        auth.clone(),
+        clock,
+    ));
+    runtime.set_callable_auth_verifier(verifier.clone());
+    let policy = ServiceAdmission::new(gate.clone(), "functions", BaselineMode::Unenforced)
+        .map(Arc::new)
+        .unwrap();
+    runtime.set_callable_trust(Arc::new(CallableTrust::new(policy, verifier, PROJECT)));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server_runtime = runtime.clone();
+    let server = tokio::spawn(async move {
+        fireemu_adapter_functions::http::serve_functions_with_profile(
+            listener,
+            server_runtime,
+            fireemu_adapter_functions::http::HttpAdmission::new(),
+            Strict,
+        )
+        .await
+    });
+    let h = Harness {
+        addr,
+        gate,
+        auth,
+        runtime,
+        server,
+    };
+    let token = h.token();
+    let forged = format!("{token}x");
+    let (status, body) = h.call("nested", &[("x-firebase-appcheck", &forged)]).await;
+    assert_eq!(status, 401, "{body}");
+    assert_eq!(body["error"]["status"], "UNAUTHENTICATED");
+    let (status, body) = h.call("nested", &[("x-firebase-appcheck", &token)]).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["result"]["app"]["appId"], APP_ID);
+    assert_eq!(body["result"]["app"]["token"]["app_id"], APP_ID);
+    h.stop().await;
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// A callable's wrapper nested in an `onRequest` function cannot be seen by discovery, so the strict
 /// daemon tells the runner whether the one credential of a request to a non-callable HTTP endpoint is
 /// a Bearer of a user of the project; the runner refuses the rest where a callable wrapper reads it
 /// (tools/runner-node/nested-callable.mjs).
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn strict_tells_the_runner_which_credential_of_a_plain_http_function_it_verified() {
     use fireemu_adapter_functions::http::FunctionsHttpProfile::{Emulator, Strict};
     const FIELD: &str = VERIFIED_CREDENTIAL_FIELD;
+    let h = start_with_consume_profile(true, "disabled", Strict).await;
+    let app_token = token_for(&h.gate, PROJECT, APP_ID);
+    for (token, expected) in [(&app_token, "1"), (&format!("{app_token}x"), "0")] {
+        let response = h
+            .request("POST", "echo", &[("x-firebase-appcheck", token)])
+            .await;
+        let body: Value = serde_json::from_slice(&response.body).expect("echo body");
+        assert_eq!(echoed(&body, "x-fireemu-appcheck-verified"), [expected]);
+        assert_eq!(echoed(&body, "x-firebase-appcheck"), [token.as_str()]);
+    }
+    let response = h
+        .request(
+            "POST",
+            "echo",
+            &[
+                ("connection", "x-fireemu-appcheck-verified"),
+                ("x-firebase-appcheck", "forged"),
+            ],
+        )
+        .await;
+    let body: Value = serde_json::from_slice(&response.body).expect("echo body");
+    assert_eq!(echoed(&body, "x-fireemu-appcheck-verified"), ["0"]);
+    let other_app = token_for(&h.gate, "demo-other", OTHER_APP_ID);
+    for headers in [
+        vec![("x-firebase-appcheck", other_app.as_str())],
+        vec![
+            ("x-firebase-appcheck", app_token.as_str()),
+            ("X-Firebase-AppCheck", app_token.as_str()),
+        ],
+    ] {
+        let response = h.request("POST", "echo", &headers).await;
+        let body: Value = serde_json::from_slice(&response.body).expect("echo body");
+        assert_eq!(echoed(&body, "x-fireemu-appcheck-verified"), ["0"]);
+    }
+    let response = h
+        .request(
+            "POST",
+            "echo",
+            &[
+                ("X-Fireemu-AppCheck-Verified", "1"),
+                ("x-firebase-appcheck", "forged"),
+            ],
+        )
+        .await;
+    let body: Value = serde_json::from_slice(&response.body).expect("echo body");
+    assert_eq!(echoed(&body, "x-fireemu-appcheck-verified"), ["0"]);
+    h.stop().await;
+    let h = start_with_consume_profile(true, "disabled", Emulator).await;
+    let app_token = token_for(&h.gate, PROJECT, APP_ID);
+    let response = h
+        .request("POST", "echo", &[("x-firebase-appcheck", &app_token)])
+        .await;
+    let body: Value = serde_json::from_slice(&response.body).expect("echo body");
+    assert_eq!(echoed(&body, "x-fireemu-appcheck-verified"), ["1"]);
+    h.stop().await;
+
     let h = start_with_consume_profile(false, "disabled", Strict).await;
     let (_, valid) = h.user("nested@example.com");
     assert_eq!(marker_sent(&h, &[("authorization", &valid)]).await, ["1"]);

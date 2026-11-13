@@ -209,6 +209,11 @@ impl BurstRule {
         }
     }
 
+    /// A new or reset queue starts full under the production rule. In the recording the queue
+    /// existed for at least 300 s before the tasks became due (the program sends its creates
+    /// first and the due time is 300 s after the program start), so at rate 1 its bucket had
+    /// long refilled to capacity whatever it started with; starting full reproduces the observed
+    /// 10 immediate starts. A queue's very first second after creation was not observed.
     fn initial_tokens(self, rate: f64) -> f64 {
         match (self, rate) {
             (Self::Production, 1.0 | 500.0) => self.capacity(rate),

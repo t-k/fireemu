@@ -223,64 +223,135 @@ mod tests {
         }
     }
 
+    type DeclarationCase<'a> = (&'a str, &'a [(&'a str, &'a str)], &'a [&'a str]);
+
     #[test]
     fn test_only_declaration_shapes_preserve_reference_guards() {
-        let cases: &[(&str, &[(&str, &str)], &[&str])] = &[
+        let cases: &[DeclarationCase<'_>] = &[
             (
                 "non-mod.rs parent",
-                &[("feature.rs", "#[cfg(test)]\nmod probe;"), ("feature/probe.rs", "")],
+                &[
+                    ("feature.rs", "#[cfg(test)]\nmod probe;"),
+                    ("feature/probe.rs", ""),
+                ],
                 &["feature/probe.rs"],
             ),
             (
                 "attributes after cfg with visibility and documentation",
-                &[("lib.rs", "#[cfg(test)]\n#[allow(dead_code)]\n/// Probe.\npub(crate) mod probe;"), ("probe.rs", "")],
+                &[
+                    (
+                        "lib.rs",
+                        "#[cfg(test)]\n#[allow(dead_code)]\n/// Probe.\npub(crate) mod probe;",
+                    ),
+                    ("probe.rs", ""),
+                ],
                 &["probe.rs"],
             ),
             (
                 "multiline attributes after cfg",
-                &[("lib.rs", "#[cfg(test)]\n#[allow(\n dead_code,\n)]\nmod probe;"), ("probe.rs", "")],
+                &[
+                    (
+                        "lib.rs",
+                        "#[cfg(test)]\n#[allow(\n dead_code,\n)]\nmod probe;",
+                    ),
+                    ("probe.rs", ""),
+                ],
                 &["probe.rs"],
             ),
             (
                 "inline test parent and nested inline module",
-                &[("feature.rs", "#[cfg(test)] mod suite { mod nested { mod probe; } }"), ("feature/suite/nested/probe.rs", "")],
+                &[
+                    (
+                        "feature.rs",
+                        "#[cfg(test)] mod suite { mod nested { mod probe; } }",
+                    ),
+                    ("feature/suite/nested/probe.rs", ""),
+                ],
                 &["feature/suite/nested/probe.rs"],
             ),
             (
                 "test declaration inside production inline parent",
-                &[("feature.rs", "mod suite { #[cfg(test)] mod probe; }"), ("feature/suite/probe.rs", "")],
+                &[
+                    ("feature.rs", "mod suite { #[cfg(test)] mod probe; }"),
+                    ("feature/suite/probe.rs", ""),
+                ],
                 &["feature/suite/probe.rs"],
             ),
             (
                 "external test parent propagates through mod.rs and file parents",
-                &[("feature.rs", "#[cfg(test)] mod suite;"), ("feature/suite/mod.rs", "mod probe;"), ("feature/suite/probe.rs", "mod leaf;"), ("feature/suite/probe/leaf.rs", "")],
-                &["feature/suite/mod.rs", "feature/suite/probe.rs", "feature/suite/probe/leaf.rs"],
+                &[
+                    ("feature.rs", "#[cfg(test)] mod suite;"),
+                    ("feature/suite/mod.rs", "mod probe;"),
+                    ("feature/suite/probe.rs", "mod leaf;"),
+                    ("feature/suite/probe/leaf.rs", ""),
+                ],
+                &[
+                    "feature/suite/mod.rs",
+                    "feature/suite/probe.rs",
+                    "feature/suite/probe/leaf.rs",
+                ],
             ),
             (
                 "match arm named path does not retain every candidate",
-                &[("lib.rs", "#[cfg(test)] mod probe; fn f() { match value { None => (), path => () } }"), ("probe.rs", "")],
+                &[
+                    (
+                        "lib.rs",
+                        "#[cfg(test)] mod probe; fn f() { match value { None => (), path => () } }",
+                    ),
+                    ("probe.rs", ""),
+                ],
                 &["probe.rs"],
             ),
+        ];
+        assert_declaration_cases(cases);
+    }
+
+    #[test]
+    fn test_only_declaration_duplicates_preserve_guards() {
+        let cases: &[DeclarationCase<'_>] = &[
             (
                 "non-test duplicate declaration",
-                &[("lib.rs", "#[cfg(test)] mod probe; mod probe;"), ("probe.rs", "")],
+                &[
+                    ("lib.rs", "#[cfg(test)] mod probe; mod probe;"),
+                    ("probe.rs", ""),
+                ],
                 &[],
             ),
             (
                 "non-test declaration in another source",
-                &[("lib.rs", "#[cfg(test)] mod probe;"), ("mod.rs", "mod probe;"), ("probe.rs", "")],
+                &[
+                    ("lib.rs", "#[cfg(test)] mod probe;"),
+                    ("mod.rs", "mod probe;"),
+                    ("probe.rs", ""),
+                ],
                 &[],
             ),
             (
                 "non-test declaration outside guarded inline parent",
-                &[("lib.rs", "#[cfg(test)] mod suite { mod probe; } mod suite { mod probe; }"), ("suite/probe.rs", "")],
+                &[
+                    (
+                        "lib.rs",
+                        "#[cfg(test)] mod suite { mod probe; } mod suite { mod probe; }",
+                    ),
+                    ("suite/probe.rs", ""),
+                ],
                 &[],
             ),
             (
                 "production inline parent remains bound",
-                &[("feature.rs", "mod suite { mod probe; }"), ("feature/suite/probe.rs", "")],
+                &[
+                    ("feature.rs", "mod suite { mod probe; }"),
+                    ("feature/suite/probe.rs", ""),
+                ],
                 &[],
             ),
+        ];
+        assert_declaration_cases(cases);
+    }
+
+    #[test]
+    fn test_only_declaration_references_preserve_guards() {
+        let cases: &[DeclarationCase<'_>] = &[
             (
                 "path attribute before cfg",
                 &[("lib.rs", "#[path = \"elsewhere.rs\"] #[cfg(test)] mod probe;"), ("probe.rs", "")],
@@ -362,6 +433,10 @@ mod tests {
                 &[],
             ),
         ];
+        assert_declaration_cases(cases);
+    }
+
+    fn assert_declaration_cases(cases: &[DeclarationCase<'_>]) {
         let fixture = Fixture::new();
         for &(case, files, excluded) in cases {
             let sources: BTreeMap<_, _> = files

@@ -18,6 +18,13 @@ import { AsyncButton, ConfirmButton, ErrorBanner, FetchState, Notice } from "../
 import FirestoreQuery from "../components/FirestoreQuery";
 import { decodeSplat, firestoreHref } from "../lib/hrefs";
 import { createPagedList } from "../lib/pagedList";
+import {
+  affectedFirestoreViews,
+  createLiveUpdateScheduler,
+  createRowReadGuard,
+  drainPendingRowUpdates,
+  parseFirestoreWatchEvent,
+} from "../lib/firestoreLiveUpdates";
 import { selectReloadDocument } from "../lib/reloadedDocument";
 import { createLeaveGuard, LeavePrompt } from "../lib/unsaved";
 import { settle, subscribe } from "../api/client";
@@ -438,6 +445,7 @@ const DocumentView: Component<{
   path: string;
   db: string;
   version: number;
+  subcollectionVersion: number;
   onDeleted: () => void;
 }> = (props) => {
   const navigate = useNavigate();
@@ -801,7 +809,7 @@ const DocumentView: Component<{
           root={props.root}
           parent={props.path}
           db={props.db}
-          version={props.version}
+          version={props.subcollectionVersion}
           testId="subcollection-list"
         />
       </div>
@@ -815,30 +823,109 @@ const CollectionView: Component<{
   path: string;
   db: string;
   version: number;
+  rowUpdates: string[];
   onDeleted: () => void;
 }> = (props) => {
   const navigate = useNavigate();
-  const list = createPagedList((token) =>
-    listDocuments(props.root, props.path, token).map((page) => ({
-      items: page.documents ?? [],
-      nextToken: page.nextPageToken,
-    })),
+  const rowReadGuard = createRowReadGuard();
+  const list = createPagedList(
+    (token) => {
+      // A membership read supersedes row reads issued before its first page.
+      if (!token) rowReadGuard.invalidate();
+      return listDocuments(props.root, props.path, token).map((page) => ({
+        items: page.documents ?? [],
+        nextToken: page.nextPageToken,
+      }));
+    },
+    (document) => document.name,
   );
   const [error, setError] = createSignal<string | null>(null);
   const [notice, setNotice] = createSignal<string | null>(null);
   const [adding, setAdding] = createSignal(false);
   const [deleting, setDeleting] = createSignal<number | null>(null);
+  const [pendingRowRevision, setPendingRowRevision] = createSignal(0);
+  const pendingRowUpdates = new Set<string>();
+  const load = async () => {
+    pendingRowUpdates.clear();
+    rowReadGuard.invalidate();
+    await list.load();
+  };
+  const refresh = async () => {
+    await list.refresh();
+  };
   createEffect(
     on(
       () => [props.root, props.path] as const,
-      () => void list.load(),
+      () => void load(),
     ),
   );
-  // A commit anywhere in the database re-reads what is shown, keeping the pages loaded so far.
+  createEffect(
+    on(
+      () => props.rowUpdates,
+      (ids) => {
+        ids.forEach((id) => pendingRowUpdates.add(id));
+        setPendingRowRevision((revision) => revision + 1);
+      },
+      { defer: true },
+    ),
+  );
+  createEffect(() => {
+    pendingRowRevision();
+    const prefix = `${props.root}/${props.path}/`;
+    const ready = drainPendingRowUpdates(
+      pendingRowUpdates,
+      new Set(list.items().map((document) => document.name.slice(prefix.length))),
+      list.loading() || list.refreshing(),
+      Boolean(list.nextToken()),
+    );
+    for (const id of ready) {
+      const ticket = rowReadGuard.issue(id);
+      void getDocument(props.root, `${props.path}/${id}`).match(
+        (document) => {
+          if (rowReadGuard.isCurrent(id, ticket)) {
+            const displayed = list.items().find((item) => item.name === document.name);
+            if (!displayed) return;
+            if (!displayed.updateTime || !document.updateTime) {
+              void refresh();
+              return;
+            }
+            // Compare whole seconds and nanoseconds separately, including differing precision.
+            const readSeconds = Date.parse(document.updateTime.replace(/\.\d+/, ""));
+            const displayedSeconds = Date.parse(displayed.updateTime.replace(/\.\d+/, ""));
+            if (!Number.isFinite(readSeconds) || !Number.isFinite(displayedSeconds)) {
+              void refresh();
+              return;
+            }
+            const readNanos = Number(
+              document.updateTime.match(/\.(\d+)/)?.[1]?.padEnd(9, "0") ?? 0,
+            );
+            const displayedNanos = Number(
+              displayed.updateTime.match(/\.(\d+)/)?.[1]?.padEnd(9, "0") ?? 0,
+            );
+            if (
+              !(
+                readSeconds > displayedSeconds ||
+                (readSeconds === displayedSeconds && readNanos >= displayedNanos)
+              )
+            )
+              return;
+            list.updateItem(document);
+            rowReadGuard.markApplied(id, ticket);
+          }
+        },
+        (readError) => {
+          if (!rowReadGuard.isCurrent(id, ticket)) return;
+          if (readError.status === 404) void refresh();
+          else list.reportStale(readError.message);
+        },
+      );
+    }
+  });
+  // Collection membership changes re-read loaded pages without dropping pagination progress.
   createEffect(
     on(
       () => props.version,
-      () => void list.refresh(),
+      () => void refresh(),
       { defer: true },
     ),
   );
@@ -905,7 +992,7 @@ const CollectionView: Component<{
         loading={list.loading()}
         error={list.error()}
         stale={list.stale()}
-        onRetry={list.refresh}
+        onRetry={refresh}
         empty={list.items().length === 0}
         emptyMessage={t("firestore.noDocuments")}
       >
@@ -995,39 +1082,84 @@ const Firestore: Component = () => {
   const db = () => (typeof search.db === "string" && search.db ? search.db : "(default)");
   const path = () => decodeSplat(params.path).join("/");
   const root = () => documentsRoot(appState.project(), db());
-  const [version, setVersion] = createSignal(0);
+  const [collectionVersion, setCollectionVersion] = createSignal(0);
+  const [documentVersion, setDocumentVersion] = createSignal(0);
+  const [subcollectionVersion, setSubcollectionVersion] = createSignal(0);
+  const [rowUpdates, setRowUpdates] = createSignal<string[]>([]);
   const [live, setLive] = createSignal(false);
 
-  // Live updates: any commit of the selected project / database refreshes the view
-  // (coalesced; the views re-read what they show).
+  // Live updates refresh only views touched by the commit paths.
   createEffect(() => {
     const project = appState.project();
     const database = db();
-    let timer: number | undefined;
-    const bump = () => {
-      if (timer === undefined) {
-        timer = window.setTimeout(() => {
-          timer = undefined;
-          setVersion((v) => v + 1);
-        }, 150);
-      }
+    const route = path();
+    let documentTimer: number | undefined;
+    let pending = {
+      collection: false,
+      subcollections: false,
+      full: false,
+      updatedRows: new Set<string>(),
     };
+    const scheduler = createLiveUpdateScheduler(() => {
+      const current = pending;
+      pending = {
+        collection: false,
+        subcollections: false,
+        full: false,
+        updatedRows: new Set<string>(),
+      };
+      if (current.collection || current.full) setCollectionVersion((v) => v + 1);
+      if (current.subcollections || current.full) setSubcollectionVersion((v) => v + 1);
+      if (current.updatedRows.size > 0) setRowUpdates([...current.updatedRows]);
+    }, 150);
     const stop = subscribe(
       `firestore/watch?project=${encodeURIComponent(project)}&database=${encodeURIComponent(database)}`,
       (event) => {
         if (event.event === "ready") {
           setLive(true);
         } else {
-          bump();
+          const parsed = parseFirestoreWatchEvent(event);
+          const affected = affectedFirestoreViews(parsed, root(), route);
+          // Keep the editor's authoritative reads on the original delayed invalidation path.
+          if (
+            isDocumentPath(route) &&
+            (parsed.kind === "commit" || affected.full) &&
+            documentTimer === undefined
+          ) {
+            documentTimer = window.setTimeout(() => {
+              documentTimer = undefined;
+              setDocumentVersion((v) => v + 1);
+            }, 150);
+          }
+          // A restore starts a new row epoch even inside an active coalescing window.
+          if (parsed.kind === "reset") {
+            pending.collection = false;
+            pending.subcollections = false;
+            pending.full = false;
+            pending.updatedRows.clear();
+            setCollectionVersion((v) => v + 1);
+            setSubcollectionVersion((v) => v + 1);
+            return;
+          }
+          pending.collection ||= affected.collection;
+          pending.subcollections ||= affected.subcollections;
+          pending.full ||= affected.full;
+          for (const id of affected.updatedRows) pending.updatedRows.add(id);
+          if (
+            affected.full ||
+            affected.collection ||
+            affected.subcollections ||
+            affected.updatedRows.length > 0
+          )
+            scheduler.notify();
         }
       },
       () => setLive(false),
     );
     onCleanup(() => {
       stop();
-      if (timer !== undefined) {
-        window.clearTimeout(timer);
-      }
+      scheduler.dispose();
+      if (documentTimer !== undefined) window.clearTimeout(documentTimer);
     });
   });
 
@@ -1090,7 +1222,7 @@ const Firestore: Component = () => {
       <div class="card">
         <Show
           when={path() !== ""}
-          fallback={<RootView root={root()} db={db()} version={version()} />}
+          fallback={<RootView root={root()} db={db()} version={collectionVersion()} />}
         >
           <Show
             when={isDocumentPath(path())}
@@ -1099,7 +1231,8 @@ const Firestore: Component = () => {
                 root={root()}
                 path={path()}
                 db={db()}
-                version={version()}
+                version={collectionVersion()}
+                rowUpdates={rowUpdates()}
                 onDeleted={up}
               />
             }
@@ -1108,7 +1241,8 @@ const Firestore: Component = () => {
               root={root()}
               path={path()}
               db={db()}
-              version={version()}
+              version={documentVersion()}
+              subcollectionVersion={subcollectionVersion()}
               onDeleted={up}
             />
           </Show>

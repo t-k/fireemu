@@ -1,7 +1,14 @@
 import { expect, test } from "@playwright/test";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { api, controlToken, gotoApp, resetSession } from "./helpers";
+import { PORTS } from "./global-setup";
 
 const DOCS = "firestore/v1/projects/demo-app/databases/(default)/documents";
+const sdkRequire = createRequire(
+  join(dirname(fileURLToPath(import.meta.url)), "../../tools/sdk-smoke/package.json"),
+);
 
 test.describe("Firestore data browser", () => {
   test.beforeEach(async ({ request }) => {
@@ -92,6 +99,65 @@ test.describe("Firestore data browser", () => {
     await expect(page.getByTestId("document-list")).toContainText("two");
     await api(request, "DELETE", `${DOCS}/live/one`);
     await expect(page.getByTestId("document-list")).not.toContainText("one");
+  });
+
+  test("updates only the changed row for SDK writes and ignores an unrelated collection", async ({
+    page,
+    request,
+  }) => {
+    const { initializeApp, deleteApp } = sdkRequire("firebase-admin/app");
+    const { getFirestore } = sdkRequire("firebase-admin/firestore");
+    const app = initializeApp({ projectId: "demo-app" }, "firestore-live-updates-e2e");
+    const db = getFirestore(app);
+    db.settings({ host: `127.0.0.1:${PORTS.firestore}`, ssl: false });
+    try {
+      await db.doc("live/one").set({ value: "before" });
+      await db.doc("live/two").set({ value: "unchanged" });
+      const configResponse = await request.get("/ui/api/config", {
+        headers: { authorization: `Bearer ${controlToken()}` },
+      });
+      expect(configResponse.ok()).toBe(true);
+      const runtimeConfig = await configResponse.json();
+      runtimeConfig.controlToken = controlToken();
+      await page.addInitScript((config) => {
+        window.__FIREEMU__ = config;
+      }, runtimeConfig);
+      await gotoApp(page, "/firestore/live");
+      const list = page.getByTestId("document-list");
+      await expect(page.getByTestId("live-badge")).toHaveText("Live");
+      await expect(list).toContainText("one");
+      await expect(list).toContainText("two");
+      const unchangedRow = list.locator("tbody tr").filter({ hasText: "two" });
+      const before = await unchangedRow.elementHandle();
+      expect(before).not.toBeNull();
+      const reads: string[] = [];
+      page.on("request", (req) => {
+        if (
+          req.method() === "GET" &&
+          req.url().includes("/ui/api/firestore/v1/") &&
+          req.url().includes("/documents/")
+        )
+          reads.push(req.url());
+      });
+
+      await db.doc("live/one").update({ value: "after" });
+      await expect(list).toContainText("after");
+      const after = await list.locator("tbody tr").filter({ hasText: "two" }).elementHandle();
+      expect(after).not.toBeNull();
+      expect(await before!.evaluate((original, current) => original === current, after)).toBe(true);
+      const changedRowReads = () => reads.filter((url) => url.endsWith("/documents/live/one"));
+      await expect.poll(() => changedRowReads().length).toBe(1);
+      await page.waitForTimeout(300);
+      expect(changedRowReads()).toHaveLength(1);
+      expect(reads.some((url) => url.endsWith("/documents/live/two"))).toBe(false);
+
+      const countBeforeUnrelated = reads.length;
+      await db.doc("unrelated/new").set({ value: "elsewhere" });
+      await page.waitForTimeout(300);
+      expect(reads).toHaveLength(countBeforeUnrelated);
+    } finally {
+      await deleteApp(app);
+    }
   });
 
   test("preserves wire values and safely masks literal field names", async ({ page, request }) => {

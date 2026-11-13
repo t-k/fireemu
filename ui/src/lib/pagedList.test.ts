@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { errAsync, ResultAsync } from "neverthrow";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { errAsync, okAsync, ResultAsync } from "neverthrow";
 import { createRoot } from "solid-js";
 import { createPagedList, type Page } from "./pagedList";
 import type { ApiError } from "../api/client";
@@ -23,6 +23,96 @@ const controlled = () => {
 };
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
+
+describe("serialized membership refreshes", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it.each([false, true])(
+    "coalesces pending refreshes and applies the completed result (failure: %s)",
+    async (fails) => {
+      vi.useFakeTimers();
+      await createRoot(async (dispose) => {
+        const { calls, fetchPage } = controlled();
+        const list = createPagedList(fetchPage);
+        const initial = list.load();
+        calls[0]!.d.resolve({ items: ["initial"] });
+        await initial;
+        const first = list.refresh();
+        const second = list.refresh();
+        const third = list.refresh();
+        expect(list.loading()).toBe(false);
+        expect(list.refreshing()).toBe(true);
+        expect(calls).toHaveLength(2);
+        if (fails) calls[1]!.d.reject({ status: 500, message: "refresh failed" });
+        else calls[1]!.d.resolve({ items: ["first"] });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(list.items()).toEqual([fails ? "initial" : "first"]);
+        expect(list.stale()).toBe(fails ? "refresh failed" : null);
+        expect(calls).toHaveLength(3);
+        expect(list.refreshing()).toBe(true);
+        calls[2]!.d.resolve({ items: ["follow-up"] });
+        await Promise.all([first, second, third]);
+        expect(list.items()).toEqual(["follow-up"]);
+        expect(list.stale()).toBeNull();
+        expect(list.refreshing()).toBe(false);
+        expect(calls).toHaveLength(3);
+        dispose();
+      });
+    },
+  );
+
+  it("queues one refresh behind a load without dropping the load result", async () => {
+    vi.useFakeTimers();
+    await createRoot(async (dispose) => {
+      const { calls, fetchPage } = controlled();
+      const list = createPagedList(fetchPage);
+      const initial = list.load();
+      const refresh = list.refresh();
+      const repeated = list.refresh();
+      expect(calls).toHaveLength(1);
+      calls[0]!.d.resolve({ items: ["initial"] });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(list.items()).toEqual(["initial"]);
+      expect(list.loading()).toBe(false);
+      expect(list.refreshing()).toBe(true);
+      expect(calls).toHaveLength(2);
+      calls[1]!.d.resolve({ items: ["latest"] });
+      await Promise.all([initial, refresh, repeated]);
+      expect(list.items()).toEqual(["latest"]);
+      expect(list.refreshing()).toBe(false);
+      expect(calls).toHaveLength(2);
+      dispose();
+    });
+  });
+
+  it("discards the old target's pending follow-up without releasing the new target's refresh", async () => {
+    vi.useFakeTimers();
+    await createRoot(async (dispose) => {
+      const { calls, fetchPage } = controlled();
+      const list = createPagedList(fetchPage);
+      const initial = list.load();
+      calls[0]!.d.resolve({ items: ["old"] });
+      await initial;
+      const oldRefresh = list.refresh();
+      const oldPending = list.refresh();
+      const next = list.load();
+      calls[2]!.d.resolve({ items: ["new"] });
+      await next;
+      const newRefresh = list.refresh();
+      calls[1]!.d.resolve({ items: ["obsolete"] });
+      await Promise.all([oldRefresh, oldPending]);
+      expect(list.items()).toEqual(["new"]);
+      expect(list.refreshing()).toBe(true);
+      expect(calls).toHaveLength(4);
+      calls[3]!.d.resolve({ items: ["new refreshed"] });
+      await newRefresh;
+      expect(list.items()).toEqual(["new refreshed"]);
+      expect(list.refreshing()).toBe(false);
+      expect(calls).toHaveLength(4);
+      dispose();
+    });
+  });
+});
 
 describe("createPagedList", () => {
   it("drops the answer of a target the reader has left", async () => {
@@ -319,6 +409,245 @@ describe("createPagedList, survivors of the first mutation run", () => {
       await again;
       expect(list.items()).toEqual(["1", "2", "3"]);
       expect(list.nextToken()).toBeUndefined();
+      dispose();
+    });
+  });
+});
+
+describe("createPagedList keyed rows", () => {
+  it("keeps unchanged row objects while replacing only the updated key", async () => {
+    await createRoot(async (dispose) => {
+      const pages = [
+        {
+          items: [
+            { name: "a", value: 1 },
+            { name: "b", value: 1 },
+          ],
+        },
+        {
+          items: [
+            { name: "a", value: 2 },
+            { name: "b", value: 1 },
+          ],
+        },
+      ];
+      const list = createPagedList(
+        () => okAsync(pages.shift()!),
+        (item) => item.name,
+      );
+      await list.load();
+      const unchanged = list.items()[1];
+      await list.refresh();
+      expect(list.items()[0]).not.toBe(unchanged);
+      expect(list.items()[1]).toBe(unchanged);
+      expect(list.items()[0]?.value).toBe(2);
+      dispose();
+    });
+  });
+});
+
+describe("paged row update races", () => {
+  it("keeps an incoming non-JSON value when no previous item exists", async () => {
+    await createRoot(async (dispose) => {
+      const item = () => 1;
+      const list = createPagedList(
+        () => okAsync({ items: [item] }),
+        () => "key",
+      );
+      await list.load();
+      expect(list.items()).toEqual([item]);
+      expect(list.items()[0]).toBe(item);
+      dispose();
+    });
+  });
+
+  it("prunes an absent update on refresh before a concurrent page returns", async () => {
+    await createRoot(async (dispose) => {
+      const { calls, fetchPage } = controlled();
+      const list = createPagedList(fetchPage, (item) => item.split(":")[0]!);
+      const initial = list.load();
+      calls[0]!.d.resolve({ items: ["a:1"], nextToken: "next" });
+      await initial;
+      const refresh = list.refresh();
+      const more = list.more();
+      expect(list.updateItem("b:2")).toBe(false);
+      calls[1]!.d.resolve({ items: ["a:1"], nextToken: "next" });
+      await refresh;
+      calls[2]!.d.resolve({ items: ["b:1"] });
+      await more;
+      expect(list.items()).toEqual(["a:1", "b:1"]);
+      dispose();
+    });
+  });
+
+  it("retains a live update across a concurrent refresh and page request", async () => {
+    await createRoot(async (dispose) => {
+      const { calls, fetchPage } = controlled();
+      const list = createPagedList(fetchPage, (item) => item.split(":")[0]!);
+      const initial = list.load();
+      calls[0]!.d.resolve({ items: ["a:1"], nextToken: "next" });
+      await initial;
+      const refresh = list.refresh();
+      const more = list.more();
+      expect(list.updateItem("b:2")).toBe(false);
+      calls[1]!.d.resolve({ items: ["b:1"], nextToken: "next" });
+      await refresh;
+      calls[2]!.d.resolve({ items: ["b:1"] });
+      await more;
+      expect(list.items()).toEqual(["b:2", "b:2"]);
+      dispose();
+    });
+  });
+
+  it("returns false without a key function and reports errors for an empty list", async () => {
+    await createRoot(async (dispose) => {
+      const list = createPagedList(() => okAsync({ items: ["one"] }));
+      list.reportStale("empty failure");
+      expect(list.error()).toBe("empty failure");
+      expect(list.stale()).toBeNull();
+      await list.load();
+      expect(list.updateItem("two")).toBe(false);
+      expect(list.items()).toEqual(["one"]);
+      list.reportStale("row failure");
+      expect(list.error()).toBeNull();
+      expect(list.stale()).toBe("row failure");
+      dispose();
+    });
+  });
+
+  it("accepts a newer page after an earlier row update and preserves unchanged rows", async () => {
+    await createRoot(async (dispose) => {
+      const pages = [
+        {
+          items: [
+            { name: "a", value: 1 },
+            { name: "b", value: 1 },
+          ],
+        },
+        {
+          items: [
+            { name: "a", value: 3 },
+            { name: "b", value: 1 },
+            { name: "c", value: 1 },
+          ],
+        },
+      ];
+      const list = createPagedList(
+        () => okAsync(pages.shift()!),
+        (item) => item.name,
+      );
+      await list.load();
+      const unchanged = list.items()[1];
+      expect(list.updateItem({ name: "a", value: 2 })).toBe(true);
+      expect(list.items()).toEqual([
+        { name: "a", value: 2 },
+        { name: "b", value: 1 },
+      ]);
+      await list.refresh();
+      expect(list.items()).toEqual([
+        { name: "a", value: 3 },
+        { name: "b", value: 1 },
+        { name: "c", value: 1 },
+      ]);
+      expect(list.items()[1]).toBe(unchanged);
+      dispose();
+    });
+  });
+
+  it("prunes an absent queued update before an older refresh returns", async () => {
+    await createRoot(async (dispose) => {
+      const { calls, fetchPage } = controlled();
+      const list = createPagedList(fetchPage, (item) => item.split(":")[0]!);
+      const initial = list.load();
+      calls[0]!.d.resolve({ items: ["a:1"], nextToken: "next" });
+      await initial;
+      const refresh = list.refresh();
+      expect(list.updateItem("b:2")).toBe(false);
+      const more = list.more();
+      calls[2]!.d.resolve({ items: ["c:1"] });
+      await more;
+      expect(list.items()).toEqual(["a:1", "c:1"]);
+      calls[1]!.d.resolve({ items: ["b:1"] });
+      await refresh;
+      expect(list.items()).toEqual(["b:1"]);
+      dispose();
+    });
+  });
+  it("keeps an update that arrives while the initial page is loading", async () => {
+    await createRoot(async (dispose) => {
+      type Row = { name: string; value: number };
+      const calls: { resolve: (page: Page<Row>) => void }[] = [];
+      const fetchPage = () =>
+        ResultAsync.fromPromise(
+          new Promise<Page<Row>>((resolve) => calls.push({ resolve })),
+          (e) => e as ApiError,
+        );
+      const list = createPagedList(fetchPage, (item) => item.name);
+      const initial = list.load();
+      expect(list.loading()).toBe(true);
+      expect(list.updateItem({ name: "one", value: 2 })).toBe(false);
+      calls[0]!.resolve({ items: [{ name: "one", value: 1 }] });
+      await initial;
+      expect(list.items()).toEqual([{ name: "one", value: 2 }]);
+      dispose();
+    });
+  });
+
+  it("keeps a row update that finishes while a stale refresh is still pending", async () => {
+    await createRoot(async (dispose) => {
+      type Row = { name: string; value: number };
+      const calls: { resolve: (page: Page<Row>) => void }[] = [];
+      const fetchPage = () =>
+        ResultAsync.fromPromise(
+          new Promise<Page<Row>>((resolve) => calls.push({ resolve })),
+          (e) => e as ApiError,
+        );
+      const list = createPagedList(fetchPage, (item) => item.name);
+      const initial = list.load();
+      calls[0]!.resolve({ items: [{ name: "one", value: 1 }] });
+      await initial;
+      const staleRefresh = list.refresh();
+      expect(list.updateItem({ name: "one", value: 2 })).toBe(true);
+      calls[1]!.resolve({ items: [{ name: "one", value: 1 }] });
+      await staleRefresh;
+      expect(list.items()).toEqual([{ name: "one", value: 2 }]);
+      dispose();
+    });
+  });
+
+  it("applies a row update queued before its next page arrives", async () => {
+    await createRoot(async (dispose) => {
+      type Row = { name: string; value: number };
+      const calls: { token: string | undefined; resolve: (page: Page<Row>) => void }[] = [];
+      const fetchPage = (token: string | undefined) =>
+        ResultAsync.fromPromise(
+          new Promise<Page<Row>>((resolve) => calls.push({ token, resolve })),
+          (e) => e as ApiError,
+        );
+      const list = createPagedList(fetchPage, (item) => item.name);
+      const initial = list.load();
+      calls[0]!.resolve({ items: [{ name: "one", value: 1 }], nextToken: "next" });
+      await initial;
+      const more = list.more();
+      expect(calls[1]!.token).toBe("next");
+      expect(list.updateItem({ name: "two", value: 2 })).toBe(false);
+      calls[1]!.resolve({ items: [{ name: "two", value: 1 }] });
+      await more;
+      expect(list.items()).toEqual([
+        { name: "one", value: 1 },
+        { name: "two", value: 2 },
+      ]);
+      dispose();
+    });
+  });
+
+  it("reports a row read failure as stale while keeping the last good rows", async () => {
+    await createRoot(async (dispose) => {
+      const list = createPagedList(() => okAsync({ items: ["one"] }));
+      await list.load();
+      list.reportStale("row read failed");
+      expect(list.items()).toEqual(["one"]);
+      expect(list.stale()).toBe("row read failed");
       dispose();
     });
   });

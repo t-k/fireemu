@@ -486,14 +486,16 @@ async fn strict_runtime_uses_the_recorded_burst_at_one_dispatch_per_second() {
             NameReuse::Immediate,
             600,
             retry(1, 500),
-            false,
+            true,
             false,
         )
         .await;
         let (addr, server) = tasks_listener(&h).await;
-        let start = tokio::time::Instant::now();
+        let due = LogicalInstant::from_unix_seconds(1_788_004_920)
+            .to_rfc3339()
+            .unwrap();
         for _ in 0..12 {
-            let body = body_of(&json!({})).to_string();
+            let body = body_of(&json!({"scheduleTime": due})).to_string();
             let (status, _, text) = wire(
                 addr,
                 "POST",
@@ -503,18 +505,36 @@ async fn strict_runtime_uses_the_recorded_burst_at_one_dispatch_per_second() {
             .await;
             assert_eq!(status, 200, "{text}");
         }
-        tokio::time::sleep_until(start + Duration::from_millis(1500)).await;
-        let deliveries = std::fs::read_to_string(&h.probe)
-            .unwrap_or_default()
-            .lines()
-            .count();
-        if name == "strict-burst" {
-            assert!(
-                (10..12).contains(&deliveries),
-                "strict deliveries: {deliveries}"
+        assert_eq!(h.runtime.run_tasks_now("taskB", None), 12);
+        let deliveries = || {
+            std::fs::read_to_string(&h.probe)
+                .unwrap_or_default()
+                .lines()
+                .count()
+        };
+        let initial = if name == "strict-burst" { 10 } else { 0 };
+        for seconds in 0..=2 {
+            if seconds > 0 {
+                h.clock
+                    .lock()
+                    .unwrap()
+                    .advance(fireemu_core_types::time::LogicalDuration::from_seconds(1))
+                    .unwrap();
+            }
+            let expected = initial + seconds;
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while deliveries() < expected {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap_or_else(|_| panic!("{name} at {seconds}s: {} deliveries", deliveries()));
+            assert_eq!(deliveries(), expected, "{name} at {seconds}s");
+            assert_eq!(
+                h.runtime.pending_tasks().len(),
+                12 - expected,
+                "{name} at {seconds}s"
             );
-        } else {
-            assert!(deliveries <= 2, "emulator deliveries: {deliveries}");
         }
         server.abort();
         h.stop().await;

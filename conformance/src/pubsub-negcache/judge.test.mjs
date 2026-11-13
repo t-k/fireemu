@@ -1018,3 +1018,17 @@ test("v5 pooling requires records and v5 answers from both runs", () => {
   assert.doesNotThrow(() => combineRunsFull(v5, base));
   assert.doesNotThrow(() => combineRunsFull(base, v5));
 });
+
+test("two runs that both forward every E200 probe combine to exempt at every age (pooled repeats count C0d once per run)", () => {
+  const forwarded = structuredClone(v5Base);
+  for (const r of forwarded.filter((r) => r.id.startsWith("E200")))
+    Object.assign(probeOf(r), OK, { headersMs: 300 });
+  const single = judgeRunV5(forwarded);
+  for (const age of [4000, 7000, 13000])
+    assert.equal(single.answers.recent200Exempts[age], "exempt");
+  const combined = combineRuns(
+    { ...single, records: forwarded },
+    { ...single, records: forwarded },
+  );
+  for (const age of [4000, 7000, 13000]) assert.equal(combined.recent200Exempts[age], "exempt");
+});

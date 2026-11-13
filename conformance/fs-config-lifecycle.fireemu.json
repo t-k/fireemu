@@ -3,6 +3,7 @@
   "profile": "strict",
   "productionExact": true,
   "projects": { "unknownProjects": "refuse" },
+  "storage": { "undeclaredBuckets": "create" },
   "firestore": {
     "edition": "standard",
     "apiMode": "native",

@@ -102,7 +102,7 @@ pub(crate) enum RetryToken {
 #[derive(Debug)]
 struct QueuedTask {
     id: u64,
-    task: Task,
+    task: Arc<Task>,
     retry: TaskRetryConfig,
     retained_bytes: usize,
     name: Arc<str>,
@@ -123,6 +123,12 @@ struct ActiveTask {
     phase: ActivePhase,
     retained_bytes: usize,
     name: Arc<str>,
+    task: Arc<Task>,
+    schedule_time: Option<String>,
+    dispatch_count: u32,
+    response_count: u32,
+    first_attempt: Option<TaskAttempt>,
+    last_attempt: Option<TaskAttempt>,
 }
 
 #[derive(Debug)]
@@ -324,8 +330,26 @@ pub(crate) struct Dispatch {
     pub region: String,
     pub function: String,
     pub queue_key: String,
-    pub task: Task,
+    pub task: Arc<Task>,
     pub retry: TaskRetryConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TaskAttempt {
+    pub schedule_time: Option<String>,
+    pub dispatch_time: String,
+    pub response_time: Option<String>,
+    pub response_status: Option<u16>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct TaskObservation {
+    pub task: Arc<Task>,
+    pub schedule_time: Option<String>,
+    pub dispatch_count: u32,
+    pub response_count: u32,
+    pub first_attempt: Option<TaskAttempt>,
+    pub last_attempt: Option<TaskAttempt>,
 }
 
 /// What the scheduler knows about a task name of a queue.
@@ -550,7 +574,7 @@ impl TaskScheduler {
         state.names.insert(name.clone());
         state.pending.push_back(QueuedTask {
             id: self.next_id,
-            task,
+            task: Arc::new(task),
             retry,
             retained_bytes,
             name,
@@ -626,6 +650,12 @@ impl TaskScheduler {
                         phase: ActivePhase::Dispatch,
                         retained_bytes: queued.retained_bytes,
                         name: queued.name,
+                        task: queued.task.clone(),
+                        schedule_time: queued.task.schedule_time.clone(),
+                        dispatch_count: 0,
+                        response_count: 0,
+                        first_attempt: None,
+                        last_attempt: None,
                     },
                 );
                 dispatches.push(Dispatch {
@@ -684,6 +714,97 @@ impl TaskScheduler {
                 })
             })
             .collect()
+    }
+
+    /// Returns a task while it is pending, dispatching, or waiting for retry.
+    pub(crate) fn get_task(&self, queue: &str, name: &str) -> Option<TaskObservation> {
+        let state = self.queues.get(queue)?;
+        state
+            .pending
+            .iter()
+            .find(|queued| queued.task.name == name)
+            .map(|queued| TaskObservation {
+                task: queued.task.clone(),
+                schedule_time: queued.task.schedule_time.clone(),
+                dispatch_count: 0,
+                response_count: 0,
+                first_attempt: None,
+                last_attempt: None,
+            })
+            .or_else(|| {
+                state
+                    .active
+                    .values()
+                    .find(|active| active.name.as_ref() == name)
+                    .map(|active| TaskObservation {
+                        task: active.task.clone(),
+                        schedule_time: active.schedule_time.clone(),
+                        dispatch_count: active.dispatch_count,
+                        response_count: active.response_count,
+                        first_attempt: active.first_attempt.clone(),
+                        last_attempt: active.last_attempt.clone(),
+                    })
+            })
+    }
+
+    pub(crate) fn record_dispatch_attempt(&mut self, dispatch: &Dispatch, dispatch_time: String) {
+        if dispatch.generation != self.generation {
+            return;
+        }
+        let Some(active) = self
+            .queues
+            .get_mut(&dispatch.queue)
+            .and_then(|queue| queue.active.get_mut(&dispatch.id))
+        else {
+            return;
+        };
+        active.dispatch_count = active.dispatch_count.saturating_add(1);
+        let attempt = TaskAttempt {
+            schedule_time: active.schedule_time.clone(),
+            dispatch_time,
+            response_time: None,
+            response_status: None,
+        };
+        if active.first_attempt.is_none() {
+            active.first_attempt = Some(attempt.clone());
+        }
+        active.last_attempt = Some(attempt);
+    }
+
+    pub(crate) fn record_attempt_response(
+        &mut self,
+        dispatch: &Dispatch,
+        response_time: String,
+        status: u16,
+    ) {
+        if dispatch.generation != self.generation {
+            return;
+        }
+        let Some(active) = self
+            .queues
+            .get_mut(&dispatch.queue)
+            .and_then(|queue| queue.active.get_mut(&dispatch.id))
+        else {
+            return;
+        };
+        active.response_count = active.response_count.saturating_add(1);
+        if let Some(attempt) = active.last_attempt.as_mut() {
+            attempt.response_time = Some(response_time);
+            attempt.response_status = Some(status);
+        }
+    }
+
+    pub(crate) fn set_retry_schedule(&mut self, dispatch: &Dispatch, schedule_time: String) {
+        if dispatch.generation != self.generation {
+            return;
+        }
+        if let Some(active) = self
+            .queues
+            .get_mut(&dispatch.queue)
+            .and_then(|queue| queue.active.get_mut(&dispatch.id))
+        {
+            active.schedule_time = Some(schedule_time);
+        }
     }
 
     /// Releases pending tasks of `queue` from waiting for their `scheduleTime`: the one named
@@ -1028,9 +1149,13 @@ mod tests {
             url: "http://127.0.0.1/function".to_owned(),
             headers: BTreeMap::new(),
             body: json!({"data": {"id": name}}),
+            body_json_error: None,
             raw_body: Vec::new(),
+            create_time: None,
             schedule_time: None,
             dispatch_deadline_seconds: 60,
+            dispatch_deadline: "60s".to_owned(),
+            oauth_token: None,
             oidc: None,
         }
     }

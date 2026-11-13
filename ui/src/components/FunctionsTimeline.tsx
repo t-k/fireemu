@@ -44,7 +44,14 @@ export const FunctionsTimeline: Component<{
   createEffect(
     on(
       () => [props.linkedEvent, props.linkedFunction],
-      () => setSelection(""),
+      ([event, fn], previous) => {
+        if (
+          (event && fn) ||
+          (previous && selection() === JSON.stringify([props.project, previous[0], previous[1]]))
+        ) {
+          setSelection("");
+        }
+      },
       { defer: true },
     ),
   );

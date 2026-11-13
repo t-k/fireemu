@@ -695,6 +695,14 @@ const Functions: Component = () => {
   const [logText, setLogText] = createSignal("");
   const [fnFilter, setFnFilter] = createSignal("");
   const [filterSearch, setFilterSearch] = useSearchParams();
+  if (
+    typeof filterSearch.event === "string" &&
+    typeof filterSearch.eventFunction === "string" &&
+    typeof filterSearch.eventSession === "string" &&
+    typeof filterSearch.eventProject === "string"
+  ) {
+    appState.setSession(filterSearch.eventSession);
+  }
   const [includeSearch, setIncludeSearch] = createSignal(false);
   let filterScope: string | undefined;
   const localSearchMemory = new Map<string, string>();

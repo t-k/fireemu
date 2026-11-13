@@ -520,12 +520,13 @@ it("restores an event link, reports eviction, and clears it on session change", 
     "",
     "/functions?event=7&eventFunction=consume&eventSession=owner&eventProject=demo-owner",
   );
-  appState.setSession("owner");
+  appState.setSession("default");
   const ui = render(() => (
     <Router>
       <Route path="*" component={Functions} />
     </Router>
   ));
+  expect(appState.session()).toBe("owner");
   await waitFor(() =>
     expect(ui.getByTestId("timeline-detail").textContent).toContain(
       t("functions.timelineMissingSelection"),
@@ -548,4 +549,33 @@ it("restores an event link, reports eviction, and clears it on session change", 
   );
   appState.setSession("other");
   await waitFor(() => expect(ui.queryByTestId("timeline-detail")).toBeNull());
+});
+
+it("opens a synthetic invocation after selecting a linked event", async () => {
+  const ui = render(() => (
+    <Router>
+      <Route path="*" component={Functions} />
+    </Router>
+  ));
+  await waitFor(() => expect(ui.getByTestId("timeline-owner")).toBeTruthy());
+  mocks.event?.({
+    kind: "snapshot",
+    project: "demo-owner",
+    generation: 1,
+    logs: [],
+    invocations: [
+      { eventId: "7", function: "consume", attempt: 1, outcome: "success" },
+      { eventId: "0", function: "synthetic", attempt: 1, outcome: "success" },
+    ],
+    logRecords: [],
+    logScopes: [],
+  });
+  fireEvent.click(ui.getByRole("link", { name: /Select event 7/ }));
+  await waitFor(() =>
+    expect(ui.getByTestId("timeline-detail").textContent).toContain("7 / consume"),
+  );
+  fireEvent.click(ui.getByRole("button", { name: "0" }));
+  await waitFor(() =>
+    expect(ui.getByTestId("timeline-detail").textContent).toContain("0 / synthetic"),
+  );
 });

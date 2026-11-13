@@ -46,12 +46,10 @@
     "crates/fireemu-adapter-functions/src/tasks.rs",
     "crates/fireemu-adapter-functions/src/tasks_production.rs",
     "crates/fireemu-adapter-functions/src/zone.rs",
-    "crates/fireemu-adapter-functions/tests/fake_runner.py",
     "crates/fireemu-adapter-grpc/Cargo.toml",
     "crates/fireemu-adapter-grpc/src/admin/catalog.rs",
     "crates/fireemu-adapter-grpc/src/admin/fields.rs",
     "crates/fireemu-adapter-grpc/src/admin/grpc.rs",
-    "crates/fireemu-adapter-grpc/src/admin/grpc_tests.rs",
     "crates/fireemu-adapter-grpc/src/admin/index_rest.rs",
     "crates/fireemu-adapter-grpc/src/admin/indexes.rs",
     "crates/fireemu-adapter-grpc/src/admin/locations.json",
@@ -60,7 +58,6 @@
     "crates/fireemu-adapter-grpc/src/admin/mod.rs",
     "crates/fireemu-adapter-grpc/src/admin/operations.rs",
     "crates/fireemu-adapter-grpc/src/admin/rest.rs",
-    "crates/fireemu-adapter-grpc/src/admin/rest_tests.rs",
     "crates/fireemu-adapter-grpc/src/bloom.rs",
     "crates/fireemu-adapter-grpc/src/decode.rs",
     "crates/fireemu-adapter-grpc/src/encode.rs",
@@ -72,10 +69,7 @@
     "crates/fireemu-adapter-grpc/src/pipeline.rs",
     "crates/fireemu-adapter-grpc/src/pipeline_regex.rs",
     "crates/fireemu-adapter-grpc/src/pipeline_regex/analysis.rs",
-    "crates/fireemu-adapter-grpc/src/pipeline_regex/matrix.rs",
     "crates/fireemu-adapter-grpc/src/pipeline_regex/production_rows.json",
-    "crates/fireemu-adapter-grpc/src/pipeline_regex/replay.rs",
-    "crates/fireemu-adapter-grpc/src/pipeline_regex/rewrite_tests.rs",
     "crates/fireemu-adapter-grpc/src/pipeline_regex/rewritten_golden.json",
     "crates/fireemu-adapter-grpc/src/pipeline_shape.rs",
     "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs",
@@ -83,8 +77,6 @@
     "crates/fireemu-adapter-grpc/src/production_status.rs",
     "crates/fireemu-adapter-grpc/src/query_messages.rs",
     "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs",
-    "crates/fireemu-adapter-grpc/src/rest/admin_fields_tests.rs",
-    "crates/fireemu-adapter-grpc/src/rest/admin_inventory_tests.rs",
     "crates/fireemu-adapter-grpc/src/rest/coverage.rs",
     "crates/fireemu-adapter-grpc/src/rest/document_response.rs",
     "crates/fireemu-adapter-grpc/src/rest/json.rs",
@@ -93,7 +85,6 @@
     "crates/fireemu-adapter-grpc/src/rest/pipeline_json.rs",
     "crates/fireemu-adapter-grpc/src/rest/pipeline_json/tests.rs",
     "crates/fireemu-adapter-grpc/src/rest/pipeline_selector_tests.rs",
-    "crates/fireemu-adapter-grpc/src/rest/transaction_tests.rs",
     "crates/fireemu-adapter-grpc/src/rest/transcode.rs",
     "crates/fireemu-adapter-grpc/src/rules.rs",
     "crates/fireemu-adapter-grpc/src/serve.rs",
@@ -104,7 +95,6 @@
     "crates/fireemu-adapter-grpc/src/service/tests/pipeline_selector_tests.rs",
     "crates/fireemu-adapter-grpc/src/service/tests/query_transaction_tests.rs",
     "crates/fireemu-adapter-grpc/src/streams.rs",
-    "crates/fireemu-adapter-grpc/src/streams/frame_identity_tests.rs",
     "crates/fireemu-adapter-grpc/src/text_search.rs",
     "crates/fireemu-adapter-grpc/src/webchannel.rs",
     "crates/fireemu-adapter-support/Cargo.toml",
@@ -159,16 +149,12 @@
     "crates/fireemu-core-firestore/src/path.rs",
     "crates/fireemu-core-firestore/src/pipeline.rs",
     "crates/fireemu-core-firestore/src/pipeline_exec.rs",
-    "crates/fireemu-core-firestore/src/pipeline_exec/compare_tests.rs",
     "crates/fireemu-core-firestore/src/pipeline_exec/document_argument.generated.tsv",
     "crates/fireemu-core-firestore/src/pipeline_exec/logic.rs",
     "crates/fireemu-core-firestore/src/pipeline_exec/official_compare.json",
-    "crates/fireemu-core-firestore/src/pipeline_exec/official_compare.rs",
     "crates/fireemu-core-firestore/src/pipeline_exec/regex_port.generated.tsv",
     "crates/fireemu-core-firestore/src/pipeline_exec/sample.generated.tsv",
     "crates/fireemu-core-firestore/src/pipeline_exec/scalar.rs",
-    "crates/fireemu-core-firestore/src/pipeline_exec/scalar_tests.rs",
-    "crates/fireemu-core-firestore/src/pipeline_exec/stage_tests.rs",
     "crates/fireemu-core-firestore/src/pipeline_exec/tests.rs",
     "crates/fireemu-core-firestore/src/pipeline_exec/vector_scalars.generated.tsv",
     "crates/fireemu-core-firestore/src/query.rs",
@@ -228,7 +214,6 @@
     "crates/fireemu-core-storage/src/name.rs",
     "crates/fireemu-core-storage/src/spill.rs",
     "crates/fireemu-core-storage/src/store.rs",
-    "crates/fireemu-core-storage/src/store/spill_tests.rs",
     "crates/fireemu-core-types/Cargo.toml",
     "crates/fireemu-core-types/src/admission.rs",
     "crates/fireemu-core-types/src/codec.rs",
@@ -273,8 +258,7 @@
     "verification/quint/src/model.rs",
     "verification/quint/src/process.rs",
     "verification/quint/src/publication.rs",
-    "verification/quint/src/server.rs",
-    "verification/quint/tests/limit_rejection_connect.rs"
+    "verification/quint/src/server.rs"
   ],
   "digests": {
     ".github/workflows/quint.yml": {
@@ -355,7 +339,7 @@
     },
     "crates/fireemu-adapter-functions/src/runtime.rs": {
       "kind": "sha256",
-      "value": "c1d7ef8c94cf8bf5e9babd5cec9494f8eaad3372a132a705f961f7bb04262e8a"
+      "value": "88ff97058959c05925bbd5173bcd0ec17283df4cf6579e35db4c72bf4e3eca73"
     },
     "crates/fireemu-adapter-functions/src/task_scheduler.rs": {
       "kind": "sha256",
@@ -373,10 +357,6 @@
       "kind": "sha256",
       "value": "ae132893d5b072cc587d56b86327ca803a81f5adda28a1625f53239afeafabcb"
     },
-    "crates/fireemu-adapter-functions/tests/fake_runner.py": {
-      "kind": "sha256",
-      "value": "330e03bc3ba728fb5ddf725045acc880d0caea5b204a21a2076584d699b528d8"
-    },
     "crates/fireemu-adapter-grpc/Cargo.toml": {
       "kind": "sha256",
       "value": "7c9821965ed4e08503a667b0bfe23a7e14975153ef1775672f55b01c41361f14"
@@ -392,10 +372,6 @@
     "crates/fireemu-adapter-grpc/src/admin/grpc.rs": {
       "kind": "sha256",
       "value": "7059d1cc4748c95bc91d5f48586e03cf88aa21836d0bdd0aa148518be542b7f8"
-    },
-    "crates/fireemu-adapter-grpc/src/admin/grpc_tests.rs": {
-      "kind": "sha256",
-      "value": "7c3159bca577e43bf73bf0acb00cf3fef4d97cfc3ea31e07611a974b22a933cb"
     },
     "crates/fireemu-adapter-grpc/src/admin/index_rest.rs": {
       "kind": "sha256",
@@ -428,10 +404,6 @@
     "crates/fireemu-adapter-grpc/src/admin/rest.rs": {
       "kind": "sha256",
       "value": "b2802cf04ee52dc8ba46abe69dab2eef649d1aecaf3dd9f752613efaa8a3ba8c"
-    },
-    "crates/fireemu-adapter-grpc/src/admin/rest_tests.rs": {
-      "kind": "sha256",
-      "value": "d847d6b6ef442ebbd2f3ebbe9a171192336c05102a6dd6bb1e65cf6a56b739c5"
     },
     "crates/fireemu-adapter-grpc/src/bloom.rs": {
       "kind": "sha256",
@@ -477,21 +449,9 @@
       "kind": "sha256",
       "value": "adb6fdcbc0cb307d42cd7f8f7b5947b0045aa2ca3b5312a4228b2a5effe09cf7"
     },
-    "crates/fireemu-adapter-grpc/src/pipeline_regex/matrix.rs": {
-      "kind": "sha256",
-      "value": "087f4fdc812ce2086b701f64795ac5f57b27ceef878af5b0f7961f75e85c9650"
-    },
     "crates/fireemu-adapter-grpc/src/pipeline_regex/production_rows.json": {
       "kind": "json-semantic",
       "value": "12d05a20ce694bb3226e8c27d88a3e9840a9190ba5c00f6cbe4c9dda50c1460f"
-    },
-    "crates/fireemu-adapter-grpc/src/pipeline_regex/replay.rs": {
-      "kind": "sha256",
-      "value": "da3809a6701d09bc1e0401e08df22cf31bb5f27952d2e0f401aecdd17fdc0e1c"
-    },
-    "crates/fireemu-adapter-grpc/src/pipeline_regex/rewrite_tests.rs": {
-      "kind": "sha256",
-      "value": "dd6b1c091983339dee97692c370d9bc70052f67abe30c2757a6e51253ddf84b6"
     },
     "crates/fireemu-adapter-grpc/src/pipeline_regex/rewritten_golden.json": {
       "kind": "json-semantic",
@@ -520,14 +480,6 @@
     "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs": {
       "kind": "sha256",
       "value": "a7a50c2f5b50367fdda12ffaf164dc4fa9f446dd74af30a3fd29dacaa3e7d1e1"
-    },
-    "crates/fireemu-adapter-grpc/src/rest/admin_fields_tests.rs": {
-      "kind": "sha256",
-      "value": "d5af4a189f8a66acef648160ac87f12552d27a2cf6c31c2e073b417dbeb735fa"
-    },
-    "crates/fireemu-adapter-grpc/src/rest/admin_inventory_tests.rs": {
-      "kind": "sha256",
-      "value": "543d417540db7aae10e80ed72fc3a2dc1ae5995f6aa3e059eb36ec16c124d81c"
     },
     "crates/fireemu-adapter-grpc/src/rest/coverage.rs": {
       "kind": "sha256",
@@ -560,10 +512,6 @@
     "crates/fireemu-adapter-grpc/src/rest/pipeline_selector_tests.rs": {
       "kind": "sha256",
       "value": "548e3f3a75a59789a39d39f4790a547ba999d1d540f0dd9ab24e947d593637e4"
-    },
-    "crates/fireemu-adapter-grpc/src/rest/transaction_tests.rs": {
-      "kind": "sha256",
-      "value": "6ab18939d439cb7f0a2389cd0f8c2b6e5a4e417092d0c4d0ef783be5a273e7fd"
     },
     "crates/fireemu-adapter-grpc/src/rest/transcode.rs": {
       "kind": "sha256",
@@ -604,10 +552,6 @@
     "crates/fireemu-adapter-grpc/src/streams.rs": {
       "kind": "sha256",
       "value": "295ae513585abcba329608004f8351665a2695108e87893094b7e2b454aa30f6"
-    },
-    "crates/fireemu-adapter-grpc/src/streams/frame_identity_tests.rs": {
-      "kind": "sha256",
-      "value": "d68766430b330a513470d369b320ed38affe884631f8064387e9dc47754ab197"
     },
     "crates/fireemu-adapter-grpc/src/text_search.rs": {
       "kind": "sha256",
@@ -739,7 +683,7 @@
     },
     "crates/fireemu-core-auth/src/mfa.rs": {
       "kind": "sha256",
-      "value": "f85fdb1f22d236c1a0371e0cbc5bef742ca1ef73b79105ae2443512ba6085fbe"
+      "value": "8076b6c2a7bc84e85f12872eb05dcbc8da3c5ac73bc614a41b862145922708fa"
     },
     "crates/fireemu-core-auth/src/mfa_config.rs": {
       "kind": "sha256",
@@ -825,10 +769,6 @@
       "kind": "sha256",
       "value": "642f9b518121b26f10df7a93a540e349e44518caa91631998c821d7e3cc9060d"
     },
-    "crates/fireemu-core-firestore/src/pipeline_exec/compare_tests.rs": {
-      "kind": "sha256",
-      "value": "e04a9133543efabe8a910c228117227b350dada42260abd99ea208b5f135062b"
-    },
     "crates/fireemu-core-firestore/src/pipeline_exec/document_argument.generated.tsv": {
       "kind": "sha256",
       "value": "2e9c55d5d1b37d379723a460851dc2235dfb0af66ec4f643d4cbf205c4fcedd1"
@@ -841,10 +781,6 @@
       "kind": "json-semantic",
       "value": "fdc3f87cc27e491cf8f3c7f7754f2f3fa601798259dc3026c994f46198cb071e"
     },
-    "crates/fireemu-core-firestore/src/pipeline_exec/official_compare.rs": {
-      "kind": "sha256",
-      "value": "276674cb9d999c092b2a3a87356cdc58ea39722fa6392b17e66cabdb30524fd8"
-    },
     "crates/fireemu-core-firestore/src/pipeline_exec/regex_port.generated.tsv": {
       "kind": "sha256",
       "value": "1427fe980a72d6e248b65b11e772da3aff96de1b3b2847f03bd8e7df05003174"
@@ -856,14 +792,6 @@
     "crates/fireemu-core-firestore/src/pipeline_exec/scalar.rs": {
       "kind": "sha256",
       "value": "7990f818d3c3312d55fb7c221753aaff82baafdd5c0f2893f42efd4c4d85e089"
-    },
-    "crates/fireemu-core-firestore/src/pipeline_exec/scalar_tests.rs": {
-      "kind": "sha256",
-      "value": "435bba141d8d7f095dfccdeda617a95dc53705b3785542906542c63b8c1581d9"
-    },
-    "crates/fireemu-core-firestore/src/pipeline_exec/stage_tests.rs": {
-      "kind": "sha256",
-      "value": "ae507c1f3aaf291aea8a6248f0c22c38e5dd1f2c659e7972ebc6df1a5f9be8a3"
     },
     "crates/fireemu-core-firestore/src/pipeline_exec/tests.rs": {
       "kind": "sha256",
@@ -1101,10 +1029,6 @@
       "kind": "sha256",
       "value": "2694e2bbe27a8ff2400b91712aaae7dd41d31532a6b6bc6971dd58b8f3766f5c"
     },
-    "crates/fireemu-core-storage/src/store/spill_tests.rs": {
-      "kind": "sha256",
-      "value": "78a154958050d714c8032bbea23a08b0e460201b27dd4e8373ffb885a2e3eefb"
-    },
     "crates/fireemu-core-types/Cargo.toml": {
       "kind": "sha256",
       "value": "85e7d313682e6fda842404500a021f168a3328489635f544825d850765724441"
@@ -1251,7 +1175,7 @@
     },
     "verification/quint/src/evidence.rs": {
       "kind": "sha256",
-      "value": "ab30153e41a77d1c0666df3de05884f70b2cd747dd73a5a39bbc33cee489475e"
+      "value": "5ab7ce1323d697179275cb7c079d0491f54d7f7997e598bf80b7d9f2637ea432"
     },
     "verification/quint/src/evidence/source_closure.rs": {
       "kind": "sha256",
@@ -1284,10 +1208,6 @@
     "verification/quint/src/server.rs": {
       "kind": "sha256",
       "value": "b0d10768918bf0449419d9e6384a574e14db01f651264e6037856c3367e05c0a"
-    },
-    "verification/quint/tests/limit_rejection_connect.rs": {
-      "kind": "sha256",
-      "value": "0fc8aecce1234b34d8f46e27c40d47f678366c777f6897a5d25578d3139f6c34"
     }
   },
   "invariants": [

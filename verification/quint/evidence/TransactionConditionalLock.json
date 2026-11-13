@@ -35,16 +35,12 @@
     "crates/fireemu-core-firestore/src/path.rs",
     "crates/fireemu-core-firestore/src/pipeline.rs",
     "crates/fireemu-core-firestore/src/pipeline_exec.rs",
-    "crates/fireemu-core-firestore/src/pipeline_exec/compare_tests.rs",
     "crates/fireemu-core-firestore/src/pipeline_exec/document_argument.generated.tsv",
     "crates/fireemu-core-firestore/src/pipeline_exec/logic.rs",
     "crates/fireemu-core-firestore/src/pipeline_exec/official_compare.json",
-    "crates/fireemu-core-firestore/src/pipeline_exec/official_compare.rs",
     "crates/fireemu-core-firestore/src/pipeline_exec/regex_port.generated.tsv",
     "crates/fireemu-core-firestore/src/pipeline_exec/sample.generated.tsv",
     "crates/fireemu-core-firestore/src/pipeline_exec/scalar.rs",
-    "crates/fireemu-core-firestore/src/pipeline_exec/scalar_tests.rs",
-    "crates/fireemu-core-firestore/src/pipeline_exec/stage_tests.rs",
     "crates/fireemu-core-firestore/src/pipeline_exec/tests.rs",
     "crates/fireemu-core-firestore/src/pipeline_exec/vector_scalars.generated.tsv",
     "crates/fireemu-core-firestore/src/query.rs",
@@ -99,8 +95,7 @@
     "verification/quint/src/process.rs",
     "verification/quint/src/publication.rs",
     "verification/quint/src/server.rs",
-    "verification/quint/src/transaction_conditional_lock.rs",
-    "verification/quint/tests/transaction_conditional_lock_connect.rs"
+    "verification/quint/src/transaction_conditional_lock.rs"
   ],
   "digests": {
     ".github/workflows/quint.yml": {
@@ -163,10 +158,6 @@
       "kind": "sha256",
       "value": "642f9b518121b26f10df7a93a540e349e44518caa91631998c821d7e3cc9060d"
     },
-    "crates/fireemu-core-firestore/src/pipeline_exec/compare_tests.rs": {
-      "kind": "sha256",
-      "value": "e04a9133543efabe8a910c228117227b350dada42260abd99ea208b5f135062b"
-    },
     "crates/fireemu-core-firestore/src/pipeline_exec/document_argument.generated.tsv": {
       "kind": "sha256",
       "value": "2e9c55d5d1b37d379723a460851dc2235dfb0af66ec4f643d4cbf205c4fcedd1"
@@ -179,10 +170,6 @@
       "kind": "json-semantic",
       "value": "fdc3f87cc27e491cf8f3c7f7754f2f3fa601798259dc3026c994f46198cb071e"
     },
-    "crates/fireemu-core-firestore/src/pipeline_exec/official_compare.rs": {
-      "kind": "sha256",
-      "value": "276674cb9d999c092b2a3a87356cdc58ea39722fa6392b17e66cabdb30524fd8"
-    },
     "crates/fireemu-core-firestore/src/pipeline_exec/regex_port.generated.tsv": {
       "kind": "sha256",
       "value": "1427fe980a72d6e248b65b11e772da3aff96de1b3b2847f03bd8e7df05003174"
@@ -194,14 +181,6 @@
     "crates/fireemu-core-firestore/src/pipeline_exec/scalar.rs": {
       "kind": "sha256",
       "value": "7990f818d3c3312d55fb7c221753aaff82baafdd5c0f2893f42efd4c4d85e089"
-    },
-    "crates/fireemu-core-firestore/src/pipeline_exec/scalar_tests.rs": {
-      "kind": "sha256",
-      "value": "435bba141d8d7f095dfccdeda617a95dc53705b3785542906542c63b8c1581d9"
-    },
-    "crates/fireemu-core-firestore/src/pipeline_exec/stage_tests.rs": {
-      "kind": "sha256",
-      "value": "ae507c1f3aaf291aea8a6248f0c22c38e5dd1f2c659e7972ebc6df1a5f9be8a3"
     },
     "crates/fireemu-core-firestore/src/pipeline_exec/tests.rs": {
       "kind": "sha256",
@@ -389,7 +368,7 @@
     },
     "verification/quint/src/evidence.rs": {
       "kind": "sha256",
-      "value": "ab30153e41a77d1c0666df3de05884f70b2cd747dd73a5a39bbc33cee489475e"
+      "value": "5ab7ce1323d697179275cb7c079d0491f54d7f7997e598bf80b7d9f2637ea432"
     },
     "verification/quint/src/evidence/source_closure.rs": {
       "kind": "sha256",
@@ -422,10 +401,6 @@
     "verification/quint/src/transaction_conditional_lock.rs": {
       "kind": "sha256",
       "value": "7d3938f78a6a29fc96034e1a99e86ec9a50542344503806f17faf07340e7a00a"
-    },
-    "verification/quint/tests/transaction_conditional_lock_connect.rs": {
-      "kind": "sha256",
-      "value": "1be415bc32e27693290295ec44e73ae356d34cfac1323e99349fced5a134bbcd"
     }
   },
   "invariants": [

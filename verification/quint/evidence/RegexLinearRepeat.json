@@ -83,8 +83,7 @@
     "verification/quint/src/process.rs",
     "verification/quint/src/publication.rs",
     "verification/quint/src/regex_linear_repeat.rs",
-    "verification/quint/src/server.rs",
-    "verification/quint/tests/regex_linear_repeat_connect.rs"
+    "verification/quint/src/server.rs"
   ],
   "digests": {
     ".github/workflows/quint.yml": {
@@ -297,7 +296,7 @@
     },
     "verification/quint/src/evidence.rs": {
       "kind": "sha256",
-      "value": "ab30153e41a77d1c0666df3de05884f70b2cd747dd73a5a39bbc33cee489475e"
+      "value": "5ab7ce1323d697179275cb7c079d0491f54d7f7997e598bf80b7d9f2637ea432"
     },
     "verification/quint/src/evidence/source_closure.rs": {
       "kind": "sha256",
@@ -330,10 +329,6 @@
     "verification/quint/src/server.rs": {
       "kind": "sha256",
       "value": "b0d10768918bf0449419d9e6384a574e14db01f651264e6037856c3367e05c0a"
-    },
-    "verification/quint/tests/regex_linear_repeat_connect.rs": {
-      "kind": "sha256",
-      "value": "b81cccc6dfcc33b16b9e34458a4cff8e966beb234f490cd8923c6d6bdb1f406a"
     }
   },
   "invariants": [

@@ -66,8 +66,7 @@
     "verification/quint/src/process.rs",
     "verification/quint/src/publication.rs",
     "verification/quint/src/server.rs",
-    "verification/quint/src/session_epoch.rs",
-    "verification/quint/tests/session_epoch_connect.rs"
+    "verification/quint/src/session_epoch.rs"
   ],
   "digests": {
     ".github/workflows/quint.yml": {
@@ -220,7 +219,7 @@
     },
     "verification/quint/src/evidence.rs": {
       "kind": "sha256",
-      "value": "ab30153e41a77d1c0666df3de05884f70b2cd747dd73a5a39bbc33cee489475e"
+      "value": "5ab7ce1323d697179275cb7c079d0491f54d7f7997e598bf80b7d9f2637ea432"
     },
     "verification/quint/src/evidence/source_closure.rs": {
       "kind": "sha256",
@@ -253,10 +252,6 @@
     "verification/quint/src/session_epoch.rs": {
       "kind": "sha256",
       "value": "6fd906ab371998b416991e2b27f607336c5914a51c95ac0a08cee0f175a258fa"
-    },
-    "verification/quint/tests/session_epoch_connect.rs": {
-      "kind": "sha256",
-      "value": "6695101c3ea5cd0478fd58f4edf7c2d257aa9f38afebf3161231539c7ae4c82a"
     }
   },
   "invariants": [

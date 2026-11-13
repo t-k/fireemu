@@ -138,3 +138,121 @@ fn reads_from_original_handle_after_directory_replacement() {
     drop(file);
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn truncate_shortens_the_file_and_later_appends_follow_the_new_end() {
+    let dir = std::env::temp_dir().join(format!("spill-truncate-{}", std::process::id()));
+    let mut file = SpillDir::new(&dir).create_file().unwrap();
+    file.append(b"abcdefghij").unwrap();
+    file.truncate(10).unwrap();
+    assert_eq!(file.len(), 10);
+    file.truncate(4).unwrap();
+    assert_eq!(file.len(), 4);
+    assert_eq!(fs::metadata(file.path()).unwrap().len(), 4);
+    assert_eq!(file.read_all().unwrap(), b"abcd");
+    file.append(b"XY").unwrap();
+    assert_eq!(file.read_all().unwrap(), b"abcdXY");
+    file.truncate(0).unwrap();
+    assert!(file.is_empty());
+    assert_eq!(file.digests().unwrap(), ObjectDigests::new(b""));
+    drop(file);
+    fs::remove_dir(&dir).unwrap();
+}
+
+#[test]
+fn truncate_beyond_the_end_is_refused_and_changes_nothing() {
+    let dir = std::env::temp_dir().join(format!("spill-truncate-grow-{}", std::process::id()));
+    let mut file = SpillDir::new(&dir).create_file().unwrap();
+    file.append(b"abc").unwrap();
+    assert_eq!(
+        file.truncate(4).unwrap_err().kind(),
+        ErrorKind::InvalidInput
+    );
+    assert_eq!(file.read_all().unwrap(), b"abc");
+    drop(file);
+    fs::remove_dir(&dir).unwrap();
+}
+
+#[test]
+fn a_copy_has_its_own_file_and_the_same_bytes() {
+    let dir = std::env::temp_dir().join(format!("spill-copy-{}", std::process::id()));
+    let spill_dir = SpillDir::new(&dir);
+    for size in [0, 1, 65_535, 65_536, 65_537, 200_000] {
+        let bytes: Vec<u8> = (0..size).map(|i| u8::try_from(i % 251).unwrap()).collect();
+        let mut original = spill_dir.create_file().unwrap();
+        original.append(&bytes).unwrap();
+        let mut copy = original.try_clone().unwrap();
+        assert_ne!(original.path(), copy.path());
+        assert!(copy.path().is_file());
+        assert_eq!(copy.len(), size as u64);
+        assert_eq!(copy.read_all().unwrap(), bytes);
+        copy.append(b"copy").unwrap();
+        original.append(b"orig").unwrap();
+        assert_eq!(&copy.read_all().unwrap()[size..], b"copy");
+        assert_eq!(&original.read_all().unwrap()[size..], b"orig");
+        let path = copy.path().to_owned();
+        drop(copy);
+        assert!(!path.exists());
+        assert!(original.path().is_file());
+    }
+    fs::remove_dir(&dir).unwrap();
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+    #[test]
+    fn a_file_follows_a_vec_through_appends_truncates_and_copies(
+        ops in proptest::collection::vec((0u8..4, proptest::collection::vec(any::<u8>(), 0..=300), any::<usize>()), 0..=24)
+    ) {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!("spill-model-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        let mut file = SpillDir::new(&dir).create_file().unwrap();
+        let mut model: Vec<u8> = Vec::new();
+        let mut copies = Vec::new();
+        for (op, bytes, at) in ops {
+            match op {
+                0 | 1 => {
+                    file.append(&bytes).unwrap();
+                    model.extend_from_slice(&bytes);
+                }
+                2 => {
+                    let to = at % (model.len() + 1);
+                    file.truncate(to as u64).unwrap();
+                    model.truncate(to);
+                }
+                _ => copies.push((file.try_clone().unwrap(), model.clone())),
+            }
+            prop_assert_eq!(file.len(), model.len() as u64);
+            prop_assert_eq!(file.read_all().unwrap(), model.clone());
+            prop_assert_eq!(file.digests().unwrap(), ObjectDigests::new(&model));
+            for (copy, frozen) in &copies {
+                prop_assert_eq!(&copy.read_all().unwrap(), frozen);
+            }
+        }
+        drop(copies);
+        drop(file);
+        fs::remove_dir(&dir).unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn truncate_refuses_a_replaced_directory_and_changes_nothing() {
+    use std::os::unix::fs::{symlink, DirBuilderExt, PermissionsExt};
+    let root = std::env::temp_dir().join(format!("spill-truncate-replaced-{}", std::process::id()));
+    fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    let dir = root.join("dir");
+    let moved = root.join("moved");
+    let other = root.join("other");
+    let mut file = SpillDir::new(&dir).create_file().unwrap();
+    file.append(b"original").unwrap();
+    fs::rename(&dir, &moved).unwrap();
+    fs::create_dir(&other).unwrap();
+    symlink(&other, &dir).unwrap();
+    assert!(file.truncate(3).is_err());
+    assert_eq!(file.len(), 8);
+    assert_eq!(file.read_all().unwrap(), b"original");
+    drop(file);
+    fs::remove_dir_all(root).unwrap();
+}

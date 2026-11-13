@@ -86,7 +86,7 @@ maxStoredBytes = 1073741824
 | `storage.maxStoredBytes` | A local cap on stored bytes. A write that would pass it is refused with HTTP 402 (`storage.maxStoredBytes limit exceeded`); see [Limit the stored bytes](#limit-the-stored-bytes). Production has no such limit. |
 | `storage.maxObjectBytes` | Per-object size limit, default 256 MiB (maximum 2143289343). Larger uploads are refused with HTTP 413; see [Limit the stored bytes](#limit-the-stored-bytes). |
 | `storage.bufferedBodyBudgetBytes` | Process-wide budget for buffered request bodies, default 1 GiB. A request past it gets HTTP 503 with `Retry-After: 1`. |
-| `storage.spillObjectBytes` | Committed objects at least this many bytes are kept in temporary files instead of memory. Unset by default; production has no such setting. Resumable upload sessions and single-shot uploads still buffer the body in memory before it is stored, so a single large upload keeps one body resident after it commits; the setting helps when many large objects are stored. |
+| `storage.spillObjectBytes` | Committed objects at least this many bytes are kept in temporary files instead of memory. Unset by default; production has no such setting. A resumable upload session keeps its received bytes in a temporary file once they reach that size. A single-shot upload is still buffered in memory before it is stored, so a single large upload keeps one body resident after it commits; the setting helps when many large objects are stored. |
 
 ## Buckets that do not exist
 

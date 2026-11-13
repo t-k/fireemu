@@ -229,6 +229,7 @@
     "crates/fireemu-core-storage/src/name.rs",
     "crates/fireemu-core-storage/src/spill.rs",
     "crates/fireemu-core-storage/src/store.rs",
+    "crates/fireemu-core-storage/src/store/spill_tests.rs",
     "crates/fireemu-core-types/Cargo.toml",
     "crates/fireemu-core-types/src/admission.rs",
     "crates/fireemu-core-types/src/codec.rs",
@@ -1094,11 +1095,15 @@
     },
     "crates/fireemu-core-storage/src/spill.rs": {
       "kind": "sha256",
-      "value": "53a02816d328771f80306e1d840aa49bc38ce16d2482254762c3670818b8cb5a"
+      "value": "42feaac8d5c0fed0cfbc11fa60a78f9fb1c1d44f29418382689f9bcf755e7868"
     },
     "crates/fireemu-core-storage/src/store.rs": {
       "kind": "sha256",
-      "value": "fffd55855e3d3d920e2d9d16c5a935e4d5d1c2cbb484af4bc0ef7424b7df435a"
+      "value": "2694e2bbe27a8ff2400b91712aaae7dd41d31532a6b6bc6971dd58b8f3766f5c"
+    },
+    "crates/fireemu-core-storage/src/store/spill_tests.rs": {
+      "kind": "sha256",
+      "value": "78a154958050d714c8032bbea23a08b0e460201b27dd4e8373ffb885a2e3eefb"
     },
     "crates/fireemu-core-types/Cargo.toml": {
       "kind": "sha256",

@@ -1552,6 +1552,179 @@ fn multipart_payloads_keep_their_trailing_line_breaks() {
     }
 }
 
+/// Storage rules that read a Firestore document; the read replaces the spill directory with a
+/// link, as the test's way of making the next change to a session file fail.
+#[cfg(unix)]
+struct SwapsSpillDirectory {
+    dir: std::path::PathBuf,
+}
+
+#[cfg(unix)]
+impl fireemu_core_rules::eval::DocumentAccess for SwapsSpillDirectory {
+    fn get(&self, _segments: &[String]) -> Option<fireemu_core_rules::value::RulesValue> {
+        let moved = self.dir.with_extension("moved");
+        let other = self.dir.with_extension("other");
+        if !moved.exists() {
+            std::fs::rename(&self.dir, &moved).unwrap();
+            std::fs::create_dir(&other).unwrap();
+            std::os::unix::fs::symlink(&other, &self.dir).unwrap();
+        }
+        Some(fireemu_core_rules::value::RulesValue::Map(
+            std::collections::BTreeMap::new(),
+        ))
+    }
+}
+
+/// A finalizing chunk the stored-byte bound refuses is taken back. When the session's file cannot
+/// be shortened the client is told the spill storage is unavailable (503), not that the bound was
+/// hit (402): the offset has advanced and a retry of the chunk must not be answered as a refusal.
+#[cfg(unix)]
+#[test]
+fn a_rollback_that_fails_answers_the_spill_error_instead_of_the_bound() {
+    let rules = "rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /gated/{file} {
+      allow write: if firestore.exists(/databases/(default)/documents/flags/open);
+    }
+  }
+}";
+    let finalize = |swap: bool| {
+        let mut s = state(Some(rules));
+        let root = std::env::temp_dir().join(format!(
+            "storage-rollback-fails-{}-{swap}",
+            std::process::id()
+        ));
+        let dir = root.join("spill");
+        std::fs::create_dir_all(&root).unwrap();
+        {
+            let mut store = s.store.lock().unwrap();
+            store.set_spill(Some((fireemu_core_storage::spill::SpillDir::new(&dir), 1)));
+            store.set_stored_bytes_limit(Some(3));
+        }
+        if swap {
+            s.firestore = Some(Arc::new(SwapsSpillDirectory { dir: dir.clone() }));
+        } else {
+            s.firestore = Some(Arc::new(Flags(vec![
+                "databases/(default)/documents/flags/open".to_owned(),
+            ])));
+        }
+        let (_uid, auth) = user_token(&s);
+        let r = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?name=gated%2Fa.bin"),
+                &[
+                    ("authorization", &auth),
+                    ("x-goog-upload-protocol", "resumable"),
+                    ("x-goog-upload-command", "start"),
+                ],
+                b"{}",
+            ),
+        );
+        let session = header(&r, "x-goog-upload-url")
+            .unwrap()
+            .strip_prefix("http://127.0.0.1:9199")
+            .unwrap()
+            .to_owned();
+        let r = handle(
+            &s,
+            req(
+                "POST",
+                &session,
+                &[
+                    ("authorization", &auth),
+                    ("x-goog-upload-command", "upload, finalize"),
+                    ("x-goog-upload-offset", "0"),
+                ],
+                b"123456",
+            ),
+        );
+        drop(s);
+        let _ = std::fs::remove_dir_all(&root);
+        r.status
+    };
+    assert_eq!(
+        finalize(false),
+        402,
+        "without the swap the bound is reported"
+    );
+    assert_eq!(
+        finalize(true),
+        503,
+        "a rollback that fails is reported as such"
+    );
+}
+
+/// The size the rules see at finalization is the received length, to the byte: 4 bytes pass a
+/// `size < 5` rule and 5 do not, with the session in memory and with it in a spill file.
+#[test]
+fn the_rules_see_the_exact_received_length_of_a_resumable_upload() {
+    for spill in [false, true] {
+        let s = state(Some(
+            "rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /small/{file} {
+      allow write: if request.resource.size < 5;
+    }
+  }
+}",
+        ));
+        let root =
+            std::env::temp_dir().join(format!("storage-rules-size-{}-{spill}", std::process::id()));
+        if spill {
+            s.store
+                .lock()
+                .unwrap()
+                .set_spill(Some((fireemu_core_storage::spill::SpillDir::new(&root), 1)));
+        }
+        let (_uid, auth) = user_token(&s);
+        for (name, body, expected) in [("four", &b"1234"[..], 200), ("five", &b"12345"[..], 403)] {
+            let r = handle(
+                &s,
+                req(
+                    "POST",
+                    &format!("/v0/b/{BUCKET}/o?name=small%2F{name}.bin"),
+                    &[
+                        ("authorization", &auth),
+                        ("x-goog-upload-protocol", "resumable"),
+                        ("x-goog-upload-command", "start"),
+                    ],
+                    b"{}",
+                ),
+            );
+            let session = header(&r, "x-goog-upload-url")
+                .unwrap()
+                .strip_prefix("http://127.0.0.1:9199")
+                .unwrap()
+                .to_owned();
+            let r = handle(
+                &s,
+                req(
+                    "POST",
+                    &session,
+                    &[
+                        ("authorization", &auth),
+                        ("x-goog-upload-command", "upload, finalize"),
+                        ("x-goog-upload-offset", "0"),
+                    ],
+                    body,
+                ),
+            );
+            assert_eq!(
+                r.status,
+                expected,
+                "{name} (spill {spill}): {}",
+                String::from_utf8_lossy(&r.body)
+            );
+        }
+        drop(s);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
 #[test]
 #[allow(clippy::too_many_lines)]
 fn resumable_uploads_are_authorized_at_finalization_against_the_received_bytes() {

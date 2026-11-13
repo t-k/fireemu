@@ -332,11 +332,11 @@ proptest! {
                     None
                 }
                 Op::ClearAndRestore => {
-                    let captured = s.capture_buckets(|_| true);
+                    let captured = s.capture_buckets(|_| true).unwrap();
                     prop_assert_eq!(captured.retained_blob_bytes(), recount(&captured));
                     s.clear();
                     prop_assert_eq!(s.retained_blob_bytes(), 0);
-                    s.restore_buckets(|_| true, &captured);
+                    s.restore_buckets(|_| true, &captured).unwrap();
                     prop_assert_eq!(observable(&s), before.clone());
                     None
                 }

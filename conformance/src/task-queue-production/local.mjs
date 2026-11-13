@@ -36,12 +36,16 @@ const here = fileURLToPath(new URL(".", import.meta.url));
 const conformance = join(here, "../..");
 
 /** Writes the fixture (with the local suffix) and a firebase.json; returns the paths. */
-export function materializeLocal(root) {
+export function materializeLocal(
+  root,
+  source = join(conformance, "task-queue-functions/functions"),
+) {
   const functions = join(root, "functions");
-  cpSync(join(conformance, "task-queue-functions/functions"), functions, { recursive: true });
+  const own = join(source, "node_modules");
+  // The installation is linked below, never copied: the release job runs `npm ci` in the fixture first.
+  cpSync(source, functions, { recursive: true, filter: (path) => path !== own });
   writeFileSync(join(functions, "suffix.json"), JSON.stringify({ suffix: LOCAL_RUN.slice(0, 6) }));
   // The fixture's own installation (`npm ci` of its lockfile, as the release job does) when there is one, else the harness's.
-  const own = join(conformance, "task-queue-functions/functions/node_modules");
   symlinkSync(
     existsSync(own) ? own : join(conformance, "node_modules"),
     join(functions, "node_modules"),

@@ -1,21 +1,34 @@
 //! Command-line entry point for the private Quint verification authority.
 
 use std::env;
+use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use fireemu_verification_quint::cargo_authority::{validate_authority_file, write_authority};
-use fireemu_verification_quint::evidence::validate_evidence_file_with_cargo_authority;
+use fireemu_verification_quint::evidence::{
+    input_digest, validate_evidence_file_with_cargo_authority, InputDigest,
+};
 use fireemu_verification_quint::model::{model, ModelDescriptor};
 use fireemu_verification_quint::process::{
     mutate_model as run_mutations, verify_model as run_model,
 };
 use fireemu_verification_quint::publication::publish_evidence as publish_evidence_snapshot;
 
-const USAGE: &str = "Usage:\n  fireemu-verification-quint verify-model --model MODEL [--root PATH]\n  fireemu-verification-quint mutate-model --model MODEL [--root PATH] [--evidence PATH] [--cargo-authority PATH]\n  fireemu-verification-quint verify-evidence --model MODEL [--root PATH] [--evidence PATH] [--cargo-authority PATH]\n  fireemu-verification-quint cargo-authority [--root PATH] (--write PATH | --check PATH)\n  fireemu-verification-quint publish-evidence --source PATH --target PATH\n";
+const USAGE: &str = "Usage:\n  fireemu-verification-quint verify-model --model MODEL [--root PATH]\n  fireemu-verification-quint mutate-model --model MODEL [--root PATH] [--evidence PATH] [--cargo-authority PATH]\n  fireemu-verification-quint verify-evidence --model MODEL [--root PATH] [--evidence PATH] [--cargo-authority PATH]\n  fireemu-verification-quint check-evidence\n  fireemu-verification-quint cargo-authority [--root PATH] (--write PATH | --check PATH)\n  fireemu-verification-quint publish-evidence --source PATH --target PATH\n";
 
 fn main() -> ExitCode {
     let arguments = env::args().skip(1).collect::<Vec<_>>();
+    if arguments.first().map(String::as_str) == Some("check-evidence") {
+        return match check_evidence(&arguments[1..]) {
+            Ok(false) => ExitCode::SUCCESS,
+            Ok(true) => ExitCode::from(1),
+            Err(error) => {
+                eprintln!("error: {error}\n\n{USAGE}");
+                ExitCode::from(2)
+            }
+        };
+    }
     match run(&arguments) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -23,6 +36,82 @@ fn main() -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+fn check_evidence(arguments: &[String]) -> Result<bool, String> {
+    if !arguments.is_empty() {
+        return Err("check-evidence accepts no arguments".to_owned());
+    }
+    let root =
+        env::current_dir().map_err(|error| format!("cannot read current directory: {error}"))?;
+    let directory = root.join("verification/quint/evidence");
+    let mut files = fs::read_dir(&directory)
+        .map_err(|error| format!("cannot read evidence directory: {error}"))?
+        .map(|entry| {
+            entry
+                .map(|entry| entry.path())
+                .map_err(|error| error.to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    files.sort();
+    let mut stale = 0;
+    for file in files {
+        if file.extension().and_then(|extension| extension.to_str()) != Some("json")
+            || file.file_name().and_then(|name| name.to_str()) == Some("cargo-authority.json")
+        {
+            continue;
+        }
+        let model = file
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .ok_or("invalid evidence filename")?;
+        let bytes =
+            fs::read(&file).map_err(|error| format!("cannot read {}: {error}", file.display()))?;
+        let evidence: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|error| format!("invalid evidence {}: {error}", file.display()))?;
+        let digests = evidence.get("digests").and_then(|value| value.as_object());
+        let inputs = evidence
+            .get("boundInputs")
+            .and_then(|value| value.as_array())
+            .ok_or_else(|| format!("missing bound inputs in {}", file.display()))?;
+        let legacy = digests.is_none_or(|digests| {
+            digests.is_empty() || digests.values().any(|digest| digest.get("kind").is_none())
+        });
+        let mut changed = Vec::new();
+        if !legacy {
+            for input in inputs {
+                let path = input
+                    .as_str()
+                    .ok_or_else(|| format!("invalid bound input in {}", file.display()))?;
+                let recorded = digests
+                    .and_then(|digests| digests.get(path))
+                    .and_then(|value| serde_json::from_value::<InputDigest>(value.clone()).ok());
+                let current = fs::read(root.join(path))
+                    .ok()
+                    .and_then(|bytes| input_digest(path, &bytes).ok());
+                if recorded.is_none() || current.is_none() || recorded != current {
+                    changed.push(path);
+                }
+            }
+        }
+        if legacy || !changed.is_empty() {
+            stale += 1;
+            if legacy {
+                println!("STALE {model}: evidence predates digest kinds; regenerate");
+            } else {
+                println!(
+                    "STALE {model}: {} bound input(s) changed since its evidence was written",
+                    changed.len()
+                );
+                for path in changed {
+                    println!("  {path}");
+                }
+            }
+            println!("QUINT_HOME=$HOME/.quint cargo run -p fireemu-verification-quint -- mutate-model --model {model} --evidence verification/quint/evidence/{model}.json");
+        }
+    }
+    println!("evidence digests stale: {stale}");
+    Ok(stale != 0)
 }
 
 fn run(arguments: &[String]) -> Result<(), String> {

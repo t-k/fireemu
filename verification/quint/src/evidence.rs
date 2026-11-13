@@ -559,7 +559,8 @@ fn has_extension(path: &str, extension: &str) -> bool {
         .is_some_and(|found| found.eq_ignore_ascii_case(extension))
 }
 
-fn input_digest(path: &str, bytes: &[u8]) -> Result<InputDigest, String> {
+/// Computes the digest used to bind an input to evidence.
+pub fn input_digest(path: &str, bytes: &[u8]) -> Result<InputDigest, String> {
     let (kind, normalized) = if has_extension(path, "json") {
         fn strip(value: &mut serde_json::Value) {
             match value {

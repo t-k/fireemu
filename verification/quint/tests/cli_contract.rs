@@ -11,6 +11,73 @@ use std::process::{Child, ExitStatus};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
+fn check_evidence_fixture(input: Option<&str>, legacy: bool) -> Output {
+    let root = tempfile::tempdir().expect("create fixture");
+    let directory = root.path().join("verification/quint/evidence");
+    fs::create_dir_all(&directory).expect("create evidence directory");
+    let digest = fireemu_verification_quint::evidence::input_digest("input.rs", b"fn main() {}\n")
+        .expect("digest input");
+    let digest = if legacy {
+        serde_json::json!(digest.value)
+    } else {
+        serde_json::json!(digest)
+    };
+    let evidence =
+        serde_json::json!({"boundInputs": ["input.rs"], "digests": {"input.rs": digest}});
+    fs::write(directory.join("Example.json"), evidence.to_string()).expect("write evidence");
+    fs::write(directory.join("cargo-authority.json"), "{}").expect("write authority");
+    if let Some(input) = input {
+        fs::write(root.path().join("input.rs"), input).expect("write input");
+    }
+    Command::new(env!("CARGO_BIN_EXE_fireemu-verification-quint"))
+        .arg("check-evidence")
+        .current_dir(root.path())
+        .output()
+        .expect("run check-evidence")
+}
+
+#[test]
+fn check_evidence_fresh() {
+    let output = check_evidence_fixture(Some("fn main() {}\n"), false);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "evidence digests stale: 0\n"
+    );
+}
+
+#[test]
+fn check_evidence_semantic_change() {
+    let output = check_evidence_fixture(Some("fn other() {}\n"), false);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "STALE Example: 1 bound input(s) changed since its evidence was written\n  input.rs\nQUINT_HOME=$HOME/.quint cargo run -p fireemu-verification-quint -- mutate-model --model Example --evidence verification/quint/evidence/Example.json\nevidence digests stale: 1\n");
+}
+
+#[test]
+fn check_evidence_comment_only_change() {
+    let output = check_evidence_fixture(Some("// comment\nfn main() {}\n"), false);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "evidence digests stale: 0\n"
+    );
+}
+
+#[test]
+fn check_evidence_missing_input() {
+    let output = check_evidence_fixture(None, false);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("  input.rs\n"));
+}
+
+#[test]
+fn check_evidence_old_format() {
+    let output = check_evidence_fixture(Some("fn main() {}\n"), true);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stdout)
+        .starts_with("STALE Example: evidence predates digest kinds; regenerate\n"));
+}
+
 #[cfg(unix)]
 #[path = "../../../tests/support/trusted_temp.rs"]
 mod trusted_temp;

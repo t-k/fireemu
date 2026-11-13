@@ -25,7 +25,7 @@ const BACKEND: &str = "tlc";
 const TRACES_PER_SEED: usize = 100;
 const MAX_STEPS: usize = 20;
 const CARGO_AUTHORITY_INPUT: &str = "verification/quint/evidence/cargo-authority.json";
-// Only locked external derive/attribute macros that transform token input without reading
+// Only locked external procedural macros (derive, attribute or function-like) that transform token input without reading
 // files from the invoking crate belong here. Local proc-macros are never allowed.
 const TOKEN_ONLY_PROC_MACROS: &[&str] = &[
     "async-trait",

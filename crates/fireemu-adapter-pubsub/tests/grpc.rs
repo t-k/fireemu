@@ -803,6 +803,7 @@ fn barrier_push_sink_with_status(status: u16) -> BarrierPushSink {
 type GatedPushSink = (
     String,
     Arc<AtomicUsize>,
+    Arc<AtomicUsize>,
     tokio::sync::watch::Sender<bool>,
     tokio::task::JoinHandle<()>,
 );
@@ -812,12 +813,15 @@ async fn gated_push_sink(expected: usize) -> GatedPushSink {
     let address = listener.local_addr().unwrap();
     let received = Arc::new(AtomicUsize::new(0));
     let observed = received.clone();
+    let held = Arc::new(AtomicUsize::new(0));
+    let active = held.clone();
     let (release, released) = tokio::sync::watch::channel(false);
     let worker = tokio::spawn(async move {
         let mut connections = tokio::task::JoinSet::new();
         for _ in 0..expected {
             let (mut stream, _) = listener.accept().await.unwrap();
             let observed = observed.clone();
+            let active = active.clone();
             let mut released = released.clone();
             connections.spawn(async move {
                 let mut request = Vec::new();
@@ -852,9 +856,22 @@ async fn gated_push_sink(expected: usize) -> GatedPushSink {
                     }
                 };
                 assert!(request.len() >= body_end);
+                active.fetch_add(1, Ordering::AcqRel);
                 observed.fetch_add(1, Ordering::AcqRel);
-                while !*released.borrow() {
-                    released.changed().await.unwrap();
+                let disconnected = tokio::select! {
+                    result = stream.read(&mut buffer) => {
+                        assert_eq!(result.unwrap(), 0, "unexpected data after push request");
+                        true
+                    }
+                    () = async {
+                        while !*released.borrow() {
+                            released.changed().await.unwrap();
+                        }
+                    } => false,
+                };
+                active.fetch_sub(1, Ordering::AcqRel);
+                if disconnected {
+                    return;
                 }
                 stream
                     .write_all(
@@ -868,7 +885,13 @@ async fn gated_push_sink(expected: usize) -> GatedPushSink {
             result.unwrap();
         }
     });
-    (format!("http://{address}/push"), received, release, worker)
+    (
+        format!("http://{address}/push"),
+        received,
+        held,
+        release,
+        worker,
+    )
 }
 
 #[tokio::test]
@@ -2810,6 +2833,7 @@ async fn a_new_publication_wakes_a_subscription_deferred_for_push_backoff() {
 #[tokio::test]
 async fn deferred_push_backoff_leaves_worker_capacity_for_other_subscriptions() {
     const DELAYED_SUBSCRIPTIONS: usize = 256;
+    const BATCH_SIZE: usize = 32;
     let h = start().await;
     let mut pubc = h.publisher().await;
     let mut subc = h.subscriber().await;
@@ -2819,9 +2843,12 @@ async fn deferred_push_backoff_leaves_worker_capacity_for_other_subscriptions() 
     let blocked_topic = "projects/demo-app/topics/push-backoff-saturated";
     let other_topic = "projects/demo-app/topics/push-backoff-other";
 
-    for topic in [blocked_topic, other_topic] {
+    for topic in (0..DELAYED_SUBSCRIPTIONS / BATCH_SIZE)
+        .map(|batch| format!("{blocked_topic}-{batch}"))
+        .chain(std::iter::once(other_topic.to_owned()))
+    {
         pubc.create_topic(pb::Topic {
-            name: topic.to_owned(),
+            name: topic,
             ..Default::default()
         })
         .await
@@ -2830,7 +2857,7 @@ async fn deferred_push_backoff_leaves_worker_capacity_for_other_subscriptions() 
     for index in 0..DELAYED_SUBSCRIPTIONS {
         subc.create_subscription(pb::Subscription {
             name: format!("projects/demo-app/subscriptions/push-backoff-{index:04}"),
-            topic: blocked_topic.to_owned(),
+            topic: format!("{blocked_topic}-{}", index / BATCH_SIZE),
             retry_policy: Some(pb::RetryPolicy {
                 minimum_backoff: Some(prost_types::Duration {
                     seconds: 30,
@@ -2862,15 +2889,17 @@ async fn deferred_push_backoff_leaves_worker_capacity_for_other_subscriptions() 
     .await
     .unwrap();
 
-    pubc.publish(pb::PublishRequest {
-        topic: blocked_topic.to_owned(),
-        messages: vec![msg(b"defer")],
-    })
-    .await
-    .unwrap();
     let attempts = tokio::time::timeout(std::time::Duration::from_secs(15), async {
-        while blocked_bodies.lock().unwrap().len() < DELAYED_SUBSCRIPTIONS {
-            tokio::task::yield_now().await;
+        for batch in 0..DELAYED_SUBSCRIPTIONS / BATCH_SIZE {
+            pubc.publish(pb::PublishRequest {
+                topic: format!("{blocked_topic}-{batch}"),
+                messages: vec![msg(b"defer")],
+            })
+            .await
+            .unwrap();
+            while blocked_bodies.lock().unwrap().len() < (batch + 1) * BATCH_SIZE {
+                tokio::task::yield_now().await;
+            }
         }
     })
     .await;
@@ -2982,19 +3011,23 @@ async fn deleting_an_unrelated_subscription_does_not_stop_a_deferred_retry() {
 #[tokio::test]
 async fn saturated_workers_release_cross_topic_work_without_another_publish() {
     const SATURATED_WORKERS: usize = 256;
+    const BATCH_SIZE: usize = 32;
 
     let h = start().await;
     let mut pubc = h.publisher().await;
     let mut subc = h.subscriber().await;
-    let (blocked_endpoint, blocked_count, release, blocked_worker) =
+    let (blocked_endpoint, blocked_count, held_count, release, blocked_worker) =
         gated_push_sink(SATURATED_WORKERS).await;
     let (other_endpoint, other_bodies, stop_other, other_worker) = push_sink(204);
     let first_topic = "projects/demo-app/topics/saturated-first";
     let second_topic = "projects/demo-app/topics/saturated-second";
 
-    for topic in [first_topic, second_topic] {
+    for topic in (0..SATURATED_WORKERS / BATCH_SIZE)
+        .map(|batch| format!("{first_topic}-{batch}"))
+        .chain(std::iter::once(second_topic.to_owned()))
+    {
         pubc.create_topic(pb::Topic {
-            name: topic.to_owned(),
+            name: topic,
             ..Default::default()
         })
         .await
@@ -3003,7 +3036,7 @@ async fn saturated_workers_release_cross_topic_work_without_another_publish() {
     for index in 0..SATURATED_WORKERS {
         subc.create_subscription(pb::Subscription {
             name: format!("projects/demo-app/subscriptions/saturated-{index:04}"),
-            topic: first_topic.to_owned(),
+            topic: format!("{first_topic}-{}", index / BATCH_SIZE),
             push_config: Some(pb::PushConfig {
                 push_endpoint: blocked_endpoint.clone(),
                 ..Default::default()
@@ -3025,20 +3058,23 @@ async fn saturated_workers_release_cross_topic_work_without_another_publish() {
     .await
     .unwrap();
 
-    pubc.publish(pb::PublishRequest {
-        topic: first_topic.to_owned(),
-        messages: vec![msg(b"occupy")],
-    })
-    .await
-    .unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        while blocked_count.load(Ordering::Acquire) != SATURATED_WORKERS {
-            tokio::task::yield_now().await;
+        for batch in 0..SATURATED_WORKERS / BATCH_SIZE {
+            pubc.publish(pb::PublishRequest {
+                topic: format!("{first_topic}-{batch}"),
+                messages: vec![msg(b"occupy")],
+            })
+            .await
+            .unwrap();
+            while blocked_count.load(Ordering::Acquire) < (batch + 1) * BATCH_SIZE {
+                tokio::task::yield_now().await;
+            }
         }
     })
     .await
     .expect("all worker slots must be occupied");
 
+    assert_eq!(held_count.load(Ordering::Acquire), SATURATED_WORKERS);
     pubc.publish(pb::PublishRequest {
         topic: second_topic.to_owned(),
         messages: vec![msg(b"other-topic")],

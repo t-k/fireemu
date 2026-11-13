@@ -46,6 +46,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Fixed
 
+- Task queues: the emulator profile deletes pending tasks and returns the official emulator's success response; GET and PUT on task routes return its 404 response.
+
 - Test worlds: `Promise.all([world.control('POST', 'sessions/default:awaitIdle'), world.clock.advance(1000)])` no longer waits for itself. A pending `awaitIdle` no longer holds up later clock calls on the same world, `reset()` and `dispose()` cancel pending waits instead of waiting for their budget, and an `awaitIdle` request is bounded by its own `timeoutSeconds` (30 s by default) plus five seconds rather than by `requestTimeoutMs`.
 - Dependencies: rustix is updated to 1.1.6 for RUSTSEC-2026-0486 (extended-attribute reads with a zero-length buffer).
 - `fireemu config show` (text and `--json`) and `fireemu config lint --json` no longer print OIDC client secrets, API keys, Auth custom token signer keys, Pub/Sub local bearer tokens or App Check debug token digests in plaintext.

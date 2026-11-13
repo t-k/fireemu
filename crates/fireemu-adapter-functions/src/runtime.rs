@@ -3954,8 +3954,7 @@ impl FunctionsRuntime {
         Ok(production::answer(&admitted, &default_uri, http, encoded))
     }
 
-    /// The strict profile's deleteTask: a task that has not been dispatched yet is removed and its name stays taken as a
-    /// finished one; anything else is production's 404.
+    /// Removes a pending task; the profile determines the refusal format.
     ///
     /// # Errors
     /// The queue does not exist, or no pending task has that name.
@@ -3972,11 +3971,24 @@ impl FunctionsRuntime {
             status: refusal.http,
             body: refusal.body().to_string(),
         };
+        let missing = |message: &str, refusal: Refusal| {
+            if self.is_strict() {
+                json(refusal)
+            } else {
+                EnqueueRefusal {
+                    status: 404,
+                    body: message.to_owned(),
+                }
+            }
+        };
         let served = self.manifest.get(queue).is_some_and(|f| {
             matches!(f.trigger, Trigger::TaskQueue { .. }) && f.region == location
         }) && project == self.config.project;
         if !served {
-            return Err(json(Refusal::queue_missing()));
+            return Err(missing(
+                "Tried to remove a task from a non-existent queue",
+                Refusal::queue_missing(),
+            ));
         }
         let name = format!("projects/{project}/locations/{location}/queues/{queue}/tasks/{id}");
         let now_task = self.task_now();
@@ -3993,7 +4005,10 @@ impl FunctionsRuntime {
             self.wake.notify_one();
             Ok(())
         } else {
-            Err(json(Refusal::task_not_found()))
+            Err(missing(
+                "Tried to remove a task that doesn't exist",
+                Refusal::task_not_found(),
+            ))
         }
     }
 

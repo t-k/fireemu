@@ -236,10 +236,13 @@ test("burst evidence verifies only a matching comparison rebuilt from the projec
   );
   delete files[FILES.burstComparison];
   assert.equal(derive().status, "NOT_COMPARED");
+  assert.doesNotMatch(derive().reason, /^One pass/);
   const mismatch = { ...local, offsetsMs: local.offsetsMs.slice(0, 119) };
   files[FILES.burstLocal] = JSON.stringify(mismatch);
   files[FILES.burstComparison] = JSON.stringify(compareBurst(production, mismatch));
   assert.equal(derive().status, "NOT_COMPARED");
+  assert.doesNotMatch(derive().reason, /^One pass/);
   files[FILES.burstComparison] = JSON.stringify(compareBurst(production, local));
   assert.equal(derive().status, "NOT_COMPARED");
+  assert.doesNotMatch(derive().reason, /^One pass/);
 });

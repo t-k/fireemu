@@ -131,7 +131,10 @@ describe("production evidence identity", () => {
 it("a known difference's path patterns are public, a real path under the same key is not", () => {
   for (const pattern of ["/.*/", "/^\\/body\\/httpRequest\\/url$/", "/^\\[\\]\\/request\\/path$/"])
     assert.doesNotThrow(() => publicEvidence({ knownDifferences: [{ paths: [pattern] }] }));
-  for (const path of ["/home/runner/work/x", "/Users/someone/", "/tmp/a/", "/.*"])
-    assert.throws(() => publicEvidence({ knownDifferences: [{ paths: [path] }] }), /filesystem path/);
+  for (const path of ["/tmp/run/x", "/var/lib/x/", "/opt/a/", "/.*"])
+    assert.throws(
+      () => publicEvidence({ knownDifferences: [{ paths: [path] }] }),
+      /filesystem path/,
+    );
   assert.throws(() => publicEvidence({ other: "/^\\/body$/" }), /filesystem path/);
 });

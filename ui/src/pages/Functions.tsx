@@ -8,7 +8,9 @@ import {
   For,
   onCleanup,
   onMount,
+  on,
   Show,
+  untrack,
   type Component,
 } from "solid-js";
 import { t } from "../i18n";
@@ -705,6 +707,30 @@ const Functions: Component = () => {
   }
   const [includeSearch, setIncludeSearch] = createSignal(false);
   let filterScope: string | undefined;
+  createEffect(
+    on(
+      () => [
+        filterSearch.event,
+        filterSearch.eventFunction,
+        filterSearch.eventSession,
+        filterSearch.eventProject,
+      ],
+      ([event, fn, session, project]) => {
+        if (
+          typeof event !== "string" ||
+          typeof fn !== "string" ||
+          typeof session !== "string" ||
+          typeof project !== "string"
+        )
+          return;
+        if (untrack(appState.session) !== session) {
+          appState.setSession(session);
+          filterScope = JSON.stringify([session, untrack(appState.project)]);
+        }
+      },
+      { defer: true },
+    ),
+  );
   const localSearchMemory = new Map<string, string>();
   const localSearchKey = () =>
     `fireemu.functionSearch.${JSON.stringify([appState.session(), appState.project()])}`;

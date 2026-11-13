@@ -40,7 +40,12 @@ const node = (source: string, host: string): string =>
   execFileSync(process.execPath, ["-e", source], {
     encoding: "utf8",
     timeout: 20000,
-    env: { PATH: process.env.PATH, NODE_PATH: modules, FIRESTORE_EMULATOR_HOST: host },
+    env: {
+      PATH: process.env.PATH,
+      NODE_PATH: modules,
+      FIRESTORE_EMULATOR_HOST: host,
+      METADATA_SERVER_DETECTION: "none",
+    },
   });
 
 test("copy reports success only for a written clipboard and exposes a selected fallback when denied", async ({
@@ -223,4 +228,113 @@ await deleteApp(app); })().catch(e => { console.error(e); process.exitCode = 1; 
       expect(sdkPaths.toSorted()).toEqual(paths.toSorted());
     }
   }
+});
+
+test("the SDK reproduction preserves named database values and missing-index errors", async ({
+  page,
+  request,
+}) => {
+  await resetSession(request);
+  const host = await emulatorHost(page);
+  node(
+    `const { v1 } = require("@google-cloud/firestore");
+const grpc = require("@grpc/grpc-js");
+(async () => { const endpoint = new URL("http://" + process.env.FIRESTORE_EMULATOR_HOST);
+const admin = new v1.FirestoreAdminClient({ projectId: "demo-app", apiEndpoint: endpoint.hostname, port: Number(endpoint.port), sslCreds: grpc.credentials.createInsecure() });
+await admin.createDatabase({ parent: "projects/demo-app", databaseId: "sdk-parity-db", database: { type: "FIRESTORE_NATIVE", locationId: "nam5" } }, { otherArgs: { headers: { authorization: "Bearer owner" } } });
+await admin.close(); })().catch(e => { console.error(e); process.exitCode = 1; });`,
+    host,
+  );
+  const root = "projects/demo-app/databases/sdk-parity-db/documents";
+  await api(request, "PATCH", `firestore/v1/${root}/sdk-parity/one`, {
+    fields: {
+      integer: { integerValue: "9007199254740993" },
+      double: { doubleValue: 1.25 },
+      timestamp: { timestampValue: "2026-01-01T00:00:00.123456789Z" },
+      boolean: { booleanValue: true },
+      nil: { nullValue: null },
+      map: { mapValue: { fields: { nested: { stringValue: "value" } } } },
+      array: { arrayValue: { values: [{ integerValue: "42" }, { booleanValue: false }] } },
+      reference: { referenceValue: `${root}/sdk-parity/other` },
+    },
+  });
+  await gotoApp(page, "/firestore/sdk-parity?db=sdk-parity-db");
+  await page.getByText("Node.js SDK reproduction", { exact: true }).click();
+  await page.getByRole("button", { name: "Run query", exact: true }).click();
+  const results = page.getByTestId("query-results");
+  await expect(results).toContainText("sdk-parity/one");
+  const restRows = JSON.parse(await results.locator("pre").innerText()) as {
+    document?: { fields: Record<string, unknown> };
+  }[];
+  const source = await page.getByTestId("query-sdk").innerText();
+  const sdkRows = node(source, host)
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  const rest = restRows.find((row) => row.document)?.document?.fields as {
+    integer: { integerValue: string };
+    double: { doubleValue: number };
+    timestamp: { timestampValue: string };
+    boolean: { booleanValue: boolean };
+    nil: { nullValue: null };
+    map: { mapValue: { fields: { nested: { stringValue: string } } } };
+    array: { arrayValue: { values: [{ integerValue: string }, { booleanValue: boolean }] } };
+    reference: { referenceValue: string };
+  };
+  const sdk = sdkRows.find((row) => row.document)?.document.fields;
+  expect(sdk.integer.integerValue).toBe(rest.integer.integerValue);
+  expect(sdk.double.doubleValue).toBe(rest.double.doubleValue);
+  const nanos = Number((/\.(\d+)Z$/.exec(rest.timestamp.timestampValue)?.[1] ?? "").padEnd(9, "0"));
+  expect(nanos).toBeGreaterThan(0);
+  expect(sdk.timestamp.timestampValue).toMatchObject({
+    seconds: String(Math.floor(Date.parse(rest.timestamp.timestampValue) / 1000)),
+    nanos,
+  });
+  expect(sdk.boolean.booleanValue).toBe(rest.boolean.booleanValue);
+  expect(sdk.nil.nullValue).toBe("NULL_VALUE");
+  expect(rest.nil.nullValue).toBeNull();
+  expect(sdk.map.mapValue.fields.nested.stringValue).toBe(
+    rest.map.mapValue.fields.nested.stringValue,
+  );
+  expect(sdk.array.arrayValue.values[0].integerValue).toBe(
+    rest.array.arrayValue.values[0].integerValue,
+  );
+  expect(sdk.array.arrayValue.values[1].booleanValue).toBe(
+    rest.array.arrayValue.values[1].booleanValue,
+  );
+  expect(sdk.reference.referenceValue).toBe(rest.reference.referenceValue);
+
+  await page.getByRole("button", { name: "Add condition", exact: true }).click();
+  const filter = page.getByTestId("query-filter-0");
+  await filter.getByLabel("Field path").fill("integer");
+  await filter.getByLabel("Value type").selectOption("integer");
+  await filter.getByLabel("Typed value").fill("9007199254740993");
+  await page.getByRole("button", { name: "Add order", exact: true }).click();
+  await page.getByTestId("query-order-0").getByLabel("Field path").fill("double");
+  await page.getByTestId("query-order-0").getByLabel("Direction").selectOption("DESCENDING");
+  const response = page.waitForResponse(
+    (r) => r.url().includes(":runQuery") && r.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Run query", exact: true }).click();
+  const body = await (await response).json();
+  const error = (Array.isArray(body) ? body[0] : body).error;
+  expect(error.status).toBe("FAILED_PRECONDITION");
+  await expect(page.getByTestId("query-error")).toContainText("The query requires an index.");
+  await expect(page.getByTestId("query-error")).toContainText(error.message);
+  await page.getByText("Node.js SDK reproduction", { exact: true }).click();
+  const errorSource = (await page.getByTestId("query-sdk").innerText())
+    .replace("async function main() {", "const responses = [];\nasync function main() {")
+    .replace("console.log(JSON.stringify(response));", "responses.push(response);")
+    .replace(
+      "  } finally { await client.close(); }",
+      "    console.log(JSON.stringify({ responses }));\n  } catch (error) {\n    console.log(JSON.stringify({ code: error.code, message: error.details }));\n  } finally { await client.close(); }",
+    );
+  expect(errorSource).toContain("console.log(JSON.stringify({ responses }))");
+  expect(errorSource).toContain(
+    "console.log(JSON.stringify({ code: error.code, message: error.details }))",
+  );
+  const sdkError = JSON.parse(node(errorSource, host).trim());
+  expect(sdkError.code, JSON.stringify(sdkError)).toBe(9);
+  expect(sdkError.message).toBe(error.message);
 });

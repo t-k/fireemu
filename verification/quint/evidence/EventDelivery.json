@@ -208,11 +208,11 @@
     },
     "verification/quint/src/evidence.rs": {
       "kind": "sha256",
-      "value": "1d643644b3e2d5dd23bacd03e733e463526d0441151ac19a6a112c78e84bd4aa"
+      "value": "c4754fb6fffb81cf7f6781e690ce123cef40c9b31268ef5f5697809415662f4c"
     },
     "verification/quint/src/evidence/source_closure.rs": {
       "kind": "sha256",
-      "value": "b8f433990f7d98898cbe85082c28d3a28045cdd4e4545c248d853b246bb6faf0"
+      "value": "aa63e2035e869681c3a1632119b887f7c52a34593c5ab9986e24635b9f32eb39"
     },
     "verification/quint/src/lib.rs": {
       "kind": "sha256",

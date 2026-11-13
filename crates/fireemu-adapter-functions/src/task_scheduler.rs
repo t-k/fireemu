@@ -439,7 +439,7 @@ impl TaskScheduler {
     pub(crate) fn delete_pending(
         &mut self,
         queue: &str,
-        name: &str,
+        matches: impl Fn(&str) -> bool,
         now: impl Into<TaskTime>,
     ) -> bool {
         let now = now.into();
@@ -449,7 +449,7 @@ impl TaskScheduler {
         let Some(position) = state
             .pending
             .iter()
-            .position(|queued| queued.task.name == name)
+            .position(|queued| matches(&queued.task.name))
         else {
             return false;
         };
@@ -2282,16 +2282,19 @@ mod tests {
         use crate::tasks_production::NameReuse;
         let start = Instant::now();
         let mut scheduler = scheduler_with_reuse(NameReuse::Window(Duration::from_secs(10)), start);
-        assert!(!scheduler.delete_pending("queue", "p", start));
-        assert!(!scheduler.delete_pending("nope", "p", start));
+        assert!(!scheduler.delete_pending("queue", |name| name == "p", start));
+        assert!(!scheduler.delete_pending("nope", |name| name == "p", start));
         scheduler
             .enqueue_at("queue", task("p"), TaskRetryConfig::default(), 8, start)
             .unwrap();
         scheduler
             .enqueue_at("queue", task("q"), TaskRetryConfig::default(), 8, start)
             .unwrap();
-        assert!(scheduler.delete_pending("queue", "p", start));
-        assert!(!scheduler.delete_pending("queue", "p", start), "once");
+        assert!(scheduler.delete_pending("queue", |name| name == "p", start));
+        assert!(
+            !scheduler.delete_pending("queue", |name| name == "p", start),
+            "once"
+        );
         assert_eq!(
             scheduler.name_state("queue", "p", start),
             NameState::Finished
@@ -2303,7 +2306,7 @@ mod tests {
         );
         let (id, generation) = dispatch_one(&mut scheduler, start + Duration::from_secs(1));
         assert!(
-            !scheduler.delete_pending("queue", "q", start),
+            !scheduler.delete_pending("queue", |name| name == "q", start),
             "a dispatched task is not pending"
         );
         assert!(scheduler.finish_with_outcome_at(
@@ -2317,7 +2320,7 @@ mod tests {
         immediate
             .enqueue_at("queue", task("p"), TaskRetryConfig::default(), 8, start)
             .unwrap();
-        assert!(immediate.delete_pending("queue", "p", start));
+        assert!(immediate.delete_pending("queue", |name| name == "p", start));
         assert_eq!(immediate.name_state("queue", "p", start), NameState::Free);
         assert_eq!(immediate.retained_bytes, 0);
     }

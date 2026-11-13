@@ -1674,6 +1674,9 @@ impl FunctionsRuntime {
         let mut task_scheduler =
             crate::task_scheduler::TaskScheduler::from_manifest(&manifest, task_start);
         task_scheduler.set_name_reuse(config.task_name_reuse);
+        if profile == FunctionsHttpProfile::Strict {
+            task_scheduler.set_burst_rule(crate::task_scheduler::BurstRule::Production);
+        }
         let (updates, receiver) = tokio::sync::watch::channel(initial);
         let observer: Arc<fireemu_core_session::clock::ClockObserver> = Arc::new(move |snapshot| {
             updates.send_replace(snapshot);

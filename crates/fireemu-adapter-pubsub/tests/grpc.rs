@@ -803,6 +803,7 @@ fn barrier_push_sink_with_status(status: u16) -> BarrierPushSink {
 type GatedPushSink = (
     String,
     Arc<AtomicUsize>,
+    Arc<AtomicUsize>,
     tokio::sync::watch::Sender<bool>,
     tokio::task::JoinHandle<()>,
 );
@@ -812,12 +813,15 @@ async fn gated_push_sink(expected: usize) -> GatedPushSink {
     let address = listener.local_addr().unwrap();
     let received = Arc::new(AtomicUsize::new(0));
     let observed = received.clone();
+    let held = Arc::new(AtomicUsize::new(0));
+    let active = held.clone();
     let (release, released) = tokio::sync::watch::channel(false);
     let worker = tokio::spawn(async move {
         let mut connections = tokio::task::JoinSet::new();
         for _ in 0..expected {
             let (mut stream, _) = listener.accept().await.unwrap();
             let observed = observed.clone();
+            let active = active.clone();
             let mut released = released.clone();
             connections.spawn(async move {
                 let mut request = Vec::new();
@@ -852,9 +856,22 @@ async fn gated_push_sink(expected: usize) -> GatedPushSink {
                     }
                 };
                 assert!(request.len() >= body_end);
+                active.fetch_add(1, Ordering::AcqRel);
                 observed.fetch_add(1, Ordering::AcqRel);
-                while !*released.borrow() {
-                    released.changed().await.unwrap();
+                let disconnected = tokio::select! {
+                    result = stream.read(&mut buffer) => {
+                        assert_eq!(result.unwrap(), 0, "unexpected data after push request");
+                        true
+                    }
+                    () = async {
+                        while !*released.borrow() {
+                            released.changed().await.unwrap();
+                        }
+                    } => false,
+                };
+                active.fetch_sub(1, Ordering::AcqRel);
+                if disconnected {
+                    return;
                 }
                 stream
                     .write_all(
@@ -868,7 +885,13 @@ async fn gated_push_sink(expected: usize) -> GatedPushSink {
             result.unwrap();
         }
     });
-    (format!("http://{address}/push"), received, release, worker)
+    (
+        format!("http://{address}/push"),
+        received,
+        held,
+        release,
+        worker,
+    )
 }
 
 #[tokio::test]
@@ -2993,7 +3016,7 @@ async fn saturated_workers_release_cross_topic_work_without_another_publish() {
     let h = start().await;
     let mut pubc = h.publisher().await;
     let mut subc = h.subscriber().await;
-    let (blocked_endpoint, blocked_count, release, blocked_worker) =
+    let (blocked_endpoint, blocked_count, held_count, release, blocked_worker) =
         gated_push_sink(SATURATED_WORKERS).await;
     let (other_endpoint, other_bodies, stop_other, other_worker) = push_sink(204);
     let first_topic = "projects/demo-app/topics/saturated-first";
@@ -3051,6 +3074,7 @@ async fn saturated_workers_release_cross_topic_work_without_another_publish() {
     .await
     .expect("all worker slots must be occupied");
 
+    assert_eq!(held_count.load(Ordering::Acquire), SATURATED_WORKERS);
     pubc.publish(pb::PublishRequest {
         topic: second_topic.to_owned(),
         messages: vec![msg(b"other-topic")],

@@ -79,39 +79,46 @@ impl SpillDir {
         };
         #[cfg(not(unix))]
         fs::create_dir_all(&self.dir)?;
-        loop {
-            let counter = NEXT_FILE.fetch_add(1, Ordering::Relaxed);
-            let time = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos();
-            let path = self
-                .dir
-                .join(format!("spill-{}-{counter}-{time:x}", std::process::id()));
-            // Same-user attackers are out of scope; a race remains between this check and creation.
+        create_unique(
+            &self.dir,
             #[cfg(unix)]
-            check_dir(&self.dir, uid)?;
-            let mut options = OpenOptions::new();
-            options.read(true).write(true).create_new(true);
-            #[cfg(unix)]
-            options.mode(0o600);
-            match spill_io!("open", &path, options.open(&path)) {
-                Ok(file) => {
+            uid,
+        )
+    }
+}
+
+/// Opens a new uniquely named file in `dir`, which must already exist.
+fn create_unique(dir: &Path, #[cfg(unix)] uid: u32) -> io::Result<SpillFile> {
+    loop {
+        let counter = NEXT_FILE.fetch_add(1, Ordering::Relaxed);
+        let time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let path = dir.join(format!("spill-{}-{counter}-{time:x}", std::process::id()));
+        // Same-user attackers are out of scope; a race remains between this check and creation.
+        #[cfg(unix)]
+        check_dir(dir, uid)?;
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        match spill_io!("open", &path, options.open(&path)) {
+            Ok(file) => {
+                #[cfg(unix)]
+                file.set_permissions(fs::Permissions::from_mode(0o600))?;
+                return Ok(SpillFile {
                     #[cfg(unix)]
-                    file.set_permissions(fs::Permissions::from_mode(0o600))?;
-                    return Ok(SpillFile {
-                        #[cfg(unix)]
-                        uid,
-                        #[cfg(not(unix))]
-                        read_lock: std::sync::Mutex::new(()),
-                        path,
-                        file: Some(file),
-                        len: 0,
-                    });
-                }
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(error) => return Err(error),
+                    uid,
+                    #[cfg(not(unix))]
+                    read_lock: std::sync::Mutex::new(()),
+                    path,
+                    file: Some(file),
+                    len: 0,
+                });
             }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
         }
     }
 }
@@ -152,7 +159,7 @@ impl SpillFile {
         self.len == 0
     }
 
-    /// Appends bytes to the file.
+    /// Appends bytes to the file. A failed append leaves the length as it was; bytes it may have written past that end are never read and the next append overwrites them.
     pub fn append(&mut self, mut bytes: &[u8]) -> io::Result<()> {
         #[cfg(unix)]
         check_dir(
@@ -160,7 +167,8 @@ impl SpillFile {
             self.uid,
         )?;
         let file = self.file.as_mut().expect("spill file is open");
-        file.seek(SeekFrom::End(0))?;
+        file.seek(SeekFrom::Start(self.len))?;
+        let mut end = self.len;
         while !bytes.is_empty() {
             match spill_io!("write", &self.path, file.write(bytes)) {
                 Ok(0) => {
@@ -170,14 +178,59 @@ impl SpillFile {
                     ))
                 }
                 Ok(written) => {
-                    self.len += written as u64;
+                    end += written as u64;
                     bytes = &bytes[written..];
                 }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                 Err(error) => return Err(error),
             }
+            #[cfg(test)]
+            fault::check(fault::Op::AppendAfterWrite)?;
         }
+        self.len = end;
         Ok(())
+    }
+
+    /// Shortens the file to `len` bytes. A failure leaves the length and the bytes unchanged.
+    pub fn truncate(&mut self, len: u64) -> io::Result<()> {
+        if len > self.len {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cannot truncate a spill file past its end",
+            ));
+        }
+        #[cfg(unix)]
+        check_dir(
+            self.path.parent().expect("spill file has a parent"),
+            self.uid,
+        )?;
+        #[cfg(test)]
+        fault::check(fault::Op::Truncate)?;
+        self.file
+            .as_ref()
+            .expect("spill file is open")
+            .set_len(len)?;
+        self.len = len;
+        Ok(())
+    }
+
+    /// Copies the file into a new temporary file next to it. The copy shares nothing with the original: later appends or truncations of either do not reach the other. A failure removes the partial copy.
+    pub fn try_clone(&self) -> io::Result<Self> {
+        let dir = self.path.parent().expect("spill file has a parent");
+        let mut copy = create_unique(
+            dir,
+            #[cfg(unix)]
+            self.uid,
+        )?;
+        let mut offset = 0;
+        while offset < self.len {
+            let len = (self.len - offset).min(64 * 1024) as usize;
+            #[cfg(test)]
+            fault::check(fault::Op::Copy)?;
+            copy.append(&self.read_range(offset, len)?)?;
+            offset += len as u64;
+        }
+        Ok(copy)
     }
 
     /// Reads a window entirely within the file.
@@ -914,5 +967,95 @@ mod tests {
         assert!(path.is_dir());
         drop(process);
         fs::remove_dir(&root).unwrap();
+    }
+}
+
+/// Failures injected into the next call of a file operation, for the tests of this module and of the store that uses it.
+#[cfg(test)]
+pub(crate) mod fault {
+    use std::cell::Cell;
+    use std::io;
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum Op {
+        Truncate,
+        /// Fails an append after its first write reached the file.
+        AppendAfterWrite,
+        Copy,
+    }
+
+    thread_local! {
+        static NEXT: Cell<Option<Op>> = const { Cell::new(None) };
+    }
+
+    /// Makes the next call of `op` on this thread fail once.
+    pub(crate) fn fail_next(op: Op) {
+        NEXT.with(|next| next.set(Some(op)));
+    }
+
+    pub(super) fn check(op: Op) -> io::Result<()> {
+        NEXT.with(|next| {
+            if next.get() == Some(op) {
+                next.set(None);
+                Err(io::Error::other("injected spill failure"))
+            } else {
+                Ok(())
+            }
+        })
+    }
+}
+
+#[cfg(test)]
+mod resumable_tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("spill-unit-{name}-{}", std::process::id()))
+    }
+
+    #[test]
+    fn a_failed_truncate_leaves_the_length_and_the_bytes() {
+        let dir = scratch("truncate-fault");
+        let mut file = SpillDir::new(&dir).create_file().unwrap();
+        file.append(b"abcdef").unwrap();
+        fault::fail_next(fault::Op::Truncate);
+        assert!(file.truncate(2).is_err());
+        assert_eq!(file.len(), 6);
+        assert_eq!(file.read_all().unwrap(), b"abcdef");
+        // The fault is spent: the same truncate now works.
+        file.truncate(2).unwrap();
+        assert_eq!(file.read_all().unwrap(), b"ab");
+        drop(file);
+        fs::remove_dir(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_failed_append_keeps_the_logical_end_and_the_next_append_overwrites_the_leftovers() {
+        let dir = scratch("append-fault");
+        let mut file = SpillDir::new(&dir).create_file().unwrap();
+        file.append(b"abc").unwrap();
+        fault::fail_next(fault::Op::AppendAfterWrite);
+        assert!(file.append(b"XYZ").is_err());
+        assert_eq!(file.len(), 3);
+        assert_eq!(file.read_all().unwrap(), b"abc");
+        file.append(b"de").unwrap();
+        assert_eq!(file.read_all().unwrap(), b"abcde");
+        assert_eq!(file.digests().unwrap(), ObjectDigests::new(b"abcde"));
+        drop(file);
+        fs::remove_dir(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_failed_copy_leaves_no_file_behind() {
+        let dir = scratch("copy-fault");
+        let mut file = SpillDir::new(&dir).create_file().unwrap();
+        file.append(&vec![7; 100_000]).unwrap();
+        fault::fail_next(fault::Op::Copy);
+        assert!(file.try_clone().is_err());
+        let files = fs::read_dir(&dir).unwrap().count();
+        assert_eq!(files, 1);
+        assert_eq!(file.len(), 100_000);
+        drop(file);
+        fs::remove_dir(&dir).unwrap();
     }
 }

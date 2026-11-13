@@ -3576,6 +3576,53 @@ test("RTDB run entries expand the owned output and binary, and reject producer f
   }
 });
 
+test("failed command prints and records redacted output tails", async () => {
+  const { chmodSync } = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "fireemu-output-tail-"));
+  const logged = [];
+  const originalLog = console.log;
+  try {
+    mkdirSync(join(dir, "logs"));
+    const fake = join(dir, "node");
+    const diagnostic = "failure: Bearer bearer-value " + "AI" + "za" + "fake-key-value ";
+    const privateBlock = [
+      "-----BEGIN PRIVATE KEY-----",
+      "private-content",
+      "-----END PRIVATE KEY-----",
+    ].join("\n");
+    writeFileSync(
+      fake,
+      `#!${process.execPath}\nprocess.stdout.write('x'.repeat(4100) + ' stdout-end');\nprocess.stderr.write(${JSON.stringify(diagnostic)} + process.env.SAMPLE + ${JSON.stringify("\n" + privateBlock)});\nprocess.exit(1);\n`,
+    );
+    chmodSync(fake, 0o700);
+    console.log = (...args) => logged.push(args.join(" "));
+    const result = await runEntry(clone(RUNS.find((entry) => entry.id === "R23")), {
+      binary: join(dir, "installed binary"),
+      functionsNode: process.execPath,
+      out: dir,
+      env: { PATH: dir, SAMPLE: "environment-value" },
+    });
+    const command = result.record.commands[0];
+    assert.equal(command.exitCode, 1);
+    assert.equal(Buffer.byteLength(command.stdoutTail), 4000);
+    assert.ok(command.stdoutTail.endsWith(" stdout-end"));
+    assert.match(command.stderrTail, /failure: Bearer \[REDACTED\]/);
+    assert.ok(logged.join("\n").includes(command.stderrTail));
+    for (const secret of [
+      "bearer-value",
+      "fake-key-value",
+      "environment-value",
+      "private-content",
+    ]) {
+      assert.ok(!command.stderrTail.includes(secret));
+      assert.ok(!logged.join("\n").includes(secret));
+    }
+  } finally {
+    console.log = originalLog;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("RTDB entry timeout stops its owned native child", async () => {
   const { chmodSync } = await import("node:fs");
   const { setTimeout: delay } = await import("node:timers/promises");

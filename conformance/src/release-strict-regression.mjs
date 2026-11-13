@@ -1557,11 +1557,16 @@ async function runCommand(
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
-  const append = (chunk) => {
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8").on("data", (chunk) => {
+    stdout += chunk;
     output += chunk;
-  };
-  child.stdout.setEncoding("utf8").on("data", append);
-  child.stderr.setEncoding("utf8").on("data", append);
+  });
+  child.stderr.setEncoding("utf8").on("data", (chunk) => {
+    stderr += chunk;
+    output += chunk;
+  });
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
@@ -1573,7 +1578,8 @@ async function runCommand(
   }, timeoutMs);
   const exitCode = await new Promise((done) => {
     child.once("error", (error) => {
-      append(`${error.stack}\n`);
+      stderr += `${error.stack}\n`;
+      output += `${error.stack}\n`;
       done(-1);
     });
     child.once("close", (code, signal) => done(code ?? (signal ? 128 : -1)));
@@ -1581,7 +1587,28 @@ async function runCommand(
   clearTimeout(timer);
   killGroup(child.pid, "SIGKILL");
   await writeFile(logPath, output);
-  return { exitCode: timedOut ? "timeout" : exitCode, ms: Date.now() - started, output };
+  const tail = (text) => {
+    text = text
+      .replace(
+        /-----BEGIN [^-\r\n]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-\r\n]*PRIVATE KEY-----|$)/gi,
+        "[REDACTED]",
+      )
+      .replace(/\bBearer\s+[^\s"',;]+/gi, "Bearer [REDACTED]")
+      .replace(/AIza[\w-]+/g, "[REDACTED]");
+    for (const value of Object.values(env)
+      .filter((value) => typeof value === "string" && value)
+      .sort((a, b) => b.length - a.length)) {
+      text = text.replaceAll(value, "[REDACTED]");
+    }
+    return Buffer.from(text).subarray(-4000).toString("utf8");
+  };
+  return {
+    exitCode: timedOut ? "timeout" : exitCode,
+    ms: Date.now() - started,
+    output,
+    stdoutTail: tail(stdout),
+    stderrTail: tail(stderr),
+  };
 }
 
 const lastJsonLine = (text) => {
@@ -1639,9 +1666,14 @@ export async function runEntry(run, context) {
       argv,
       timeoutMs: command.timeoutMs ?? COMMAND_TIMEOUT_MS,
       exitCode: result.exitCode,
+      stdoutTail: result.stdoutTail,
+      stderrTail: result.stderrTail,
       ms: result.ms,
     });
     if (!command.expectedExitCodes.includes(result.exitCode)) {
+      console.log(
+        `${run.id} ${command.mode} stdout tail:\n${result.stdoutTail}\nstderr tail:\n${result.stderrTail}`,
+      );
       record.errors.push(
         `${command.mode} exited ${result.exitCode}, expected ${command.expectedExitCodes.join(" or ")}`,
       );

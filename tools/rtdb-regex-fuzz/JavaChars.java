@@ -29,7 +29,7 @@ public class JavaChars {
     for (int c = 0; c <= 0x10FFFF; c++) {
       if (c >= 0xD800 && c <= 0xDFFF) continue;
       String s = new String(Character.toChars(c));
-      String m = lower ? s.toLowerCase(java.util.Locale.ROOT) : s.toUpperCase(java.util.Locale.ROOT);
+      String m = lower ? s.toLowerCase() : s.toUpperCase();
       if (m.equals(s)) continue;
       out.append(String.format(" %04X>", c));
       for (int i = 0; i < m.length(); i++) out.append(String.format(i == 0 ? "%04X" : ",%04X", (int) m.charAt(i)));

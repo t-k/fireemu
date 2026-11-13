@@ -576,9 +576,16 @@ fn java_int(text: &str) -> Option<i32> {
     i32::try_from(if negative { -value } else { value }).ok()
 }
 
-/// Ranges where Rust 1.100 (Unicode 18) changes case differently from Java 21. Generated from `tests/fixtures/java21-chars.txt` by comparing both mappings for every Unicode scalar; Java 21 leaves every listed scalar unchanged in both directions. Use that identity mapping here and Rust's mappings elsewhere.
-/// `rules::java_chars_tests::every_code_point_changes_case_as_java_21_changes_it` checks every scalar's result and exact table membership, so toolchain Unicode drift fails the test.
-pub(super) const JAVA21_CASE_UNCHANGED: [(char, char); 22] = [
+/// Code points whose case Java 21 maps otherwise than Rust's newer Unicode tables, over every
+/// plane (the r11 JVM case-map comparison and review r11 M41). A case change of a string
+/// holding one is an error, so the rule is false. This is a declared difference from the
+/// official emulator, which maps them by Java 21. The list is computed from the Java 21 case maps
+/// in `tests/fixtures/java21-chars.txt` against the pinned toolchain's tables; the Rust 1.100
+/// bump added U+0277, U+027C, U+A7DD, U+A7E2, U+AB4B-AB4C, U+AB6C-AB6D and the U+1DF40-1DF95
+/// ranges, which newer Unicode versions case-map and Java 21 does not.
+/// `rules::java_chars_tests::every_code_point_changes_case_as_java_21_changes_it` fails
+/// when the list falls out of step with the toolchain.
+const CASE_DIFFERS: [(char, char); 22] = [
     ('\u{019B}', '\u{019B}'),
     ('\u{0264}', '\u{0264}'),
     ('\u{0277}', '\u{0277}'),
@@ -620,17 +627,16 @@ fn java_case_within(s: &str, lower: bool, room: usize, width: fn(char) -> usize)
             && !(plain_sigma_neighbour(i.checked_sub(1).map(|p| chars[p]))
                 && plain_sigma_neighbour(chars.get(i + 1).copied()))
     };
-    if lower && (0..chars.len()).any(ambiguous_sigma) {
+    if chars
+        .iter()
+        .any(|&c| CASE_DIFFERS.iter().any(|&(lo, hi)| (lo..=hi).contains(&c)))
+        || (lower && (0..chars.len()).any(ambiguous_sigma))
+    {
         return None;
     }
     let mut size = 0_usize;
     for &c in &chars {
-        let mapped: usize = if JAVA21_CASE_UNCHANGED
-            .iter()
-            .any(|&(lo, hi)| (lo..=hi).contains(&c))
-        {
-            width(c)
-        } else if lower {
+        let mapped: usize = if lower {
             c.to_lowercase().map(width).sum()
         } else {
             c.to_uppercase().map(width).sum()
@@ -640,33 +646,15 @@ fn java_case_within(s: &str, lower: bool, room: usize, width: fn(char) -> usize)
             return None;
         }
     }
-    let mut out = String::with_capacity(size);
-    for (i, &c) in chars.iter().enumerate() {
-        if JAVA21_CASE_UNCHANGED
-            .iter()
-            .any(|&(lo, hi)| (lo..=hi).contains(&c))
-        {
-            out.push(c);
-        } else if lower {
-            // The guard above admits only plain neighbours, so final sigma needs a preceding letter and an edge or space after it.
-            if c == '\u{03A3}'
-                && i > 0
-                && chars[i - 1] != ' '
-                && chars.get(i + 1).is_none_or(|&next| next == ' ')
-            {
-                out.push('\u{03C2}');
-            } else {
-                out.extend(c.to_lowercase());
-            }
-        } else {
-            out.extend(c.to_uppercase());
-        }
-    }
-    Some(out)
+    Some(if lower {
+        s.to_lowercase()
+    } else {
+        s.to_uppercase()
+    })
 }
 
 /// A neighbour of `Σ` both Java 21 and Rust read alike: the string's edge, an ASCII space, or
-/// a Latin, Greek or Cyrillic letter whose case mapping agrees in both versions and changes in at least one direction (so cased, and a word character).
+/// a Latin, Greek or Cyrillic letter that changes case (so cased, and a word character).
 fn plain_sigma_neighbour(c: Option<char>) -> bool {
     let Some(c) = c else {
         return true;
@@ -678,9 +666,6 @@ fn plain_sigma_neighbour(c: Option<char>) -> bool {
     c == ' '
         || (letter_block
             && c.is_alphabetic()
-            && !JAVA21_CASE_UNCHANGED
-                .iter()
-                .any(|&(lo, hi)| (lo..=hi).contains(&c))
             && (c.to_lowercase().ne(std::iter::once(c)) || c.to_uppercase().ne(std::iter::once(c))))
 }
 
@@ -1563,20 +1548,6 @@ mod bound_tests {
             Some("SS")
         );
         assert_eq!(java_case_within("\u{DF}", false, 1, char::len_utf16), None);
-    }
-
-    #[test]
-    fn java_21_overrides_use_the_java_output_width() {
-        for (text, lower) in [("\u{0277}", false), ("\u{A7DD}", true), ("\u{10D50}", true)] {
-            for width in [char::len_utf8, char::len_utf16] {
-                let room = text.chars().map(width).sum();
-                assert_eq!(
-                    java_case_within(text, lower, room, width).as_deref(),
-                    Some(text)
-                );
-                assert_eq!(java_case_within(text, lower, room - 1, width), None);
-            }
-        }
     }
 
     proptest::proptest! {

@@ -403,6 +403,7 @@
     "crates/fireemu/src/functions.rs",
     "crates/fireemu/src/functions/isolation.rs",
     "crates/fireemu/src/functions/runner_checks.rs",
+    "crates/fireemu/src/functions_python_reload_tests.rs",
     "crates/fireemu/src/help.rs",
     "crates/fireemu/src/hosting.rs",
     "crates/fireemu/src/hosting/content-type-samples.json",
@@ -1937,7 +1938,7 @@
     },
     "crates/fireemu/src/capabilities.json": {
       "kind": "json-semantic",
-      "value": "15aa264f50ea3f225b4dbec3a390fc1e7998a457ddb6c59d9adfc35141f6389d"
+      "value": "842b2c756a8fd6d9f8ce86db3f6c261aa20f969f317c1ab7cf03964433296faf"
     },
     "crates/fireemu/src/config.rs": {
       "kind": "sha256",
@@ -1969,7 +1970,7 @@
     },
     "crates/fireemu/src/functions.rs": {
       "kind": "sha256",
-      "value": "a96f53ed2ea7ad06ef975f55c64efdc17ba4f3a816f40befebb7301388070ff2"
+      "value": "05ec00b9a338004f478aeb472bdc1bc1c04218b5beabe0fb76672a28dd8fe2c7"
     },
     "crates/fireemu/src/functions/isolation.rs": {
       "kind": "sha256",
@@ -1978,6 +1979,10 @@
     "crates/fireemu/src/functions/runner_checks.rs": {
       "kind": "sha256",
       "value": "1db39f934e8553c0fe4e046ad91295ae935c8b94d7d2dc4ce2a91c3e117e5ca9"
+    },
+    "crates/fireemu/src/functions_python_reload_tests.rs": {
+      "kind": "sha256",
+      "value": "0d42c41a96466215a58cd33cc214db42232dbca5a6009c038bd2c89324f48347"
     },
     "crates/fireemu/src/help.rs": {
       "kind": "sha256",

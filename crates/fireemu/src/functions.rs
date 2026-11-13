@@ -316,6 +316,15 @@ async fn inspector_endpoint_is_active(port: u16) -> bool {
     )
 }
 
+fn is_python_cache_path(relative: &Path) -> bool {
+    relative
+        .components()
+        .any(|part| part.as_os_str() == "__pycache__")
+        || relative
+            .extension()
+            .is_some_and(|extension| matches!(extension.to_str(), Some("pyc" | "pyo")))
+}
+
 fn ignored_reload_path(relative: &Path, configured: &[String]) -> bool {
     let text = relative.to_string_lossy().replace('\\', "/");
     if relative
@@ -631,6 +640,8 @@ struct FunctionsSourceTraversal<'a> {
     byte_budget: FunctionsSourceByteBudget,
     charge: &'a mut dyn FnMut(u64, u64) -> Result<(), String>,
     cancelled: &'a AtomicBool,
+    exclude_python_cache_artifacts: bool,
+    exclude_python_venv: bool,
 }
 
 impl FunctionsSourceTraversal<'_> {
@@ -666,7 +677,9 @@ impl FunctionsSourceTraversal<'_> {
             ensure_source_work_active(self.cancelled)?;
             let child = entry.path();
             let relative = child.strip_prefix(self.root).unwrap_or(&child);
-            if ignored_reload_path(relative, self.ignores) {
+            if ignored_reload_path(relative, self.ignores)
+                || (self.exclude_python_cache_artifacts && is_python_cache_path(relative))
+            {
                 continue;
             }
             let kind = entry
@@ -719,7 +732,14 @@ impl FunctionsSourceTraversal<'_> {
             let path = entry.path();
             let relative = path.strip_prefix(self.root).unwrap_or(&path);
             // Watcher/deploy ignores must not remove files required by the runtime.
-            if ignored_reload_path(relative, &[]) {
+            if ignored_reload_path(relative, &[])
+                || (self.exclude_python_venv
+                    && relative
+                        .components()
+                        .next()
+                        .is_some_and(|component| component.as_os_str() == "venv"))
+                || (self.exclude_python_cache_artifacts && is_python_cache_path(relative))
+            {
                 continue;
             }
             let kind = entry
@@ -791,9 +811,43 @@ fn functions_source_stamp_with_charge(
     )
 }
 
+fn functions_source_stamp_with_python_cache_excluded(
+    root: &Path,
+    ignores: &[String],
+    charge: &mut dyn FnMut(u64, u64) -> Result<(), String>,
+    cancelled: &AtomicBool,
+) -> Result<FunctionsSourceStamp, String> {
+    functions_source_stamp_with_charge_and_file_version_and_python_cache(
+        root,
+        ignores,
+        true,
+        charge,
+        cancelled,
+        &functions_source_file_version,
+    )
+}
+
 fn functions_source_stamp_with_charge_and_file_version(
     root: &Path,
     ignores: &[String],
+    charge: &mut dyn FnMut(u64, u64) -> Result<(), String>,
+    cancelled: &AtomicBool,
+    file_version: &dyn Fn(&std::fs::Metadata) -> FunctionsSourceFileVersion,
+) -> Result<FunctionsSourceStamp, String> {
+    functions_source_stamp_with_charge_and_file_version_and_python_cache(
+        root,
+        ignores,
+        false,
+        charge,
+        cancelled,
+        file_version,
+    )
+}
+
+fn functions_source_stamp_with_charge_and_file_version_and_python_cache(
+    root: &Path,
+    ignores: &[String],
+    exclude_python_cache_artifacts: bool,
     charge: &mut dyn FnMut(u64, u64) -> Result<(), String>,
     cancelled: &AtomicBool,
     file_version: &dyn Fn(&std::fs::Metadata) -> FunctionsSourceFileVersion,
@@ -812,6 +866,8 @@ fn functions_source_stamp_with_charge_and_file_version(
         byte_budget: FunctionsSourceByteBudget::default(),
         charge,
         cancelled,
+        exclude_python_cache_artifacts,
+        exclude_python_venv: false,
     }
     .scan_directory(root, &mut stamp, 0, file_version)?;
     Ok(stamp)
@@ -863,7 +919,17 @@ impl FunctionsSourceScanBudget {
         }
     }
 
+    #[cfg(test)]
     async fn scan(&self, root: &Path, ignores: &[String]) -> Result<FunctionsSourceStamp, String> {
+        self.scan_with_python_cache(root, ignores, false).await
+    }
+
+    async fn scan_with_python_cache(
+        &self,
+        root: &Path,
+        ignores: &[String],
+        python_runtime: bool,
+    ) -> Result<FunctionsSourceStamp, String> {
         let permit = Arc::clone(&self.gate)
             .acquire_owned()
             .await
@@ -875,12 +941,17 @@ impl FunctionsSourceScanBudget {
         let result = tokio::task::spawn_blocking(move || {
             let _permit = permit;
             let mut pacer = BlockingSourceWorkPacer::new();
-            functions_source_stamp_with_charge(
-                &root,
-                &ignores,
-                &mut |entries, bytes| pacer.charge(entries, bytes, &cancelled),
-                &cancelled,
-            )
+            let mut charge = |entries, bytes| pacer.charge(entries, bytes, &cancelled);
+            if python_runtime {
+                functions_source_stamp_with_python_cache_excluded(
+                    &root,
+                    &ignores,
+                    &mut charge,
+                    &cancelled,
+                )
+            } else {
+                functions_source_stamp_with_charge(&root, &ignores, &mut charge, &cancelled)
+            }
         })
         .await
         .map_err(|error| format!("watch worker failed: {error}"))?;
@@ -888,10 +959,22 @@ impl FunctionsSourceScanBudget {
         result
     }
 
+    #[cfg(test)]
     async fn snapshot(
         &self,
         root: &Path,
         ignores: &[String],
+        link_python_venv: bool,
+    ) -> Result<FunctionsSourceSnapshot, String> {
+        self.snapshot_with_venv(root, ignores, link_python_venv)
+            .await
+    }
+
+    async fn snapshot_with_venv(
+        &self,
+        root: &Path,
+        ignores: &[String],
+        link_python_venv: bool,
     ) -> Result<FunctionsSourceSnapshot, String> {
         let permit = Arc::clone(&self.gate)
             .acquire_owned()
@@ -904,9 +987,10 @@ impl FunctionsSourceScanBudget {
         let result = tokio::task::spawn_blocking(move || {
             let _permit = permit;
             let mut pacer = BlockingSourceWorkPacer::new();
-            snapshot_functions_source_with_charge(
+            snapshot_functions_source_with_charge_and_venv(
                 &root,
                 &ignores,
+                link_python_venv,
                 &mut |entries, bytes| pacer.charge(entries, bytes, &cancelled),
                 &cancelled,
             )
@@ -1114,21 +1198,48 @@ fn snapshot_functions_source(
     )
 }
 
+#[cfg(all(test, unix))]
+fn snapshot_functions_source_with_linked_venv(
+    root: &Path,
+    ignores: &[String],
+) -> Result<FunctionsSourceSnapshot, String> {
+    snapshot_functions_source_with_charge_and_venv(
+        root,
+        ignores,
+        true,
+        &mut |_, _| Ok(()),
+        &AtomicBool::new(false),
+    )
+}
+
+#[cfg(test)]
 fn snapshot_functions_source_with_charge(
     root: &Path,
     ignores: &[String],
     charge: &mut dyn FnMut(u64, u64) -> Result<(), String>,
     cancelled: &AtomicBool,
 ) -> Result<FunctionsSourceSnapshot, String> {
-    snapshot_functions_source_with_charge_at(
+    snapshot_functions_source_with_charge_and_venv(root, ignores, false, charge, cancelled)
+}
+
+fn snapshot_functions_source_with_charge_and_venv(
+    root: &Path,
+    ignores: &[String],
+    link_python_venv: bool,
+    charge: &mut dyn FnMut(u64, u64) -> Result<(), String>,
+    cancelled: &AtomicBool,
+) -> Result<FunctionsSourceSnapshot, String> {
+    snapshot_functions_source_with_charge_at_and_venv(
         root,
         ignores,
+        link_python_venv,
         charge,
         cancelled,
         &std::env::temp_dir(),
     )
 }
 
+#[cfg(all(test, windows))]
 fn snapshot_functions_source_with_charge_at(
     root: &Path,
     ignores: &[String],
@@ -1136,9 +1247,28 @@ fn snapshot_functions_source_with_charge_at(
     cancelled: &AtomicBool,
     snapshot_root: &Path,
 ) -> Result<FunctionsSourceSnapshot, String> {
-    snapshot_functions_source_with_charge_at_and_acl_check(
+    snapshot_functions_source_with_charge_at_and_venv(
         root,
         ignores,
+        false,
+        charge,
+        cancelled,
+        snapshot_root,
+    )
+}
+
+fn snapshot_functions_source_with_charge_at_and_venv(
+    root: &Path,
+    ignores: &[String],
+    link_python_venv: bool,
+    charge: &mut dyn FnMut(u64, u64) -> Result<(), String>,
+    cancelled: &AtomicBool,
+    snapshot_root: &Path,
+) -> Result<FunctionsSourceSnapshot, String> {
+    snapshot_functions_source_with_charge_at_and_acl_check_and_venv(
+        root,
+        ignores,
+        link_python_venv,
         charge,
         cancelled,
         snapshot_root,
@@ -1147,6 +1277,7 @@ fn snapshot_functions_source_with_charge_at(
 }
 
 #[allow(clippy::too_many_lines)] // Keep atomic Windows DACL creation with snapshot setup.
+#[cfg(all(test, windows))]
 fn snapshot_functions_source_with_charge_at_and_acl_check<F>(
     root: &Path,
     ignores: &[String],
@@ -1158,13 +1289,46 @@ fn snapshot_functions_source_with_charge_at_and_acl_check<F>(
 where
     F: FnOnce(&Path) -> Result<(), String>,
 {
+    snapshot_functions_source_with_charge_at_and_acl_check_and_venv(
+        root,
+        ignores,
+        false,
+        charge,
+        cancelled,
+        snapshot_root,
+        acl_check,
+    )
+}
+
+#[allow(clippy::too_many_lines)] // Keep the snapshot's atomic copy and consistency checks together.
+fn snapshot_functions_source_with_charge_at_and_acl_check_and_venv<F>(
+    root: &Path,
+    ignores: &[String],
+    link_python_venv: bool,
+    charge: &mut dyn FnMut(u64, u64) -> Result<(), String>,
+    cancelled: &AtomicBool,
+    snapshot_root: &Path,
+    acl_check: F,
+) -> Result<FunctionsSourceSnapshot, String>
+where
+    F: FnOnce(&Path) -> Result<(), String>,
+{
     static NEXT_SNAPSHOT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let source_root = std::fs::canonicalize(root)
         .map_err(|error| format!("snapshot {}: {error}", root.display()))?;
-    // Deployment/watch ignores do not define the runtime generation. Validate every
-    // copied input, including local dotenv and secret files, under the same I/O budget.
-    let before =
-        functions_source_stamp_with_charge(&source_root, &[], charge, cancelled)?.content_signature;
+    // The linked Python venv is the only runtime input excluded from the consistency signature.
+    let runtime_excludes = if link_python_venv {
+        vec!["venv".to_owned()]
+    } else {
+        Vec::new()
+    };
+    let before = functions_source_runtime_signature(
+        &source_root,
+        &runtime_excludes,
+        link_python_venv,
+        charge,
+        cancelled,
+    )?;
     let sequence = NEXT_SNAPSHOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     #[cfg(unix)]
     let name = snapshot_directory_name(std::process::id(), sequence);
@@ -1256,6 +1420,8 @@ exit 0
         byte_budget: FunctionsSourceByteBudget::default(),
         charge,
         cancelled,
+        exclude_python_cache_artifacts: link_python_venv,
+        exclude_python_venv: link_python_venv,
     }
     .copy_directory(&source_root, &source_path, 0)
     .and_then(|()| {
@@ -1266,18 +1432,49 @@ exit 0
                 .expect("the snapshot mirrors each dependency ancestor");
             link_dependency_directory(&dependencies, &ancestor.join("node_modules"))?;
         }
+        if link_python_venv {
+            let venv = source_root.join("venv");
+            if venv.is_dir() {
+                link_dependency_directory(&venv, &source_path.join("venv"))?;
+            }
+        }
         Ok(())
     })?;
-    let copied =
-        functions_source_stamp_with_charge(&source_path, &[], charge, cancelled)?.content_signature;
-    let after =
-        functions_source_stamp_with_charge(&source_root, &[], charge, cancelled)?.content_signature;
+    let copied = functions_source_runtime_signature(
+        &source_path,
+        &runtime_excludes,
+        link_python_venv,
+        charge,
+        cancelled,
+    )?;
+    let after = functions_source_runtime_signature(
+        &source_root,
+        &runtime_excludes,
+        link_python_venv,
+        charge,
+        cancelled,
+    )?;
     if before != copied || before != after {
         return Err(
             "Functions runtime inputs changed while capturing a reload snapshot".to_owned(),
         );
     }
     Ok(snapshot)
+}
+
+fn functions_source_runtime_signature(
+    root: &Path,
+    ignores: &[String],
+    exclude_python_cache: bool,
+    charge: &mut dyn FnMut(u64, u64) -> Result<(), String>,
+    cancelled: &AtomicBool,
+) -> Result<u64, String> {
+    let stamp = if exclude_python_cache {
+        functions_source_stamp_with_python_cache_excluded(root, ignores, charge, cancelled)?
+    } else {
+        functions_source_stamp_with_charge(root, ignores, charge, cancelled)?
+    };
+    Ok(stamp.content_signature)
 }
 
 #[cfg(unix)]
@@ -1576,11 +1773,22 @@ fn split_reload(
     codebases.into_iter().partition(reload_supervised)
 }
 
-/// Whether source changes of the codebase are watched and reloaded. The reload snapshot links
-/// `node_modules` only, so it would lack the interpreter of a Python codebase's `venv`: Python reload
-/// is a later slice.
-fn reload_supervised(codebase: &FunctionsCodebase) -> bool {
-    crate::python_functions::codebase_language(codebase) != RuntimeLanguage::Python
+/// Whether source changes of the codebase are watched and reloaded.
+fn reload_supervised(_codebase: &FunctionsCodebase) -> bool {
+    true
+}
+
+fn reload_ignore_patterns(codebase: &FunctionsCodebase) -> Vec<String> {
+    let mut ignores = codebase.ignore.clone();
+    if crate::python_functions::codebase_language(codebase) == RuntimeLanguage::Python
+        && !ignores.iter().any(|pattern| {
+            let pattern = pattern.trim_start_matches("./").trim_start_matches("**/");
+            pattern == "venv"
+        })
+    {
+        ignores.push("venv".to_owned());
+    }
+    ignores
 }
 
 fn start_reload_supervisors(
@@ -1671,7 +1879,13 @@ async fn changed_source_stamp(
     last_scan_error: &mut bool,
     retry_delay: &mut Duration,
 ) -> Option<FunctionsSourceStamp> {
-    let next_stamp = match scan_budget.scan(root, &codebase.ignore).await {
+    let ignores = reload_ignore_patterns(codebase);
+    let python_runtime =
+        crate::python_functions::codebase_language(codebase) == RuntimeLanguage::Python;
+    let next_stamp = match scan_budget
+        .scan_with_python_cache(root, &ignores, python_runtime)
+        .await
+    {
         Ok(stamp) => {
             *last_scan_error = false;
             *retry_delay = source_scan_retry_delay(*retry_delay, None);
@@ -1688,7 +1902,7 @@ async fn changed_source_stamp(
     }
     tokio::time::sleep(Duration::from_millis(250)).await;
     let stable_stamp = scan_budget
-        .scan(root, &codebase.ignore)
+        .scan_with_python_cache(root, &ignores, python_runtime)
         .await
         .unwrap_or(next_stamp);
     if stable_stamp != next_stamp {
@@ -1767,7 +1981,13 @@ async fn snapshot_consistent_reload_source(
     retry_delay: &mut Duration,
     last_snapshot_error: &mut bool,
 ) -> Option<FunctionsSourceSnapshot> {
-    let snapshot = match scan_budget.snapshot(root, &codebase.ignore).await {
+    let ignores = reload_ignore_patterns(codebase);
+    let python_runtime =
+        crate::python_functions::codebase_language(codebase) == RuntimeLanguage::Python;
+    let snapshot = match scan_budget
+        .snapshot_with_venv(root, &ignores, python_runtime)
+        .await
+    {
         Ok(snapshot) => {
             *last_snapshot_error = false;
             snapshot
@@ -1779,8 +1999,8 @@ async fn snapshot_consistent_reload_source(
         }
     };
     let (snapshot_stamp, current_stamp) = tokio::join!(
-        scan_budget.scan(&snapshot, &codebase.ignore),
-        scan_budget.scan(root, &codebase.ignore),
+        scan_budget.scan_with_python_cache(&snapshot, &ignores, python_runtime),
+        scan_budget.scan_with_python_cache(root, &ignores, python_runtime),
     );
     if snapshot_stamp.as_ref().map(|stamp| stamp.content_signature) != Ok(stable)
         || current_stamp.as_ref().map(|stamp| stamp.content_signature) != Ok(stable)
@@ -1844,7 +2064,11 @@ async fn supervise_codebase_reloads(
         else {
             continue;
         };
-        let _restart_guard = if let Some(port) = cfg.functions_inspect_port {
+        let fixed_inspector = cfg.functions_inspect_port.is_some()
+            && crate::python_functions::codebase_language(&codebase) != RuntimeLanguage::Python;
+        let _restart_guard = if let Some(port) =
+            cfg.functions_inspect_port.filter(|_| fixed_inspector)
+        {
             match prepare_fixed_inspector_reload(&runtime, &codebase.codebase, port).await {
                 Ok(guard) => Some(guard),
                 Err(reason) => {
@@ -1876,7 +2100,7 @@ async fn supervise_codebase_reloads(
                 }
                 report_reload_install(
                     runtime.reload_codebase_units(specs),
-                    cfg.functions_inspect_port.is_some(),
+                    fixed_inspector,
                     &codebase.codebase,
                     stable_stamp,
                     &mut observed_stamp,
@@ -1884,7 +2108,7 @@ async fn supervise_codebase_reloads(
                 );
             }
             Err(reason) => {
-                if cfg.functions_inspect_port.is_some() {
+                if fixed_inspector {
                     warn_reload_once(
                         &mut last_start_error,
                         &codebase.codebase,
@@ -3551,7 +3775,11 @@ pub async fn start(
         initial_stamps.insert(
             codebase.codebase.clone(),
             scan_budget
-                .scan(Path::new(&codebase.source), &codebase.ignore)
+                .scan_with_python_cache(
+                    Path::new(&codebase.source),
+                    &reload_ignore_patterns(codebase),
+                    crate::python_functions::codebase_language(codebase) == RuntimeLanguage::Python,
+                )
                 .await,
         );
     }
@@ -7697,6 +7925,9 @@ fn base64_encode(data: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    mod python_reload_tests {
+        include!("functions_python_reload_tests.rs");
+    }
     use std::collections::{BTreeMap, BTreeSet};
     #[cfg(unix)]
     use std::ffi::OsString;
@@ -9777,6 +10008,8 @@ root	unchanged	small	firstGen";
             byte_budget: FunctionsSourceByteBudget::default(),
             charge: &mut charge,
             cancelled: &cancelled,
+            exclude_python_cache_artifacts: false,
+            exclude_python_venv: false,
         };
 
         let error = traversal.copy_file(&source, &target).unwrap_err();
@@ -9960,7 +10193,7 @@ root	unchanged	small	firstGen";
         };
         let budget = Arc::new(FunctionsSourceScanBudget::new());
         let task_root = root.clone();
-        let task = tokio::spawn(async move { budget.snapshot(&task_root, &[]).await });
+        let task = tokio::spawn(async move { budget.snapshot(&task_root, &[], false).await });
         // Readiness is not a latency assertion. The copy starts only after the whole source
         // has been hashed, which takes the 2 s pacing delay when idle but has no upper bound
         // when the CPU is starved: there the hash alone outlasted a 60 s deadline and the test
@@ -12626,15 +12859,15 @@ exports.add = onCall({{}}, observe("add"));
         };
         let (supervised, unsupervised) =
             super::split_reload(vec![python.clone(), node.clone(), python.clone()]);
-        assert_eq!(supervised, vec![node]);
-        assert_eq!(unsupervised, vec![python.clone(), python]);
+        assert_eq!(supervised, vec![python.clone(), node, python.clone()]);
+        assert!(unsupervised.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn python_reload_is_not_supervised_and_node_reload_is() {
+    fn python_and_node_reload_are_supervised() {
         let (dir, python) = python_codebase("reload");
-        assert!(!super::reload_supervised(&python));
+        assert!(super::reload_supervised(&python));
         std::fs::write(dir.join("package.json"), "{}").unwrap();
         assert!(
             super::reload_supervised(&python),
@@ -12645,7 +12878,7 @@ exports.add = onCall({{}}, observe("add"));
             ..python
         };
         assert!(
-            !super::reload_supervised(&declared),
+            super::reload_supervised(&declared),
             "a declared Python runtime wins over package.json"
         );
         let _ = std::fs::remove_dir_all(&dir);

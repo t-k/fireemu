@@ -896,3 +896,125 @@ test("v5 combining cannot promote missing repeats or an inconclusive run to an a
   assert.equal(empty.answers.deleteArms, "mixed");
   assert.deepEqual(empty.answers.windowEdge.verdict, { mixed: ["window", "no-data"] });
 });
+
+test("unknown answer boundaries are rejected independently in both judges", () => {
+  const cases = [
+    [199, true],
+    [200, false],
+    [299, false],
+    [300, true],
+    [399, true],
+    [400, false],
+    [499, false],
+    [500, true],
+    [501, true],
+    [undefined, true],
+  ];
+  for (const [status, unknown] of cases) {
+    const legacy = {
+      id: "N1",
+      steps: [
+        { i: 0, status: 404 },
+        { i: 1, status, kind: "error" },
+      ],
+    };
+    const cell = structuredClone(v5Base.find((r) => r.id === "W25a"));
+    Object.assign(probeOf(cell), { status, kind: "error", failure: null });
+    assert.equal(prerequisite(legacy).ok, !unknown, `prerequisite status ${status}`);
+    assert.equal(Boolean(judgeRunV5([cell]).invalid[cell.id]), unknown, `v5 status ${status}`);
+  }
+  for (const patch of [{ kind: "unknown" }, { failure: "timeout" }]) {
+    const legacy = {
+      id: "N1",
+      steps: [
+        { i: 0, status: 404 },
+        { i: 1, status: 200, ...patch },
+      ],
+    };
+    const cell = structuredClone(v5Base.find((r) => r.id === "W25a"));
+    Object.assign(probeOf(cell), { status: 200, kind: "ok", failure: null }, patch);
+    assert.match(prerequisite(legacy).reason, /unknown answer/);
+    assert.match(judgeRunV5([cell]).invalid[cell.id], /unknown answer/);
+  }
+});
+
+test("v5 rejects skipped or aborted cells and independently checks step index and operation", () => {
+  for (const field of ["skipped", "aborted"]) {
+    const cell = structuredClone(v5Base.find((r) => r.id === "W25a"));
+    cell[field] = "interrupted";
+    assert.equal(judgeRunV5([cell]).invalid[cell.id], "interrupted");
+  }
+  for (const patch of [{ i: 99 }, { op: "unexpected" }]) {
+    const cell = structuredClone(v5Base.find((r) => r.id === "W25a"));
+    Object.assign(cell.steps[0], patch);
+    assert.equal(judgeRunV5([cell]).invalid[cell.id], "unexpected step 0");
+  }
+});
+
+test("v5 never-created interval requires 404 misses as well as 404 hits", () => {
+  const records = structuredClone(v5Base);
+  const never = records.filter((r) => r.id.startsWith("N1"));
+  for (const [i, r] of never.entries())
+    Object.assign(probeOf(r), i < 8 ? MISS : HIT, {
+      headersMs: i < 8 ? 300 : 20,
+      ageMs: i < 8 ? 4000 : 4400,
+    });
+  assert.deepEqual(judgeRunV5(records).answers.neverCreatedActivationMs, [4000, 4400]);
+  Object.assign(probeOf(never[0]), OK, { headersMs: 300 });
+  assert.equal(judgeRunV5(records).answers.neverCreatedActivationMs, "mixed");
+});
+
+test("v5 merging preserves agreement, disagreement, and incomplete individual runs", () => {
+  const complete = structuredClone(v5Base);
+  const activation = complete.filter((r) => r.id.startsWith("N1"));
+  for (const [i, r] of activation.entries())
+    Object.assign(probeOf(r), i < 8 ? MISS : HIT, {
+      headersMs: i < 8 ? 300 : 20,
+      ageMs: i < 8 ? 4000 : 4400,
+    });
+  const run = (records) => judgeRunV5(records);
+  const agreement = combineRuns(run(complete), run(complete));
+  assert.equal(agreement.deleteArms, "no");
+  assert.deepEqual(agreement.neverCreatedActivationMs, [4000, 4400]);
+  for (const age of [4000, 7000, 13000])
+    assert.equal(agreement.recent200Exempts[age], run(complete).answers.recent200Exempts[age]);
+  for (const key of ["ttl", "windowEdge"]) assert.equal(agreement[key].verdict, "window");
+
+  const opposite = structuredClone(complete);
+  for (const r of opposite.filter((r) => r.id.startsWith("DA")))
+    Object.assign(probeOf(r), HIT, { headersMs: 20, ageMs: 6000 });
+  for (const r of opposite.filter((r) => r.id.startsWith("E200"))) {
+    const isHit = probeOf(r).status === 404;
+    Object.assign(probeOf(r), isHit ? OK : HIT, { headersMs: isHit ? 300 : 20 });
+  }
+  for (const r of opposite.filter((r) => r.id.startsWith("W")))
+    Object.assign(probeOf(r), HIT, { headersMs: 20, ageMs: 1000 });
+  const disagreement = combineRuns(run(complete), run(opposite));
+  assert.equal(disagreement.deleteArms, "mixed");
+  for (const age of [4000, 7000, 13000]) assert.equal(disagreement.recent200Exempts[age], "mixed");
+  for (const key of ["ttl", "windowEdge"])
+    assert.deepEqual(disagreement[key].verdict, { mixed: ["window", "open"] });
+
+  for (const id of ["DA1", "N1a", "E200-4a", "E200-7a", "E200-13a"]) {
+    const missing = complete.filter((r) => r.id !== id);
+    const extra = [...complete, structuredClone(complete.find((r) => r.id === id))];
+    for (const [first, second] of [
+      [missing, extra],
+      [extra, missing],
+    ]) {
+      const merged = combineRuns(run(first), run(second));
+      if (id.startsWith("DA")) assert.equal(merged.deleteArms, "mixed");
+      else if (id.startsWith("N1")) assert.equal(merged.neverCreatedActivationMs, "mixed");
+      else assert.equal(merged.recent200Exempts[Number(id.match(/E200-(\d+)/)[1]) * 1000], "mixed");
+    }
+  }
+});
+
+test("v5 pooling requires records and v5 answers from both runs", () => {
+  const v5 = judgeRunV5(v5Base);
+  const summary = { answers: v5.answers };
+  assert.doesNotThrow(() => combineRunsFull(v5, summary));
+  assert.doesNotThrow(() => combineRunsFull(summary, v5));
+  assert.doesNotThrow(() => combineRunsFull(v5, base));
+  assert.doesNotThrow(() => combineRunsFull(base, v5));
+});

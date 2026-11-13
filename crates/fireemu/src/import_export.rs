@@ -4053,19 +4053,17 @@ fn export_database(
     Ok(())
 }
 
-/// A copy of the object store for the export. A spilled upload session is copied with its
-/// file, which can fail.
+/// A copy of the committed objects for the export.
 fn capture_storage(
     endpoints: &Endpoints,
     section_dir: &ExportPath,
 ) -> Result<fireemu_core_storage::store::StorageState, ArtifactError> {
-    endpoints
+    Ok(endpoints
         .storage
         .store
         .lock()
         .map_err(|_| ArtifactError::new("storage", section_dir, "the object store is poisoned"))?
-        .capture_buckets(|_| true)
-        .map_err(|e| ArtifactError::new("storage", section_dir, e.to_string()))
+        .capture_bucket_objects(|_| true))
 }
 
 fn export_storage(
@@ -4758,6 +4756,21 @@ mod tests {
                         LogicalInstant::UNIX_EPOCH,
                     )
                     .unwrap();
+                if spill {
+                    let pending = store
+                        .begin_upload(
+                            &bucket,
+                            &ObjectName::try_new("pending").unwrap(),
+                            NewMetadata::default(),
+                            Precondition::default(),
+                            None,
+                            LogicalInstant::UNIX_EPOCH,
+                        )
+                        .unwrap();
+                    store
+                        .append_upload(&pending, 0, b"pending upload", LogicalInstant::UNIX_EPOCH)
+                        .unwrap();
+                }
             }
             if spill {
                 assert!(std::fs::read_dir(process.path()).unwrap().next().is_some());
@@ -4797,6 +4810,42 @@ mod tests {
             results.push((comparable, store.body_bytes(restored).unwrap().to_vec()));
         }
         assert_eq!(results[0], results[1]);
+        for subdir in [super::BLOBS_DIR, super::METADATA_DIR] {
+            let first = root
+                .join("memory-export")
+                .join(super::STORAGE_PATH)
+                .join(subdir);
+            let second = root
+                .join("spilled-export")
+                .join(super::STORAGE_PATH)
+                .join(subdir);
+            let entries: Vec<_> = std::fs::read_dir(&first)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(std::fs::read_dir(&second).unwrap().count(), entries.len());
+            for name in entries {
+                assert_eq!(
+                    std::fs::read(first.join(&name)).unwrap(),
+                    std::fs::read(second.join(&name)).unwrap()
+                );
+            }
+        }
+        assert_eq!(
+            std::fs::read(
+                root.join("memory-export")
+                    .join(super::STORAGE_PATH)
+                    .join(super::BUCKETS_FILE)
+            )
+            .unwrap(),
+            std::fs::read(
+                root.join("spilled-export")
+                    .join(super::STORAGE_PATH)
+                    .join(super::BUCKETS_FILE)
+            )
+            .unwrap(),
+        );
     }
 
     /// A password policy survives an export and import in each enforcement state, the

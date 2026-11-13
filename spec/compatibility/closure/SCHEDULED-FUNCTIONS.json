@@ -1586,7 +1586,7 @@
               "fields": [
                 "localVerificationRows"
               ],
-              "testId": "crates/fireemu-adapter-functions/src/runtime.rs#a_first_generation_schedule_publishes_its_message_at_each_occurrence"
+              "testId": "crates/fireemu-adapter-functions/src/runtime/schedule_capacity_tests.rs#a_first_generation_schedule_publishes_its_message_at_each_occurrence"
             }
           ],
           "coveredBy": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-1024z-rulings-on-the-last-three-sched-cases",

@@ -1090,6 +1090,8 @@ pub struct RuntimeConfig {
     /// `storage.maxStoredBytes`: the object data the Storage emulator retains, a local bound
     /// production does not have (owner ledger 759). `None` bounds nothing.
     pub storage_max_stored_bytes: Option<u64>,
+    /// `storage.spillObjectBytes`: committed objects at least this large keep their bytes in a temporary file instead of memory. None keeps every object in memory.
+    pub storage_spill_object_bytes: Option<u64>,
     /// Maximum size of an individual Storage object.
     pub storage_max_object_bytes: u64,
     /// Process-wide budget for buffered Storage request bodies.
@@ -1991,6 +1993,7 @@ impl Default for RuntimeConfig {
             history_max_versions_per_path: None,
             history_max_bytes: None,
             storage_max_stored_bytes: None,
+            storage_spill_object_bytes: None,
             storage_max_object_bytes: fireemu_core_storage::store::MAX_OBJECT_BYTES,
             storage_buffered_body_budget_bytes:
                 fireemu_adapter_http::storage_server::DEFAULT_BODY_BUDGET_BYTES,
@@ -2536,6 +2539,7 @@ impl RuntimeConfig {
             "rules.denialLog" => Some(json!(if self.rules_denial_log { "summary" } else { "off" })),
             "storage.rules" => Some(json!(self.storage_rules_file)),
             "storage.maxStoredBytes" => Some(json!(self.storage_max_stored_bytes)),
+            "storage.spillObjectBytes" => Some(json!(self.storage_spill_object_bytes)),
             "storage.maxObjectBytes" => Some(json!(self.storage_max_object_bytes)),
             "storage.bufferedBodyBudgetBytes" => Some(json!(self.storage_buffered_body_budget_bytes)),
             "storage.buckets" => Some(json!(self.storage_buckets)),
@@ -6383,6 +6387,15 @@ impl RuntimeConfig {
                 })?;
                 cfg.storage_max_stored_bytes = Some(bytes);
             }
+            if let Some(value) = storage.get("spillObjectBytes") {
+                let bytes = value.as_u64().filter(|bytes| *bytes >= 1).ok_or_else(|| {
+                    ConfigError(
+                        "storage.spillObjectBytes must be a whole number of bytes, at least 1"
+                            .to_owned(),
+                    )
+                })?;
+                cfg.storage_spill_object_bytes = Some(bytes);
+            }
             if let Some(value) = storage.get("buckets") {
                 cfg.storage_buckets = parse_storage_buckets("buckets", value)?;
             }
@@ -6936,6 +6949,7 @@ mod tests {
             ("firestore.history.maxVersionsPerPath", json!(7)),
             ("firestore.history.maxBytes", json!(268_435_456)),
             ("storage.maxStoredBytes", json!(8192)),
+            ("storage.spillObjectBytes", json!(4096)),
             ("storage.maxObjectBytes", json!(1_048_576)),
             ("storage.bufferedBodyBudgetBytes", json!(2_097_152)),
             (
@@ -7193,6 +7207,7 @@ mod tests {
             ("daemon.authProjectNumbers", json!({}), "default"),
             ("storage.rules", json!(null), "unset"),
             ("storage.maxStoredBytes", json!(null), "unset"),
+            ("storage.spillObjectBytes", json!(null), "unset"),
             ("storage.maxObjectBytes", json!(268_435_456), "default"),
             (
                 "storage.bufferedBodyBudgetBytes",
@@ -8411,6 +8426,31 @@ mod tests {
         ] {
             let error = read("strict", bad.clone()).unwrap_err();
             assert!(error.0.contains(needle), "{bad}: {error}");
+        }
+    }
+
+    #[test]
+    fn storage_spill_object_bytes_is_opt_in_and_positive() {
+        let parse = |storage: Value| {
+            RuntimeConfig::from_json(&json!({"schemaVersion": 1, "storage": storage}))
+        };
+        assert_eq!(parse(json!({})).unwrap().storage_spill_object_bytes, None);
+        for bytes in [1, 1_073_741_824] {
+            assert_eq!(
+                parse(json!({"spillObjectBytes": bytes}))
+                    .unwrap()
+                    .storage_spill_object_bytes,
+                Some(bytes)
+            );
+        }
+        for bad in [json!(0), json!(-1), json!(1.5), json!("1024"), json!(null)] {
+            let error = parse(json!({"spillObjectBytes": bad})).unwrap_err();
+            assert!(
+                error.0.contains(
+                    "storage.spillObjectBytes must be a whole number of bytes, at least 1"
+                ),
+                "{error}"
+            );
         }
     }
 

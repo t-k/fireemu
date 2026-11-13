@@ -514,3 +514,16 @@ assert(recovery["steps"].any? { |step| step["run"] == "node npm/scripts/recover-
 recovery_release = release.dig("jobs", "recover-v0381-github-release")
 assert(recovery_release["needs"] == ["recover-v0381"], "recovery release must wait for npm publication")
 assert(recovery_release["steps"].none? { |step| step["uses"]&.start_with?("actions/checkout@") }, "recovery release must not check out code")
+
+# The Storage spill memory measurement is manual-only, read-only, writes no caches, and pins every
+# action to an immutable commit (it runs on the Linux runner, the canonical source of RSS numbers).
+spill_memory = load_workflow("storage-spill-memory.yml")
+spill_trigger = spill_memory["on"] || spill_memory[true]
+assert(spill_trigger.keys == ["workflow_dispatch"], "storage-spill-memory.yml must be manual-only: no schedule, no push, no PR trigger")
+assert(spill_memory["permissions"] == { "contents" => "read" }, "storage-spill-memory.yml must default to contents: read only")
+spill_source = File.read(File.join(ROOT, ".github", "workflows", "storage-spill-memory.yml"))
+assert(!spill_source.match?(/actions\/cache|actions\/cache\/save|actions\/cache\/restore|Swatinem\/rust-cache/), "storage-spill-memory.yml must not read or write caches")
+assert(!spill_source.match?(/uses:\s+[^\s#]+@(v\d+|stable|main|master)\b/), "storage-spill-memory.yml actions must be pinned to immutable commits")
+spill_steps = spill_memory.dig("jobs", "measure", "steps")
+assert(spill_steps.any? { |step| step["run"].to_s.include?("tools/bench/spill_memory.py") }, "storage-spill-memory.yml must run tools/bench/spill_memory.py")
+assert(spill_memory.dig("jobs", "measure", "timeout-minutes"), "storage-spill-memory.yml must declare a timeout")

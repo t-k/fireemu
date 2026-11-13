@@ -8,6 +8,14 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Added
+
+- Storage: `storage.spillObjectBytes` (unset by default) keeps committed objects of at least that many bytes in temporary files under the daemon's temp root instead of memory. Reads, ranges, digests, generations, preconditions and the stored-bytes limit are unchanged. A failed spill write answers 503 with `Retry-After: 1` and logs the cause; the temporary directory is removed at clean shutdown and stale ones from dead processes are removed at the next start. Resumable upload sessions still buffer in memory, and a single-shot upload is buffered by the HTTP adapter before the store sees it, so one large single-shot upload does not lower the resident memory after it commits (the allocator can keep one freed body resident; spilling helps when many large objects are stored).
+
+### Fixed
+
+- Functions: a callable nested in an HTTP function refuses App Check tokens the daemon did not verify when App Check is enabled.
+
 ## [0.50.0] - 2026-11-12
 
 ### Added
@@ -35,8 +43,6 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 - Strict profile: a callable's wrapper nested in an `onRequest` function (`onRequest(opts, onCall(...))`, which discovery cannot see as a callable) no longer accepts a credential the daemon did not verify as an identity: it refuses it with the wrapper's unauthenticated envelope (ordinary `401` JSON or a `200` streaming error record), as production's wrapper does. A plain `onRequest` function is unchanged and still receives every credential.
 
 ### Fixed
-
-- Functions: a callable nested in an HTTP function refuses App Check tokens the daemon did not verify when App Check is enabled.
 
 - Test worlds: `Promise.all([world.control('POST', 'sessions/default:awaitIdle'), world.clock.advance(1000)])` no longer waits for itself. A pending `awaitIdle` no longer holds up later clock calls on the same world, `reset()` and `dispose()` cancel pending waits instead of waiting for their budget, and an `awaitIdle` request is bounded by its own `timeoutSeconds` (30 s by default) plus five seconds rather than by `requestTimeoutMs`.
 - Dependencies: rustix is updated to 1.1.6 for RUSTSEC-2026-0486 (extended-attribute reads with a zero-length buffer).

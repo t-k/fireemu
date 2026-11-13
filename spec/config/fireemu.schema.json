@@ -839,6 +839,11 @@
           "minimum": 1,
           "description": "The object data the Storage emulator retains, in bytes, a local bound production does not have. Unset, nothing is bounded. A write that would grow the total past it (upload, resumable finalize, copy) is refused with 402 and the message storage.maxStoredBytes limit exceeded, and changes nothing; a resumable session stays open. Each object counts its bytes once (a copy counts again). Import and snapshot restore are not checked against it; an import above it starts with a warning."
         },
+        "spillObjectBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Committed Storage objects of at least this many bytes keep their bytes in temporary files under the daemon's temp root instead of memory. Unset, every object stays in memory, as production has no such setting. Reads, digests, generations and limits are unchanged; a failed spill write answers 503 with Retry-After: 1. Resumable upload sessions still buffer in memory."
+        },
         "buckets": {
           "type": "array",
           "items": { "type": "string", "minLength": 3, "maxLength": 222 },

@@ -154,7 +154,13 @@ impl StorageBridge {
         let name = ObjectName::try_new(name).ok()?;
         let store = self.storage.store().ok()?;
         let meta = store.get(&bucket, &name)?;
-        Some(store.bytes(meta).to_vec())
+        match store.body_bytes(meta) {
+            Ok(bytes) => Some(bytes.into_owned()),
+            Err(error) => {
+                eprintln!("storage spill read failed: {error}");
+                None
+            }
+        }
     }
 }
 

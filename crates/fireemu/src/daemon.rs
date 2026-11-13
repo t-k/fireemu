@@ -31,9 +31,9 @@ use super::{
     app_check_state, bind_listeners, child_environment, clock_millis, control, control_state,
     exit_code, functions, hub, hub_emulators, import_export, install_auth_credential_entropy,
     load_rules, load_storage_rules, logical_system_time, plan, print_banner, print_rules_status,
-    random_secret, reportable_exit_code, runtime_thread_counts, service_admission,
-    session_rsa_cache, spawn_child, start_firestore_config_reload_supervisors, stop_child,
-    storage_state, ui, wait_child, BoundAddrs, ExecPlan, Exporter, Listeners, Options,
+    random_secret, release_storage_spill, reportable_exit_code, runtime_thread_counts,
+    service_admission, session_rsa_cache, spawn_child, start_firestore_config_reload_supervisors,
+    stop_child, storage_state, ui, wait_child, BoundAddrs, ExecPlan, Exporter, Listeners, Options,
     RedactedRuntimeConfig, RuntimeConfig, Selection, ShutdownSignals, Verbosity,
 };
 
@@ -849,6 +849,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     }
     let storage = storage_state(
         &cfg,
+        &crate::spill_root(),
         &clock,
         &registry,
         &tenancy,
@@ -1900,6 +1901,9 @@ async fn serve_suite(
         while servers.join_next().await.is_some() {}
     })
     .await;
+    // The spill directory goes with the daemon's own handles, not with a destructor that may
+    // never run; the managed-storage bridge still holds the state.
+    release_storage_spill(&storage);
     // Discovery is retired as an explicit, ordered step of shutdown, while the runtime is
     // still up and every server that answered on the advertised origin has stopped. Dropping
     // the locator on the way out is kept as a fallback, not as the mechanism: a destructor

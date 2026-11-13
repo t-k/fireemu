@@ -10,4 +10,5 @@ pub mod etag;
 pub mod glob;
 pub mod hash;
 pub mod name;
+pub mod spill;
 pub mod store;

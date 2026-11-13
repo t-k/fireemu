@@ -3,7 +3,9 @@
 //! event log for the outbox.
 
 use core::fmt;
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
+use std::io;
 use std::sync::Arc;
 
 use fireemu_core_types::admission::EventAdmissionError;
@@ -13,6 +15,7 @@ use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
 use crate::hash::{base64, crc32c, md5, Crc32c, Md5};
 use crate::name::{BucketName, ObjectName};
+use crate::spill::{SpillDir, SpillFile};
 
 /// Default largest object accepted (memory-backed test runtime).
 pub const MAX_OBJECT_BYTES: u64 = 256 * 1024 * 1024;
@@ -421,6 +424,8 @@ pub enum StorageError {
     /// A not-match precondition named the current generation / metageneration (reads answer
     /// `304 Not Modified`, writes `412`).
     NotModified(String),
+    /// A committed object body could not be spilled to disk.
+    SpillFailed(String),
 }
 
 impl fmt::Display for StorageError {
@@ -445,6 +450,7 @@ impl fmt::Display for StorageError {
             Self::IdentityExhausted => f.write_str("storage identity space exhausted"),
             Self::EventAdmission(error) => write!(f, "event admission failed: {error}"),
             Self::NotModified(m) => write!(f, "not modified: {m}"),
+            Self::SpillFailed(m) => write!(f, "spill failed: {m}"),
         }
     }
 }
@@ -750,12 +756,34 @@ pub struct ListPage {
     pub next_page_token: Option<String>,
 }
 
+impl fmt::Debug for SpillDir {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SpillDir").finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Clone)]
+enum BlobBody {
+    Memory(Arc<Vec<u8>>),
+    Spilled(Arc<SpillFile>),
+}
+
+impl BlobBody {
+    fn len(&self) -> u64 {
+        match self {
+            Self::Memory(bytes) => bytes.len() as u64,
+            Self::Spilled(file) => file.len(),
+        }
+    }
+}
+
 /// All buckets of one session.
 #[derive(Debug, Clone)]
 pub struct StorageState {
     objects: BTreeMap<(BucketName, ObjectName), ObjectMetadata>,
     /// Object data, shared by reference with every snapshot that captured the same blob.
-    blobs: BTreeMap<BlobId, Arc<Vec<u8>>>,
+    blobs: BTreeMap<BlobId, BlobBody>,
+    spill: Option<(SpillDir, u64)>,
     uploads: BTreeMap<UploadId, UploadSession>,
     retained_upload_bytes: u64,
     retained_upload_limit: u64,
@@ -792,8 +820,8 @@ pub struct StorageState {
     upload_accounting_lookups: usize,
 }
 
-fn blob_bytes(blobs: &BTreeMap<BlobId, Arc<Vec<u8>>>) -> u64 {
-    blobs.values().map(|bytes| bytes.len() as u64).sum()
+fn blob_bytes(blobs: &BTreeMap<BlobId, BlobBody>) -> u64 {
+    blobs.values().map(BlobBody::len).sum()
 }
 
 fn custom_metadata_size(custom: &BTreeMap<String, String>) -> usize {
@@ -840,6 +868,7 @@ impl StorageState {
         Self {
             objects: BTreeMap::new(),
             blobs: BTreeMap::new(),
+            spill: None,
             uploads: BTreeMap::new(),
             retained_upload_bytes: 0,
             retained_upload_limit: MAX_RETAINED_UPLOAD_BYTES,
@@ -1152,7 +1181,7 @@ impl StorageState {
             .values()
             .chain(noncurrent.values().map(|version| &version.object))
             .filter_map(|m| self.blobs.get_key_value(&m.blob))
-            .map(|(k, v)| (*k, Arc::clone(v)))
+            .map(|(k, v)| (*k, v.clone()))
             .collect();
         let versioning = self
             .versioning
@@ -1177,6 +1206,7 @@ impl StorageState {
         Self {
             objects,
             blobs,
+            spill: self.spill.clone(),
             uploads,
             retained_upload_bytes,
             retained_upload_limit: self.retained_upload_limit,
@@ -1209,7 +1239,7 @@ impl StorageState {
         for (k, v) in &captured.objects {
             if owned(k.0.as_str()) {
                 if let Some(bytes) = captured.blobs.get(&v.blob) {
-                    self.insert_blob(v.blob, Arc::clone(bytes));
+                    self.insert_blob(v.blob, bytes.clone());
                 }
                 self.objects.insert(k.clone(), v.clone());
             }
@@ -1217,7 +1247,7 @@ impl StorageState {
         for (k, v) in &captured.noncurrent {
             if owned(k.0.as_str()) {
                 if let Some(bytes) = captured.blobs.get(&v.object.blob) {
-                    self.insert_blob(v.object.blob, Arc::clone(bytes));
+                    self.insert_blob(v.object.blob, bytes.clone());
                 }
                 self.noncurrent.insert(k.clone(), v.clone());
             }
@@ -1274,19 +1304,19 @@ impl StorageState {
 
     /// Adds a blob under an identity no blob holds: identities are allocated once and a
     /// restore removes the buckets it replaces first.
-    fn insert_blob(&mut self, blob: BlobId, bytes: Arc<Vec<u8>>) {
-        self.stored_bytes = self.stored_bytes.saturating_add(bytes.len() as u64);
+    fn insert_blob(&mut self, blob: BlobId, bytes: BlobBody) {
+        self.stored_bytes = self.stored_bytes.saturating_add(bytes.len());
         let replaced = self.blobs.insert(blob, bytes);
         debug_assert!(replaced.is_none(), "blob identities are never reused");
         // Kept even so: a reused identity must not leave the count too high in a release build.
         if let Some(old) = replaced {
-            self.stored_bytes = self.stored_bytes.saturating_sub(old.len() as u64);
+            self.stored_bytes = self.stored_bytes.saturating_sub(old.len());
         }
     }
 
     fn remove_blob(&mut self, blob: BlobId) {
         if let Some(old) = self.blobs.remove(&blob) {
-            self.stored_bytes = self.stored_bytes.saturating_sub(old.len() as u64);
+            self.stored_bytes = self.stored_bytes.saturating_sub(old.len());
         }
     }
 
@@ -1305,7 +1335,7 @@ impl StorageState {
         };
         let freed = replaced
             .and_then(|old| self.blobs.get(&old.blob))
-            .map_or(0, |bytes| bytes.len() as u64);
+            .map_or(0, BlobBody::len);
         if size > freed && self.stored_bytes.saturating_sub(freed).saturating_add(size) > limit {
             return Err(StorageError::StoredBytesLimit);
         }
@@ -1323,8 +1353,12 @@ impl StorageState {
                 other
                     .blobs
                     .get(id)
-                    .filter(|theirs| Arc::ptr_eq(bytes, theirs))
-                    .map(|_| bytes.len() as u64)
+                    .filter(|theirs| match (bytes, theirs) {
+                        (BlobBody::Memory(a), BlobBody::Memory(b)) => Arc::ptr_eq(a, b),
+                        (BlobBody::Spilled(a), BlobBody::Spilled(b)) => Arc::ptr_eq(a, b),
+                        _ => false,
+                    })
+                    .map(|_| bytes.len())
             })
             .sum()
     }
@@ -1626,19 +1660,49 @@ impl StorageState {
         self.objects.get(&(bucket.clone(), name.clone()))
     }
 
+    /// Configures spilling for subsequently committed object bodies.
+    pub fn set_spill(&mut self, spill: Option<(SpillDir, u64)>) {
+        self.spill = spill;
+    }
+
     /// Object bytes.
     #[must_use]
+    #[track_caller]
     pub fn bytes(&self, meta: &ObjectMetadata) -> &[u8] {
-        self.blobs.get(&meta.blob).map_or(&[], |b| b.as_slice())
+        match self.blobs.get(&meta.blob) {
+            Some(BlobBody::Memory(bytes)) => bytes.as_slice(),
+            Some(BlobBody::Spilled(_)) => panic!("spilled body: use body_bytes or body_shared"),
+            None => &[],
+        }
     }
 
     /// Object bytes shared with snapshots and response bodies.
     #[must_use]
+    #[track_caller]
     pub fn shared_bytes(&self, meta: &ObjectMetadata) -> Arc<Vec<u8>> {
-        self.blobs
-            .get(&meta.blob)
-            .cloned()
-            .unwrap_or_else(|| Arc::new(Vec::new()))
+        match self.blobs.get(&meta.blob) {
+            Some(BlobBody::Memory(bytes)) => Arc::clone(bytes),
+            Some(BlobBody::Spilled(_)) => panic!("spilled body: use body_bytes or body_shared"),
+            None => Arc::new(Vec::new()),
+        }
+    }
+
+    /// Reads object bytes, borrowing in-memory bodies.
+    pub fn body_bytes(&self, meta: &ObjectMetadata) -> io::Result<Cow<'_, [u8]>> {
+        match self.blobs.get(&meta.blob) {
+            Some(BlobBody::Memory(bytes)) => Ok(Cow::Borrowed(bytes.as_slice())),
+            Some(BlobBody::Spilled(file)) => file.read_all().map(Cow::Owned),
+            None => Ok(Cow::Borrowed(&[])),
+        }
+    }
+
+    /// Reads object bytes into a shared buffer.
+    pub fn body_shared(&self, meta: &ObjectMetadata) -> io::Result<Arc<Vec<u8>>> {
+        match self.blobs.get(&meta.blob) {
+            Some(BlobBody::Memory(bytes)) => Ok(Arc::clone(bytes)),
+            Some(BlobBody::Spilled(file)) => file.read_all().map(Arc::new),
+            None => Ok(Arc::new(Vec::new())),
+        }
     }
 
     fn check(current: Option<&ObjectMetadata>, pre: Precondition) -> Result<(), StorageError> {
@@ -1730,10 +1794,24 @@ impl StorageState {
             pre,
             now,
         )?;
+        let body = if let Some((dir, threshold)) = &self.spill {
+            if bytes.len() as u64 >= *threshold {
+                let mut file = dir
+                    .create_file()
+                    .map_err(|e| StorageError::SpillFailed(e.to_string()))?;
+                file.append(&bytes)
+                    .map_err(|e| StorageError::SpillFailed(e.to_string()))?;
+                BlobBody::Spilled(Arc::new(file))
+            } else {
+                BlobBody::Memory(Arc::new(bytes))
+            }
+        } else {
+            BlobBody::Memory(Arc::new(bytes))
+        };
         let events = Self::put_events(&plan);
         let reservation = admit(&events)?;
         let meta = plan.meta.clone();
-        self.apply_planned_put(plan, Arc::new(bytes), events);
+        self.apply_planned_put(plan, body, events);
         Ok((meta, reservation))
     }
 
@@ -1851,12 +1929,7 @@ impl StorageState {
         events
     }
 
-    fn apply_planned_put(
-        &mut self,
-        plan: PlannedPut,
-        bytes: Arc<Vec<u8>>,
-        events: Vec<StorageEvent>,
-    ) {
+    fn apply_planned_put(&mut self, plan: PlannedPut, bytes: BlobBody, events: Vec<StorageEvent>) {
         let PlannedPut {
             key,
             meta,
@@ -2360,7 +2433,7 @@ impl StorageState {
             .blobs
             .get(&src.blob)
             .cloned()
-            .unwrap_or_else(|| Arc::new(Vec::new()));
+            .unwrap_or_else(|| BlobBody::Memory(Arc::new(Vec::new())));
         let metadata = metadata.unwrap_or(NewMetadata {
             content_type: Some(src.content_type.clone()),
             content_disposition: src.content_disposition.clone(),
@@ -2372,7 +2445,7 @@ impl StorageState {
         let plan = self.plan_put(
             dst_bucket,
             dst_name,
-            shared.len() as u64,
+            shared.len(),
             ObjectDigests::from_parts(src.md5, src.crc32c),
             metadata,
             pre,
@@ -2715,6 +2788,21 @@ impl StorageState {
             .next_blob
             .checked_add(1)
             .ok_or(StorageError::IdentityExhausted)?;
+        let size = bytes.len() as u64;
+        let body = if let Some((dir, threshold)) = &self.spill {
+            if size >= *threshold {
+                let mut file = dir
+                    .create_file()
+                    .map_err(|e| StorageError::SpillFailed(e.to_string()))?;
+                file.append(&bytes)
+                    .map_err(|e| StorageError::SpillFailed(e.to_string()))?;
+                BlobBody::Spilled(Arc::new(file))
+            } else {
+                BlobBody::Memory(Arc::new(bytes))
+            }
+        } else {
+            BlobBody::Memory(Arc::new(bytes))
+        };
         self.next_blob = next_blob;
         let blob = BlobId(next_blob);
         self.next_generation = self.next_generation.max(object.generation);
@@ -2723,7 +2811,7 @@ impl StorageState {
             name: object.name.clone(),
             generation: object.generation,
             metageneration: object.metageneration,
-            size: bytes.len() as u64,
+            size,
             content_type: object.content_type,
             content_disposition: object.content_disposition,
             content_encoding: object.content_encoding,
@@ -2748,7 +2836,7 @@ impl StorageState {
             }
             self.remove_blob(old.blob);
         }
-        self.insert_blob(blob, Arc::new(bytes));
+        self.insert_blob(blob, body);
         Ok(meta)
     }
 
@@ -3219,6 +3307,25 @@ impl StorageState {
                 return Err(error);
             }
         };
+        let spilled = if let Some((dir, threshold)) = &self.spill {
+            if size >= *threshold {
+                let bytes = &self
+                    .uploads
+                    .get(id)
+                    .ok_or(StorageError::UploadNotFound)?
+                    .received;
+                let mut file = dir
+                    .create_file()
+                    .map_err(|e| StorageError::SpillFailed(e.to_string()))?;
+                file.append(bytes)
+                    .map_err(|e| StorageError::SpillFailed(e.to_string()))?;
+                Some(Arc::new(file))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let events = Self::put_events(&plan);
         let reservation = admit(&events)?;
         let bytes = self
@@ -3226,8 +3333,12 @@ impl StorageState {
             .get_mut(id)
             .map(|upload| std::mem::take(&mut upload.received))
             .ok_or(StorageError::UploadNotFound)?;
+        let body = match spilled {
+            Some(file) => BlobBody::Spilled(file),
+            None => BlobBody::Memory(Arc::new(bytes)),
+        };
         let meta = plan.meta.clone();
-        self.apply_planned_put(plan, Arc::new(bytes), events);
+        self.apply_planned_put(plan, body, events);
         if let Some(u) = self.uploads.get_mut(id) {
             u.state = UploadState::Committed(Box::new(meta.clone()));
         }

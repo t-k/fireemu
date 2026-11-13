@@ -240,38 +240,42 @@ struct QueueState {
     failed_times: StatisticWindow,
 }
 
+fn period_nanos(rate: f64) -> Option<u128> {
+    if rate.is_finite() && rate > 0.0 {
+        // Divide by the exact binary rate, rounding the integer period up only once.
+        let bits = rate.to_bits();
+        let exponent = i32::from(u16::try_from((bits >> 52) & 0x7ff).expect("exponent"));
+        let significand =
+            u128::from((bits & ((1 << 52) - 1)) | if exponent == 0 { 0 } else { 1 << 52 });
+        let shift = 1075 - exponent.max(1);
+        if shift <= 0 {
+            Some(1)
+        } else {
+            let mut quotient = Some(1_000_000_000 / significand);
+            let mut remainder = 1_000_000_000 % significand;
+            for _ in 0..shift {
+                remainder *= 2;
+                quotient = quotient.and_then(|value: u128| {
+                    value.checked_mul(2)?.checked_add(remainder / significand)
+                });
+                remainder %= significand;
+                if quotient.is_none() {
+                    break;
+                }
+            }
+            quotient
+                .and_then(|value| value.checked_add(u128::from(remainder != 0)))
+                .filter(|period| *period <= Duration::MAX.as_nanos())
+        }
+    } else {
+        None
+    }
+}
+
 impl QueueState {
     fn new(limits: TaskRateLimits, now: TaskTime) -> Self {
         let rate = limits.max_dispatches_per_second;
-        let period_nanos = if rate.is_finite() && rate > 0.0 {
-            // Divide by the exact binary rate, rounding the integer period up only once.
-            let bits = rate.to_bits();
-            let exponent = i32::from(u16::try_from((bits >> 52) & 0x7ff).expect("exponent"));
-            let significand =
-                u128::from((bits & ((1 << 52) - 1)) | if exponent == 0 { 0 } else { 1 << 52 });
-            let shift = 1075 - exponent.max(1);
-            if shift <= 0 {
-                Some(1)
-            } else {
-                let mut quotient = Some(1_000_000_000 / significand);
-                let mut remainder = 1_000_000_000 % significand;
-                for _ in 0..shift {
-                    remainder *= 2;
-                    quotient = quotient.and_then(|value: u128| {
-                        value.checked_mul(2)?.checked_add(remainder / significand)
-                    });
-                    remainder %= significand;
-                    if quotient.is_none() {
-                        break;
-                    }
-                }
-                quotient
-                    .and_then(|value| value.checked_add(u128::from(remainder != 0)))
-                    .filter(|period| *period <= Duration::MAX.as_nanos())
-            }
-        } else {
-            None
-        };
+        let period_nanos = period_nanos(rate);
         Self {
             limits,
             burst_rule: BurstRule::Emulator,
@@ -1111,6 +1115,41 @@ mod tests {
     use serde_json::json;
     use std::collections::BTreeMap;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn strict_period_covers_exact_rates_and_duration_boundary() {
+        let boundary = f64::from_bits(0x3bf0_0000_0000_0001);
+        for (rate, expected) in [
+            (1.0, Some(1_000_000_000)),
+            (500.0, Some(2_000_000)),
+            (3.0, Some(333_333_334)),
+            (3.0 / f64::from(1u32 << 25), Some(11_184_810_666_666_667)),
+            (1e300, Some(1)),
+            (boundary, Some(18_446_744_073_709_547_520_000_000_001)),
+            (f64::from_bits(boundary.to_bits() - 1), None),
+            (f64::MIN_POSITIVE, None),
+            (f64::from_bits(1), None),
+            (0.0, None),
+            (-1.0, None),
+            (f64::NAN, None),
+            (f64::INFINITY, None),
+        ] {
+            assert_eq!(super::period_nanos(rate), expected, "rate: {rate:?}");
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn strict_period_is_the_exact_ceiling(rate in 1e-6f64..=1e9) {
+            let bits = rate.to_bits();
+            let exponent = ((bits >> 52) & 0x7ff) as u32;
+            let significand = u128::from((bits & ((1u64 << 52) - 1)) | (1u64 << 52));
+            let numerator = 1_000_000_000u128 << (1075 - exponent);
+            let period = super::period_nanos(rate).unwrap();
+            proptest::prop_assert!(period * significand >= numerator);
+            proptest::prop_assert!((period - 1) * significand < numerator);
+        }
+    }
 
     fn manifest(limits: TaskRateLimits) -> FunctionManifest {
         FunctionManifest {

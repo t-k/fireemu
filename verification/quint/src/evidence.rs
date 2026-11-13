@@ -279,6 +279,20 @@ fn parse_evidence(json: &str, descriptor: &ModelDescriptor) -> Result<Evidence, 
             descriptor.name
         ));
     }
+    if value
+        .get("digests")
+        .and_then(|v| v.as_object())
+        .is_some_and(|digests| {
+            digests
+                .values()
+                .any(|digest| digest.get("kind").and_then(|v| v.as_str()) == Some("yaml-workflow"))
+        })
+    {
+        return Err(format!(
+            "obsolete workflow digest kind; regenerate {}",
+            descriptor.name
+        ));
+    }
     serde_json::from_value(value).map_err(|error| format!("invalid evidence JSON: {error}"))
 }
 
@@ -563,28 +577,55 @@ fn has_extension(path: &str, extension: &str) -> bool {
 pub fn input_digest(path: &str, bytes: &[u8]) -> Result<InputDigest, String> {
     let (kind, normalized) = if has_extension(path, "json") {
         fn strip(value: &mut serde_json::Value) {
-            match value {
-                serde_json::Value::Object(map) => {
-                    map.retain(|key, _| {
-                        ![
-                            "description",
-                            "title",
-                            "examples",
-                            "$comment",
-                            "markdownDescription",
-                        ]
-                        .contains(&key.as_str())
-                    });
-                    for value in map.values_mut() {
-                        strip(value);
+            let Some(map) = value.as_object_mut() else {
+                return;
+            };
+            for key in [
+                "description",
+                "title",
+                "examples",
+                "$comment",
+                "markdownDescription",
+            ] {
+                map.remove(key);
+            }
+            for key in [
+                "properties",
+                "patternProperties",
+                "$defs",
+                "definitions",
+                "dependentSchemas",
+            ] {
+                if let Some(entries) = map.get_mut(key).and_then(|v| v.as_object_mut()) {
+                    for schema in entries.values_mut() {
+                        strip(schema);
                     }
                 }
-                serde_json::Value::Array(values) => {
-                    for value in values {
-                        strip(value);
+            }
+            for key in [
+                "additionalProperties",
+                "unevaluatedProperties",
+                "propertyNames",
+                "items",
+                "contains",
+                "unevaluatedItems",
+                "not",
+                "if",
+                "then",
+                "else",
+                "contentSchema",
+                "additionalItems",
+            ] {
+                if let Some(schema) = map.get_mut(key) {
+                    strip(schema);
+                }
+            }
+            for key in ["allOf", "anyOf", "oneOf", "prefixItems"] {
+                if let Some(schemas) = map.get_mut(key).and_then(|v| v.as_array_mut()) {
+                    for schema in schemas {
+                        strip(schema);
                     }
                 }
-                _ => {}
             }
         }
         // Sort explicitly even if serde_json is built with preserve_order enabled.
@@ -603,28 +644,15 @@ pub fn input_digest(path: &str, bytes: &[u8]) -> Result<InputDigest, String> {
         }
         let mut value: serde_json::Value = serde_json::from_slice(bytes)
             .map_err(|error| format!("invalid JSON bound input {path}: {error}"))?;
-        strip(&mut value);
+        if path.ends_with(".schema.json") {
+            strip(&mut value);
+        }
         (
             "json-semantic",
             serde_json::to_vec(&sorted(value)).map_err(|error| error.to_string())?,
         )
     } else if has_extension(path, "rs") {
         ("rust-semantic", normalize_rust(bytes)?)
-    } else if path.starts_with(".github/workflows/") && has_extension(path, "yml") {
-        let text = std::str::from_utf8(bytes)
-            .map_err(|error| format!("invalid workflow {path}: {error}"))?;
-        let mut output = String::new();
-        for line in text.split_inclusive('\n') {
-            let content = line.strip_suffix('\n').unwrap_or(line);
-            if content.trim_start().starts_with('#') {
-                continue;
-            }
-            output.push_str(content.trim_end());
-            if line.ends_with('\n') {
-                output.push('\n');
-            }
-        }
-        ("yaml-workflow", output.into_bytes())
     } else {
         ("sha256", bytes.to_vec())
     };
@@ -646,14 +674,31 @@ fn normalize_rust(bytes: &[u8]) -> Result<Vec<u8>, String> {
             continue;
         }
         if bytes[i..].starts_with(b"//") {
+            let doc = (bytes[i..].starts_with(b"///") && !bytes[i..].starts_with(b"////"))
+                || bytes[i..].starts_with(b"//!");
+            let start = i;
             i += 2;
             while i < bytes.len() && bytes[i] != b'\n' {
                 i += 1;
             }
-            space = true;
+            if doc {
+                if space && !out.is_empty() {
+                    out.push(b' ');
+                }
+                if i < bytes.len() {
+                    i += 1;
+                }
+                out.extend_from_slice(&bytes[start..i]);
+                space = false;
+            } else {
+                space = true;
+            }
             continue;
         }
         if bytes[i..].starts_with(b"/*") {
+            let doc = (bytes[i..].starts_with(b"/**") && !bytes[i..].starts_with(b"/***"))
+                || bytes[i..].starts_with(b"/*!");
+            let start = i;
             i += 2;
             let mut depth = 1usize;
             while i < bytes.len() && depth > 0 {
@@ -670,7 +715,15 @@ fn normalize_rust(bytes: &[u8]) -> Result<Vec<u8>, String> {
             if depth != 0 {
                 return Err("unterminated Rust block comment".to_owned());
             }
-            space = true;
+            if doc {
+                if space && !out.is_empty() {
+                    out.push(b' ');
+                }
+                out.extend_from_slice(&bytes[start..i]);
+                space = false;
+            } else {
+                space = true;
+            }
             continue;
         }
         if space && !out.is_empty() {
@@ -776,22 +829,25 @@ mod tests {
 
     #[test]
     fn semantic_digests_ignore_only_the_requested_changes() {
-        let json = |text: &str| input_digest("schema.json", text.as_bytes()).unwrap();
-        let baseline =
-            json(r#"{"type":"string","enum":["a"],"default":"a","nested":{"description":"old"}}"#);
+        let json = |text: &str| input_digest("config.schema.json", text.as_bytes()).unwrap();
+        let baseline = json(r#"{"type":"object","description":"old","properties":{}}"#);
         assert_eq!(
             baseline,
-            json(
-                r#"{"nested":{"description":"new","title":"x","examples":[1],"$comment":"x","markdownDescription":"x"},"default":"a","enum":["a"],"type":"string"}"#
-            )
+            json(r#"{"properties":{},"description":"new","type":"object"}"#)
         );
-        for changed in [
-            r#"{"type":"number","enum":["a"],"default":"a","nested":{}}"#,
-            r#"{"type":"string","enum":["b"],"default":"a","nested":{}}"#,
-            r#"{"type":"string","enum":["a"],"default":"b","nested":{}}"#,
-        ] {
-            assert_ne!(baseline, json(changed));
+        assert_ne!(
+            baseline,
+            json(r#"{"type":"object","properties":{"title":{"type":"string"}}}"#)
+        );
+        for key in ["properties", "patternProperties", "$defs", "definitions"] {
+            let empty = format!(r#"{{"{key}":{{}}}}"#);
+            let named = format!(r#"{{"{key}":{{"description":{{"type":"string"}}}}}}"#);
+            assert_ne!(json(&empty), json(&named));
         }
+        assert_ne!(
+            input_digest("data.json", br#"{"description":"old"}"#).unwrap(),
+            input_digest("data.json", br#"{"description":"new"}"#).unwrap()
+        );
 
         let rust = |text: &str| input_digest("source.rs", text.as_bytes()).unwrap();
         let source =
@@ -813,15 +869,19 @@ mod tests {
             rust("fn f<'a>(x: &'a str) {} // comment")
         );
 
-        let workflow =
-            |text: &str| input_digest(".github/workflows/test.yml", text.as_bytes()).unwrap();
-        let base = workflow("name: test\njobs:  \n  build: true\n");
-        assert_eq!(
-            base,
-            workflow("# comment\nname: test  \n  # another\njobs:\n  build: true\n")
+        for doc in ["/// doc", "//! doc", "/** doc */", "/*! doc */"] {
+            assert_ne!(rust("fn f() {}"), rust(&format!("{doc}\nfn f() {{}}")));
+        }
+        assert_ne!(
+            rust("//! module docs\nfn f() {}"),
+            rust("//! module docs\n//! ```\n//! assert!(false);\n//! ```\nfn f() {}")
         );
-        assert_ne!(base, workflow("name: test\njobs:\n  build: false\n"));
-        assert_eq!(input_digest("other.txt", b"x").unwrap().kind, "sha256");
+        assert_eq!(
+            input_digest(".github/workflows/test.yml", b"x")
+                .unwrap()
+                .kind,
+            "sha256"
+        );
     }
 
     #[test]
@@ -830,6 +890,10 @@ mod tests {
         let legacy = r#"{"digests":{"old.rs":"abc"}}"#;
         let error = parse_evidence(legacy, descriptor).unwrap_err();
         assert!(error.contains("regenerate EventDelivery"), "{error}");
+        let obsolete = r#"{"digests":{"workflow.yml":{"kind":"yaml-workflow","value":"abc"}}}"#;
+        assert!(parse_evidence(obsolete, descriptor)
+            .unwrap_err()
+            .contains("regenerate EventDelivery"));
         let missing_kind = r#"{"digests":{"old.rs":{"value":"abc"}}}"#;
         assert!(parse_evidence(missing_kind, descriptor)
             .unwrap_err()

@@ -9,7 +9,7 @@ use fireemu_verification_quint::cargo_authority::{validate_authority_file, write
 use fireemu_verification_quint::evidence::{
     input_digest, validate_evidence_file_with_cargo_authority, InputDigest,
 };
-use fireemu_verification_quint::model::{model, ModelDescriptor};
+use fireemu_verification_quint::model::{all_models, model, ModelDescriptor};
 use fireemu_verification_quint::process::{
     mutate_model as run_mutations, verify_model as run_model,
 };
@@ -45,16 +45,27 @@ fn check_evidence(arguments: &[String]) -> Result<bool, String> {
     let root =
         env::current_dir().map_err(|error| format!("cannot read current directory: {error}"))?;
     let directory = root.join("verification/quint/evidence");
-    let mut files = fs::read_dir(&directory)
-        .map_err(|error| format!("cannot read evidence directory: {error}"))?
-        .map(|entry| {
-            entry
-                .map(|entry| entry.path())
-                .map_err(|error| error.to_string())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut files = match fs::read_dir(&directory) {
+        Ok(entries) => entries
+            .map(|entry| {
+                entry
+                    .map(|entry| entry.path())
+                    .map_err(|error| error.to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => return Err(format!("cannot read evidence directory: {error}")),
+    };
     files.sort();
     let mut stale = 0;
+    for descriptor in all_models() {
+        let model = descriptor.name;
+        if !directory.join(format!("{model}.json")).is_file() {
+            stale += 1;
+            println!("STALE {model}: evidence file missing; regenerate");
+            println!("QUINT_HOME=$HOME/.quint cargo run -p fireemu-verification-quint -- mutate-model --model {model} --evidence verification/quint/evidence/{model}.json");
+        }
+    }
     for file in files {
         if file.extension().and_then(|extension| extension.to_str()) != Some("json")
             || file.file_name().and_then(|name| name.to_str()) == Some("cargo-authority.json")
@@ -77,8 +88,13 @@ fn check_evidence(arguments: &[String]) -> Result<bool, String> {
         let legacy = digests.is_none_or(|digests| {
             digests.is_empty() || digests.values().any(|digest| digest.get("kind").is_none())
         });
+        let obsolete = digests.is_some_and(|digests| {
+            digests
+                .values()
+                .any(|digest| digest.get("kind").and_then(|v| v.as_str()) == Some("yaml-workflow"))
+        });
         let mut changed = Vec::new();
-        if !legacy {
+        if !legacy && !obsolete {
             for input in inputs {
                 let path = input
                     .as_str()
@@ -94,10 +110,12 @@ fn check_evidence(arguments: &[String]) -> Result<bool, String> {
                 }
             }
         }
-        if legacy || !changed.is_empty() {
+        if legacy || obsolete || !changed.is_empty() {
             stale += 1;
             if legacy {
                 println!("STALE {model}: evidence predates digest kinds; regenerate");
+            } else if obsolete {
+                println!("STALE {model}: obsolete workflow digest kind; regenerate");
             } else {
                 println!(
                     "STALE {model}: {} bound input(s) changed since its evidence was written",

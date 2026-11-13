@@ -24,6 +24,14 @@ fn check_evidence_fixture(input: Option<&str>, legacy: bool) -> Output {
     };
     let evidence =
         serde_json::json!({"boundInputs": ["input.rs"], "digests": {"input.rs": digest}});
+    let fresh = serde_json::json!({"boundInputs": [], "digests": {"unused": {"kind": "sha256", "value": "unused"}}});
+    for descriptor in fireemu_verification_quint::model::all_models() {
+        fs::write(
+            directory.join(format!("{}.json", descriptor.name)),
+            fresh.to_string(),
+        )
+        .expect("write evidence");
+    }
     fs::write(directory.join("Example.json"), evidence.to_string()).expect("write evidence");
     fs::write(directory.join("cargo-authority.json"), "{}").expect("write authority");
     if let Some(input) = input {
@@ -76,6 +84,68 @@ fn check_evidence_old_format() {
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stdout)
         .starts_with("STALE Example: evidence predates digest kinds; regenerate\n"));
+}
+
+#[test]
+fn check_evidence_obsolete_workflow_digest_requires_regeneration() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("verification/quint/evidence");
+    fs::create_dir_all(&directory).unwrap();
+    for descriptor in fireemu_verification_quint::model::all_models() {
+        fs::write(
+            directory.join(format!("{}.json", descriptor.name)),
+            r#"{"boundInputs":[],"digests":{"workflow":{"kind":"yaml-workflow","value":"old"}}}"#,
+        )
+        .unwrap();
+    }
+    let output = Command::new(env!("CARGO_BIN_EXE_fireemu-verification-quint"))
+        .arg("check-evidence")
+        .current_dir(root.path())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stdout)
+        .contains("obsolete workflow digest kind; regenerate"));
+}
+
+#[test]
+fn check_evidence_requires_registered_models() {
+    for scenario in ["missing directory", "empty directory", "missing model"] {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("verification/quint/evidence");
+        if scenario != "missing directory" {
+            fs::create_dir_all(&directory).unwrap();
+        }
+        if scenario == "missing model" {
+            for descriptor in fireemu_verification_quint::model::all_models().skip(1) {
+                fs::write(
+                    directory.join(format!("{}.json", descriptor.name)),
+                    r#"{"boundInputs":[],"digests":{"unused":{"kind":"sha256","value":"unused"}}}"#,
+                )
+                .unwrap();
+            }
+        }
+        let output = Command::new(env!("CARGO_BIN_EXE_fireemu-verification-quint"))
+            .arg("check-evidence")
+            .current_dir(root.path())
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{scenario}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("evidence file missing; regenerate"),
+            "{scenario}: {stdout}"
+        );
+        let count = if scenario == "missing model" {
+            1
+        } else {
+            fireemu_verification_quint::model::all_models().count()
+        };
+        assert!(
+            stdout.contains(&format!("evidence digests stale: {count}\n")),
+            "{scenario}: {stdout}"
+        );
+    }
 }
 
 #[cfg(unix)]

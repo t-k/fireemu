@@ -396,7 +396,8 @@ async function rebuildFixture(runDir) {
  * fireemu's Storage emulator, like the official one, has no bucket resource: a bucket exists
  * once it holds an object (see crates/fireemu/src/managed_storage.rs). Production's run bucket
  * is created by the harness; locally, one marker object at the bucket root stands in for that
- * create. It lies outside every program's object prefix, and the run's bucket cleanup deletes it.
+ * create. The local config permits undeclared buckets so this marker models that create even
+ * under productionExact. It lies outside every program's object prefix, and cleanup deletes it.
  */
 async function markLocalBucket(ctx) {
   const url = `${ctx.target.storageOrigin}/upload/storage/v1/b/${ctx.bucket}/o?uploadType=media&name=.fireemu-bucket`;

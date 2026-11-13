@@ -342,6 +342,7 @@ jobs:
       - name: install and run it the way a user would
         id: install
         run: |
+          set -o pipefail
           node npm/scripts/verify-install.mjs --dist npm/dist --keep | tee verify.log
           echo "dir=$(grep '^install=' verify.log | cut -d= -f2-)" >> "$GITHUB_OUTPUT"
       - name: the npm SBOM of the installation
@@ -426,6 +427,7 @@ jobs:
       - name: install it the way a user would
         id: install
         run: |
+          set -o pipefail
           node npm/scripts/verify-install.mjs --dist npm/dist --keep | tee verify.log
           echo "dir=$(grep '^install=' verify.log | cut -d= -f2-)" >> "$GITHUB_OUTPUT"
       - name: the installed binary is the one publish ships

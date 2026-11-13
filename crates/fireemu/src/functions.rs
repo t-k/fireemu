@@ -1425,11 +1425,13 @@ exit $exitCode
 #[cfg(windows)]
 fn secure_snapshot_directory(path: &Path) -> Result<(), String> {
     let powershell = windows_powershell_path()?;
+    // Windows PowerShell can take several seconds to start on a loaded host; the bound only
+    // stops a hung checker (a refused directory still fails at once).
     run_snapshot_acl_checker(
         path,
         &powershell,
         WINDOWS_SNAPSHOT_ACL_CHECK,
-        Duration::from_secs(5),
+        Duration::from_secs(30),
     )
 }
 
@@ -15306,7 +15308,7 @@ Add-Type -TypeDefinition $native -ErrorAction Stop
             &safe.leaf,
             &powershell,
             script,
-            Duration::from_secs(5),
+            Duration::from_secs(30),
         );
         assert!(result.is_ok(), "{label}: safe control failed: {result:?}");
         assert_eq!(diagnostic, None, "{label}: safe control diagnostic");
@@ -15331,7 +15333,7 @@ Add-Type -TypeDefinition $native -ErrorAction Stop
             &fixture.leaf,
             &powershell,
             &baseline,
-            Duration::from_secs(5),
+            Duration::from_secs(30),
         );
         assert_windows_acl_guard_refusal(
             &format!("{label}: unchanged baseline"),
@@ -15344,7 +15346,7 @@ Add-Type -TypeDefinition $native -ErrorAction Stop
             &fixture.leaf,
             &powershell,
             &mutant,
-            Duration::from_secs(5),
+            Duration::from_secs(30),
         );
         assert!(
             mutated.is_ok(),
@@ -15380,7 +15382,7 @@ Add-Type -TypeDefinition $native -ErrorAction Stop
             &fixture.leaf,
             &powershell,
             &baseline,
-            Duration::from_secs(5),
+            Duration::from_secs(30),
         );
         assert_windows_acl_guard_refusal(
             "null-DACL unchanged baseline",
@@ -15395,7 +15397,7 @@ Add-Type -TypeDefinition $native -ErrorAction Stop
             &fixture.leaf,
             &powershell,
             &singleton,
-            Duration::from_secs(5),
+            Duration::from_secs(30),
         );
         assert_windows_acl_guard_refusal(
             SURVIVOR_LABEL,
@@ -15410,7 +15412,7 @@ Add-Type -TypeDefinition $native -ErrorAction Stop
             &fixture.leaf,
             &powershell,
             &compound,
-            Duration::from_secs(5),
+            Duration::from_secs(30),
         );
         assert!(
             compound_result.is_ok(),
@@ -15443,7 +15445,7 @@ Add-Type -TypeDefinition $native -ErrorAction Stop
             &fixture.leaf,
             &powershell,
             &script,
-            Duration::from_secs(5),
+            Duration::from_secs(30),
         );
         assert_windows_acl_guard_refusal(
             LABEL,
@@ -15467,7 +15469,7 @@ Add-Type -TypeDefinition $native -ErrorAction Stop
                 &fixture.leaf,
                 &powershell,
                 super::WINDOWS_SNAPSHOT_ACL_CHECK,
-                Duration::from_secs(5),
+                Duration::from_secs(30),
             );
             assert_eq!(
                 actual.is_ok(),

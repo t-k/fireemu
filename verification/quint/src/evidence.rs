@@ -522,16 +522,17 @@ pub fn expected_bound_inputs(
     }
     // Directory exclusions use package roots, not arbitrary directories named "tests" in src.
     inputs.retain(|input| {
-        !authority
-            .packages
-            .iter()
-            .filter_map(|package| package.manifest.as_deref())
-            .filter_map(|manifest| Path::new(manifest).parent())
-            .any(|directory| {
-                ["tests", "benches", "examples"]
-                    .iter()
-                    .any(|name| Path::new(input).starts_with(directory.join(name)))
-            })
+        explicit_inputs.contains(input)
+            || !authority
+                .packages
+                .iter()
+                .filter_map(|package| package.manifest.as_deref())
+                .filter_map(|manifest| Path::new(manifest).parent())
+                .any(|directory| {
+                    ["tests", "benches", "examples"]
+                        .iter()
+                        .any(|name| Path::new(input).starts_with(directory.join(name)))
+                })
     });
 
     // Tokenize only to prove file-level exclusions. Digests still cover every byte of bound files.

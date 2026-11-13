@@ -34,6 +34,32 @@ fn descriptor() -> &'static ModelDescriptor {
     model("EventDelivery").expect("EventDelivery must remain registered")
 }
 
+#[test]
+fn every_registered_model_binds_all_descriptor_inputs() {
+    let root = repository_root();
+    for descriptor in all_models() {
+        let inputs = expected_bound_inputs(&root, descriptor, None).expect("current inputs");
+        let relative_inputs = [
+            descriptor.spec,
+            descriptor.config,
+            descriptor.mutation_manifest,
+        ]
+        .map(|path| format!("verification/quint/{path}"));
+        for path in relative_inputs.iter().map(String::as_str).chain(
+            [descriptor.driver, descriptor.connect_test]
+                .into_iter()
+                .chain(descriptor.production_sources.iter().copied())
+                .chain(descriptor.additional_evidence_inputs.iter().copied()),
+        ) {
+            assert!(
+                inputs.iter().any(|input| input == path),
+                "{} omitted descriptor input {path}",
+                descriptor.name
+            );
+        }
+    }
+}
+
 fn assert_rejected(value: &serde_json::Value) {
     let json = serde_json::to_string(value).expect("changed evidence must serialize");
     assert!(

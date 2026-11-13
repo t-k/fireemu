@@ -1900,6 +1900,41 @@ fn reads_in(tree: &fireemu_core_database::Tree, expr: &str) -> bool {
     rules.can_read(tree.root(), &p("t"), None, &requester)
 }
 
+#[test]
+fn case_conversion_uses_java_21_overrides_in_text_and_utf16_strings() {
+    for (method, input, expected) in [
+        (
+            "toLowerCase",
+            "Aİ\u{A7DD}\u{10D50} ΟΣ",
+            "ai\u{0307}\u{A7DD}\u{10D50} ος",
+        ),
+        (
+            "toUpperCase",
+            "aßﬃ\u{0277}\u{10D70} ος",
+            "ASSFFI\u{0277}\u{10D70} ΟΣ",
+        ),
+    ] {
+        for suffix in ["", r"\uD83D"] {
+            let expr = format!("'{input}{suffix}'.{method}() == '{expected}{suffix}'");
+            for jar_dialect in [false, true] {
+                let rules = Rules::compile(&read_rule_at_t(&expr))
+                    .unwrap()
+                    .with_jar_dialect(jar_dialect);
+                let tree = seed();
+                let auth = auth();
+                let requester = Requester {
+                    auth: &auth,
+                    now: 123,
+                };
+                assert!(
+                    rules.can_read(tree.root(), &p("t"), None, &requester),
+                    "{expr}, jar_dialect={jar_dialect}"
+                );
+            }
+        }
+    }
+}
+
 /// Case conversion is measured before it allocates, in both string paths: a string just under the size bound that
 /// grows past it when converted (`ﬃ` is `FFI`, `ΐ` is three characters, six bytes for two) is an error, negated or
 /// not (Astra review of 985528f1c).

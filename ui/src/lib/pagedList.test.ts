@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { errAsync, okAsync, ResultAsync } from "neverthrow";
 import { createRoot } from "solid-js";
 import { createPagedList, type Page } from "./pagedList";
@@ -23,6 +23,96 @@ const controlled = () => {
 };
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
+
+describe("serialized membership refreshes", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it.each([false, true])(
+    "coalesces pending refreshes and applies the completed result (failure: %s)",
+    async (fails) => {
+      vi.useFakeTimers();
+      await createRoot(async (dispose) => {
+        const { calls, fetchPage } = controlled();
+        const list = createPagedList(fetchPage);
+        const initial = list.load();
+        calls[0]!.d.resolve({ items: ["initial"] });
+        await initial;
+        const first = list.refresh();
+        const second = list.refresh();
+        const third = list.refresh();
+        expect(list.loading()).toBe(false);
+        expect(list.refreshing()).toBe(true);
+        expect(calls).toHaveLength(2);
+        if (fails) calls[1]!.d.reject({ status: 500, message: "refresh failed" });
+        else calls[1]!.d.resolve({ items: ["first"] });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(list.items()).toEqual([fails ? "initial" : "first"]);
+        expect(list.stale()).toBe(fails ? "refresh failed" : null);
+        expect(calls).toHaveLength(3);
+        expect(list.refreshing()).toBe(true);
+        calls[2]!.d.resolve({ items: ["follow-up"] });
+        await Promise.all([first, second, third]);
+        expect(list.items()).toEqual(["follow-up"]);
+        expect(list.stale()).toBeNull();
+        expect(list.refreshing()).toBe(false);
+        expect(calls).toHaveLength(3);
+        dispose();
+      });
+    },
+  );
+
+  it("queues one refresh behind a load without dropping the load result", async () => {
+    vi.useFakeTimers();
+    await createRoot(async (dispose) => {
+      const { calls, fetchPage } = controlled();
+      const list = createPagedList(fetchPage);
+      const initial = list.load();
+      const refresh = list.refresh();
+      const repeated = list.refresh();
+      expect(calls).toHaveLength(1);
+      calls[0]!.d.resolve({ items: ["initial"] });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(list.items()).toEqual(["initial"]);
+      expect(list.loading()).toBe(false);
+      expect(list.refreshing()).toBe(true);
+      expect(calls).toHaveLength(2);
+      calls[1]!.d.resolve({ items: ["latest"] });
+      await Promise.all([initial, refresh, repeated]);
+      expect(list.items()).toEqual(["latest"]);
+      expect(list.refreshing()).toBe(false);
+      expect(calls).toHaveLength(2);
+      dispose();
+    });
+  });
+
+  it("discards the old target's pending follow-up without releasing the new target's refresh", async () => {
+    vi.useFakeTimers();
+    await createRoot(async (dispose) => {
+      const { calls, fetchPage } = controlled();
+      const list = createPagedList(fetchPage);
+      const initial = list.load();
+      calls[0]!.d.resolve({ items: ["old"] });
+      await initial;
+      const oldRefresh = list.refresh();
+      const oldPending = list.refresh();
+      const next = list.load();
+      calls[2]!.d.resolve({ items: ["new"] });
+      await next;
+      const newRefresh = list.refresh();
+      calls[1]!.d.resolve({ items: ["obsolete"] });
+      await Promise.all([oldRefresh, oldPending]);
+      expect(list.items()).toEqual(["new"]);
+      expect(list.refreshing()).toBe(true);
+      expect(calls).toHaveLength(4);
+      calls[3]!.d.resolve({ items: ["new refreshed"] });
+      await newRefresh;
+      expect(list.items()).toEqual(["new refreshed"]);
+      expect(list.refreshing()).toBe(false);
+      expect(calls).toHaveLength(4);
+      dispose();
+    });
+  });
+});
 
 describe("createPagedList", () => {
   it("drops the answer of a target the reader has left", async () => {

@@ -17,6 +17,7 @@ export type AffectedFirestoreViews = {
 export const createRowReadGuard = () => {
   let epoch = 0;
   const sequences = new Map<string, number>();
+  const applied = new Map<string, number>();
   return {
     issue: (key: string) => {
       const sequence = (sequences.get(key) ?? 0) + 1;
@@ -24,7 +25,12 @@ export const createRowReadGuard = () => {
       return { epoch, sequence };
     },
     isCurrent: (key: string, ticket: { epoch: number; sequence: number }) =>
-      ticket.epoch === epoch && sequences.get(key) === ticket.sequence,
+      ticket.epoch === epoch &&
+      ticket.sequence <= (sequences.get(key) ?? 0) &&
+      ticket.sequence >= (applied.get(key) ?? 0),
+    markApplied: (key: string, ticket: { epoch: number; sequence: number }) => {
+      applied.set(key, ticket.sequence);
+    },
     invalidate: () => {
       epoch += 1;
     },

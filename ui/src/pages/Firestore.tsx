@@ -847,7 +847,6 @@ const CollectionView: Component<{
     await list.load();
   };
   const refresh = async () => {
-    rowReadGuard.invalidate();
     await list.refresh();
   };
   createEffect(
@@ -872,14 +871,17 @@ const CollectionView: Component<{
     const ready = drainPendingRowUpdates(
       pendingRowUpdates,
       new Set(list.items().map((document) => document.name.slice(prefix.length))),
-      list.loading(),
+      list.loading() || list.refreshing(),
       Boolean(list.nextToken()),
     );
     for (const id of ready) {
       const ticket = rowReadGuard.issue(id);
       void getDocument(props.root, `${props.path}/${id}`).match(
         (document) => {
-          if (rowReadGuard.isCurrent(id, ticket)) list.updateItem(document);
+          if (rowReadGuard.isCurrent(id, ticket)) {
+            list.updateItem(document);
+            rowReadGuard.markApplied(id, ticket);
+          }
         },
         (readError) => {
           if (!rowReadGuard.isCurrent(id, ticket)) return;

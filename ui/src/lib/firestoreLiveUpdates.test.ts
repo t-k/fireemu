@@ -1,4 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render } from "@solidjs/testing-library";
+import { createComponent } from "solid-js";
+import { createMemoryHistory, MemoryRouter, Route } from "@solidjs/router";
+import { okAsync, ResultAsync } from "neverthrow";
+import Firestore from "../pages/Firestore";
+import { appState } from "../state";
+import { subscribe, type SseEvent } from "../api/client";
+import { getDocument, listDocuments, type DocumentPage } from "../api/firestore";
+import type { FsDocument } from "./firestoreValue";
 import {
   affectedFirestoreViews,
   createLiveUpdateScheduler,
@@ -6,6 +15,179 @@ import {
   drainPendingRowUpdates,
   parseFirestoreWatchEvent,
 } from "./firestoreLiveUpdates";
+
+vi.mock("../api/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../api/client")>()),
+  subscribe: vi.fn(),
+}));
+vi.mock("../api/firestore", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../api/firestore")>()),
+  listDocuments: vi.fn(),
+  getDocument: vi.fn(),
+}));
+
+describe("Firestore live updates with delayed responses", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    vi.resetAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("re-reads alice after a trailing update arrives during her membership refresh", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => {
+        throw new Error("Unexpected network request");
+      }),
+    );
+    appState.setSessions([{ name: "default", project: "p" }]);
+    appState.setSession("default");
+    const root = "projects/p/databases/(default)/documents";
+    const alice = { name: `${root}/users/alice`, fields: { value: { stringValue: "value1" } } };
+    let emit!: (event: SseEvent) => void;
+    vi.mocked(subscribe).mockImplementation((_path, onEvent) => {
+      emit = onEvent;
+      return vi.fn();
+    });
+    let release!: (page: DocumentPage) => void;
+    vi.mocked(listDocuments)
+      .mockReturnValueOnce(okAsync({ documents: [] }))
+      .mockImplementation(() =>
+        ResultAsync.fromSafePromise(
+          new Promise<DocumentPage>((resolve) => {
+            release = resolve;
+          }),
+        ),
+      );
+    vi.mocked(getDocument).mockReturnValue(
+      okAsync({
+        ...alice,
+        fields: { value: { stringValue: "value2" } },
+      }),
+    );
+    const history = createMemoryHistory();
+    history.set({ value: "/users" });
+    const view = render(() =>
+      createComponent(MemoryRouter, {
+        history,
+        get children() {
+          return createComponent(Route, { path: "/:path", component: Firestore });
+        },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listDocuments).toHaveBeenCalledTimes(1);
+    emit({
+      event: "commit",
+      data: JSON.stringify({ changes: [{ path: alice.name, kind: "created" }] }),
+    });
+    expect(listDocuments).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(100);
+    emit({
+      event: "commit",
+      data: JSON.stringify({ changes: [{ path: alice.name, kind: "updated" }] }),
+    });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(getDocument).not.toHaveBeenCalled();
+    release({ documents: [alice] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getDocument).toHaveBeenCalledExactlyOnceWith(root, "users/alice");
+    expect(view.getByTestId("document-list").textContent).toContain("value2");
+    expect(view.getByTestId("document-list").textContent).not.toContain("value1");
+  });
+
+  it.each(["created", "updated"] as const)(
+    "applies every completed response while %s events continue every 151 ms",
+    async (kind) => {
+      vi.useFakeTimers();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() => {
+          throw new Error("Unexpected network request");
+        }),
+      );
+      appState.setSessions([{ name: "default", project: "p" }]);
+      appState.setSession("default");
+      const root = "projects/p/databases/(default)/documents";
+      let value = 0;
+      const alice = { name: `${root}/users/alice`, fields: { value: { stringValue: "value0" } } };
+      const bob = { name: `${root}/users/bob`, fields: { value: { stringValue: "unchanged" } } };
+      let emit!: (event: SseEvent) => void;
+      vi.mocked(subscribe).mockImplementation((_path, onEvent) => {
+        emit = onEvent;
+        return vi.fn();
+      });
+      let inFlight = 0;
+      let maximumInFlight = 0;
+      const completed: string[] = [];
+      vi.mocked(listDocuments).mockReturnValue(okAsync({ documents: [alice, bob] }));
+      const history = createMemoryHistory();
+      history.set({ value: "/users" });
+      const view = render(() =>
+        createComponent(MemoryRouter, {
+          history,
+          get children() {
+            return createComponent(Route, { path: "/:path", component: Firestore });
+          },
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      const unchangedRow = view.getByText("bob").closest("tr");
+      if (kind === "created") {
+        vi.mocked(listDocuments).mockImplementation(() => {
+          const snapshot = `value${value}`;
+          inFlight += 1;
+          maximumInFlight = Math.max(maximumInFlight, inFlight);
+          return ResultAsync.fromSafePromise(
+            new Promise<DocumentPage>((resolve) => {
+              setTimeout(() => {
+                inFlight -= 1;
+                completed.push(snapshot);
+                resolve({
+                  documents: [
+                    { ...alice, fields: { value: { stringValue: snapshot } } },
+                    { ...bob },
+                  ],
+                });
+              }, 300);
+            }),
+          );
+        });
+      } else {
+        vi.mocked(getDocument).mockImplementation(() => {
+          const snapshot = `value${value}`;
+          return ResultAsync.fromSafePromise(
+            new Promise<FsDocument>((resolve) => {
+              setTimeout(() => {
+                completed.push(snapshot);
+                resolve({ ...alice, fields: { value: { stringValue: snapshot } } });
+              }, 300);
+            }),
+          );
+        });
+      }
+      value += 1;
+      emit({ event: "commit", data: JSON.stringify({ changes: [{ path: alice.name, kind }] }) });
+      const writes = setInterval(() => {
+        value += 1;
+        emit({ event: "commit", data: JSON.stringify({ changes: [{ path: alice.name, kind }] }) });
+      }, 151);
+      for (let response = 1; response <= 4; response += 1) {
+        await vi.advanceTimersByTimeAsync(response === 1 || kind === "created" ? 300 : 151);
+        expect(completed).toHaveLength(response);
+        expect(view.getByTestId("document-list").textContent).toContain(completed.at(-1));
+        expect(view.getByText("bob").closest("tr")).toBe(unchangedRow);
+        if (kind === "created") expect(maximumInFlight).toBe(1);
+        else expect(listDocuments).toHaveBeenCalledTimes(1);
+      }
+      clearInterval(writes);
+      await vi.runAllTimersAsync();
+    },
+  );
+});
 
 describe("Firestore live update event routing", () => {
   const root = "projects/p/databases/(default)/documents";
@@ -277,14 +459,49 @@ describe("changed row read ordering", () => {
     expect(guard.isCurrent("a", next)).toBe(true);
     expect(guard.isCurrent("b", next)).toBe(false);
   });
-  it("rejects an older read after a newer read and after a list refresh", () => {
+  it("rejects an older read only after a newer result is applied or the target changes", () => {
     const guard = createRowReadGuard();
     const older = guard.issue("alice");
     const newer = guard.issue("alice");
+    expect(guard.isCurrent("alice", older)).toBe(true);
+    expect(guard.isCurrent("alice", newer)).toBe(true);
+    guard.markApplied("alice", newer);
     expect(guard.isCurrent("alice", newer)).toBe(true);
     expect(guard.isCurrent("alice", older)).toBe(false);
     guard.invalidate();
     expect(guard.isCurrent("alice", newer)).toBe(false);
+  });
+
+  it("does not let a late older row response overwrite a newer applied response", async () => {
+    const guard = createRowReadGuard();
+    const older = guard.issue("alice");
+    const newer = guard.issue("alice");
+    let releaseOlder!: (value: string) => void;
+    let releaseNewer!: (value: string) => void;
+    let shown = "initial";
+    const first = new Promise<string>((resolve) => {
+      releaseOlder = resolve;
+    }).then((value) => {
+      if (guard.isCurrent("alice", older)) {
+        shown = value;
+        guard.markApplied("alice", older);
+      }
+    });
+    const second = new Promise<string>((resolve) => {
+      releaseNewer = resolve;
+    }).then((value) => {
+      if (guard.isCurrent("alice", newer)) {
+        shown = value;
+        guard.markApplied("alice", newer);
+      }
+    });
+    releaseNewer("value2");
+    await second;
+    releaseOlder("value1");
+    await first;
+    expect(shown).toBe("value2");
+    const other = guard.issue("bob");
+    expect(guard.isCurrent("bob", other)).toBe(true);
   });
 });
 

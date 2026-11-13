@@ -283,13 +283,16 @@ fn parse_evidence(json: &str, descriptor: &ModelDescriptor) -> Result<Evidence, 
         .get("digests")
         .and_then(|v| v.as_object())
         .is_some_and(|digests| {
-            digests
-                .values()
-                .any(|digest| digest.get("kind").and_then(|v| v.as_str()) == Some("yaml-workflow"))
+            digests.values().any(|digest| {
+                matches!(
+                    digest.get("kind").and_then(|v| v.as_str()),
+                    Some("yaml-workflow" | "rust-semantic")
+                )
+            })
         })
     {
         return Err(format!(
-            "obsolete workflow digest kind; regenerate {}",
+            "obsolete digest kind; regenerate {}",
             descriptor.name
         ));
     }
@@ -438,7 +441,8 @@ fn normalize_mutations(
     Ok(normalized)
 }
 
-fn expected_bound_inputs(
+/// Derives the complete inventory of inputs required for a model.
+pub fn expected_bound_inputs(
     repository_root: &Path,
     descriptor: &ModelDescriptor,
     cargo_authority: Option<&Path>,
@@ -580,14 +584,10 @@ pub fn input_digest(path: &str, bytes: &[u8]) -> Result<InputDigest, String> {
             let Some(map) = value.as_object_mut() else {
                 return;
             };
-            for key in [
-                "description",
-                "title",
-                "examples",
-                "$comment",
-                "markdownDescription",
-            ] {
-                map.remove(key);
+            for key in ["description", "title", "$comment", "markdownDescription"] {
+                if map.get(key).is_some_and(serde_json::Value::is_string) {
+                    map.remove(key);
+                }
             }
             for key in [
                 "properties",
@@ -644,6 +644,13 @@ pub fn input_digest(path: &str, bytes: &[u8]) -> Result<InputDigest, String> {
         }
         let mut value: serde_json::Value = serde_json::from_slice(bytes)
             .map_err(|error| format!("invalid JSON bound input {path}: {error}"))?;
+        let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+        if serde::de::DeserializeSeed::deserialize(NoDuplicateKeys, &mut deserializer).is_err() {
+            return Ok(InputDigest {
+                kind: "sha256".to_owned(),
+                value: format!("{:x}", Sha256::digest(bytes)),
+            });
+        }
         if path.ends_with(".schema.json") {
             strip(&mut value);
         }
@@ -651,8 +658,6 @@ pub fn input_digest(path: &str, bytes: &[u8]) -> Result<InputDigest, String> {
             "json-semantic",
             serde_json::to_vec(&sorted(value)).map_err(|error| error.to_string())?,
         )
-    } else if has_extension(path, "rs") {
-        ("rust-semantic", normalize_rust(bytes)?)
     } else {
         ("sha256", bytes.to_vec())
     };
@@ -662,159 +667,54 @@ pub fn input_digest(path: &str, bytes: &[u8]) -> Result<InputDigest, String> {
     })
 }
 
-#[allow(clippy::too_many_lines)]
-fn normalize_rust(bytes: &[u8]) -> Result<Vec<u8>, String> {
-    let mut out = Vec::new();
-    let mut i = 0;
-    let mut space = false;
-    while i < bytes.len() {
-        if bytes[i].is_ascii_whitespace() {
-            space = true;
-            i += 1;
-            continue;
-        }
-        if bytes[i..].starts_with(b"//") {
-            let doc = (bytes[i..].starts_with(b"///") && !bytes[i..].starts_with(b"////"))
-                || bytes[i..].starts_with(b"//!");
-            let start = i;
-            i += 2;
-            while i < bytes.len() && bytes[i] != b'\n' {
-                i += 1;
+struct NoDuplicateKeys;
+
+impl<'de> serde::de::DeserializeSeed<'de> for NoDuplicateKeys {
+    type Value = ();
+
+    fn deserialize<D: serde::Deserializer<'de>>(self, deserializer: D) -> Result<(), D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = ();
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("JSON without duplicate object keys")
             }
-            if doc {
-                if space && !out.is_empty() {
-                    out.push(b' ');
-                }
-                if i < bytes.len() {
-                    i += 1;
-                }
-                out.extend_from_slice(&bytes[start..i]);
-                space = false;
-            } else {
-                space = true;
+            fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<(), E> {
+                Ok(())
             }
-            continue;
-        }
-        if bytes[i..].starts_with(b"/*") {
-            let doc = (bytes[i..].starts_with(b"/**") && !bytes[i..].starts_with(b"/***"))
-                || bytes[i..].starts_with(b"/*!");
-            let start = i;
-            i += 2;
-            let mut depth = 1usize;
-            while i < bytes.len() && depth > 0 {
-                if bytes[i..].starts_with(b"/*") {
-                    depth += 1;
-                    i += 2;
-                } else if bytes[i..].starts_with(b"*/") {
-                    depth -= 1;
-                    i += 2;
-                } else {
-                    i += 1;
-                }
+            fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<(), E> {
+                Ok(())
             }
-            if depth != 0 {
-                return Err("unterminated Rust block comment".to_owned());
+            fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<(), E> {
+                Ok(())
             }
-            if doc {
-                if space && !out.is_empty() {
-                    out.push(b' ');
-                }
-                out.extend_from_slice(&bytes[start..i]);
-                space = false;
-            } else {
-                space = true;
+            fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<(), E> {
+                Ok(())
             }
-            continue;
-        }
-        if space && !out.is_empty() {
-            out.push(b' ');
-        }
-        space = false;
-        let start = i;
-        // Recognize raw strings, including byte and C raw strings.
-        let prefix = if bytes[i..].starts_with(b"br") || bytes[i..].starts_with(b"cr") {
-            2
-        } else {
-            usize::from(bytes[i] == b'r')
-        };
-        if prefix > 0 {
-            let mut quote = i + prefix;
-            while quote < bytes.len() && bytes[quote] == b'#' {
-                quote += 1;
+            fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<(), E> {
+                Ok(())
             }
-            if quote < bytes.len() && bytes[quote] == b'"' {
-                let hashes = quote - i - prefix;
-                i = quote + 1;
-                loop {
-                    if i >= bytes.len() {
-                        return Err("unterminated Rust raw string".to_owned());
+            fn visit_unit<E: serde::de::Error>(self) -> Result<(), E> {
+                Ok(())
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+                while seq.next_element_seed(NoDuplicateKeys)?.is_some() {}
+                Ok(())
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
+                let mut keys = BTreeSet::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    if !keys.insert(key) {
+                        return Err(serde::de::Error::custom("duplicate object key"));
                     }
-                    if bytes[i] == b'"'
-                        && i + 1 + hashes <= bytes.len()
-                        && bytes[i + 1..i + 1 + hashes].iter().all(|b| *b == b'#')
-                    {
-                        i += 1 + hashes;
-                        break;
-                    }
-                    i += 1;
+                    map.next_value_seed(NoDuplicateKeys)?;
                 }
-                out.extend_from_slice(&bytes[start..i]);
-                continue;
+                Ok(())
             }
         }
-        // A quote is a character literal only when a closing quote follows one character or escape.
-        let quote = if (matches!(bytes[i], b'b' | b'c') && bytes.get(i + 1) == Some(&b'"'))
-            || (bytes[i] == b'b' && bytes.get(i + 1) == Some(&b'\''))
-        {
-            i + 1
-        } else {
-            i
-        };
-        let is_char = bytes[quote] == b'\'' && {
-            let mut end = quote + 1;
-            if bytes.get(end) == Some(&b'\\') {
-                end += 1;
-                if bytes.get(end) == Some(&b'u') && bytes.get(end + 1) == Some(&b'{') {
-                    end += 2;
-                    while end < bytes.len() && bytes[end] != b'}' {
-                        end += 1;
-                    }
-                    end += 1;
-                } else if bytes.get(end) == Some(&b'x') {
-                    end += 3;
-                } else {
-                    end += 1;
-                }
-            } else if end < bytes.len() {
-                end += 1;
-                while end < bytes.len() && bytes[end] & 0xc0 == 0x80 {
-                    end += 1;
-                }
-            }
-            bytes.get(end) == Some(&b'\'')
-        };
-        if bytes[quote] == b'"' || is_char {
-            let delimiter = bytes[quote];
-            i = quote + 1;
-            while i < bytes.len() {
-                if bytes[i] == b'\\' {
-                    i = (i + 2).min(bytes.len());
-                } else if bytes[i] == delimiter {
-                    i += 1;
-                    break;
-                } else {
-                    i += 1;
-                }
-            }
-            if bytes.get(i.wrapping_sub(1)) != Some(&delimiter) {
-                return Err("unterminated Rust literal".to_owned());
-            }
-        } else {
-            i += 1;
-        }
-        out.extend_from_slice(&bytes[start..i]);
+        deserializer.deserialize_any(Visitor)
     }
-    Ok(out)
 }
 
 fn strings(values: &[&str]) -> Vec<String> {
@@ -849,33 +749,37 @@ mod tests {
             input_digest("data.json", br#"{"description":"new"}"#).unwrap()
         );
 
-        let rust = |text: &str| input_digest("source.rs", text.as_bytes()).unwrap();
-        let source =
-            r##"let a = r#"// raw"#; let b = b"// byte"; let c = '\''; let d = "// string";"##;
-        assert_eq!(
-            rust(source),
-            rust(&format!("// heading\n{source} // trailing\n"))
-        );
-        assert_eq!(
-            rust("let x = 1; /* outer /* nested */ end */ let y = 2;"),
-            rust("let x = 1; let y = 2;")
-        );
-        assert_ne!(rust(source), rust(&source.replace("// string", "changed")));
-        assert_ne!(rust(source), rust(&source.replace("// raw", "changed")));
-        assert_ne!(rust(source), rust(&source.replace("// byte", "changed")));
-        assert_ne!(rust(source), rust(&source.replace(r"'\''", "'x'")));
-        assert_eq!(
-            rust("fn f<'a>(x: &'a str) {}"),
-            rust("fn f<'a>(x: &'a str) {} // comment")
-        );
-
-        for doc in ["/// doc", "//! doc", "/** doc */", "/*! doc */"] {
-            assert_ne!(rust("fn f() {}"), rust(&format!("{doc}\nfn f() {{}}")));
+        assert_ne!(json(r#"{"title":"valid"}"#), json(r#"{"title":false}"#));
+        for key in ["description", "title", "$comment", "markdownDescription"] {
+            assert_ne!(json("{}"), json(&format!(r#"{{"{key}":false}}"#)));
+            assert_eq!(json("{}"), json(&format!(r#"{{"{key}":"text"}}"#)));
         }
+        assert_ne!(json(r#"{"examples":[]}"#), json("{}"));
+        assert_ne!(json(r#"{"examples":[]}"#), json(r#"{"examples":false}"#));
+        let single = br#"{"schemaVersion":1}"#;
+        let duplicate = br#"{"schemaVersion":1,"schemaVersion":1}"#;
         assert_ne!(
-            rust("//! module docs\nfn f() {}"),
-            rust("//! module docs\n//! ```\n//! assert!(false);\n//! ```\nfn f() {}")
+            input_digest("mutation.json", single).unwrap(),
+            input_digest("mutation.json", duplicate).unwrap()
         );
+        assert_eq!(
+            input_digest("mutation.json", duplicate).unwrap().kind,
+            "sha256"
+        );
+        assert_eq!(
+            input_digest("mutation.json", br#"{"nested":{"x":1,"x":1}}"#)
+                .unwrap()
+                .kind,
+            "sha256"
+        );
+        assert_eq!(
+            input_digest("source.rs", b"// comment").unwrap().kind,
+            "sha256"
+        );
+        let rust = |text: &str| input_digest("source.rs", text.as_bytes()).unwrap();
+        let suffix = r#"const S: &str = stringify!(r""r"\"//before");"#;
+        assert_ne!(rust(suffix), rust(&suffix.replace("before", "after")));
+        assert_ne!(rust("fn main() {}"), rust("fn main() {} // \u{202e}"));
         assert_eq!(
             input_digest(".github/workflows/test.yml", b"x")
                 .unwrap()
@@ -892,6 +796,10 @@ mod tests {
         assert!(error.contains("regenerate EventDelivery"), "{error}");
         let obsolete = r#"{"digests":{"workflow.yml":{"kind":"yaml-workflow","value":"abc"}}}"#;
         assert!(parse_evidence(obsolete, descriptor)
+            .unwrap_err()
+            .contains("regenerate EventDelivery"));
+        let obsolete_rust = r#"{"digests":{"source.rs":{"kind":"rust-semantic","value":"abc"}}}"#;
+        assert!(parse_evidence(obsolete_rust, descriptor)
             .unwrap_err()
             .contains("regenerate EventDelivery"));
         let missing_kind = r#"{"digests":{"old.rs":{"value":"abc"}}}"#;

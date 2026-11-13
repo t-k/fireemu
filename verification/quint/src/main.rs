@@ -7,7 +7,7 @@ use std::process::ExitCode;
 
 use fireemu_verification_quint::cargo_authority::{validate_authority_file, write_authority};
 use fireemu_verification_quint::evidence::{
-    input_digest, validate_evidence_file_with_cargo_authority, InputDigest,
+    expected_bound_inputs, input_digest, validate_evidence_file_with_cargo_authority, InputDigest,
 };
 use fireemu_verification_quint::model::{all_models, model, ModelDescriptor};
 use fireemu_verification_quint::process::{
@@ -38,6 +38,7 @@ fn main() -> ExitCode {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn check_evidence(arguments: &[String]) -> Result<bool, String> {
     if !arguments.is_empty() {
         return Err("check-evidence accepts no arguments".to_owned());
@@ -93,8 +94,26 @@ fn check_evidence(arguments: &[String]) -> Result<bool, String> {
                 .values()
                 .any(|digest| digest.get("kind").and_then(|v| v.as_str()) == Some("yaml-workflow"))
         });
+        let obsolete_rust = digests.is_some_and(|digests| {
+            digests
+                .values()
+                .any(|digest| digest.get("kind").and_then(|v| v.as_str()) == Some("rust-semantic"))
+        });
+        let inventory_changed =
+            fireemu_verification_quint::model::model(model).is_ok_and(|descriptor| {
+                let recorded = inputs
+                    .iter()
+                    .map(|input| input.as_str())
+                    .collect::<Option<Vec<_>>>();
+                match (recorded, expected_bound_inputs(&root, descriptor, None)) {
+                    (Some(recorded), Ok(expected)) => {
+                        recorded != expected.iter().map(String::as_str).collect::<Vec<_>>()
+                    }
+                    _ => true,
+                }
+            });
         let mut changed = Vec::new();
-        if !legacy && !obsolete {
+        if !legacy && !obsolete && !obsolete_rust {
             for input in inputs {
                 let path = input
                     .as_str()
@@ -110,12 +129,16 @@ fn check_evidence(arguments: &[String]) -> Result<bool, String> {
                 }
             }
         }
-        if legacy || obsolete || !changed.is_empty() {
+        if legacy || obsolete || obsolete_rust || inventory_changed || !changed.is_empty() {
             stale += 1;
             if legacy {
                 println!("STALE {model}: evidence predates digest kinds; regenerate");
             } else if obsolete {
                 println!("STALE {model}: obsolete workflow digest kind; regenerate");
+            } else if obsolete_rust {
+                println!("STALE {model}: obsolete Rust digest kind; regenerate");
+            } else if inventory_changed {
+                println!("STALE {model}: required bound input inventory changed; regenerate");
             } else {
                 println!(
                     "STALE {model}: {} bound input(s) changed since its evidence was written",

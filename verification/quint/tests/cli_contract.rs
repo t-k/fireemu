@@ -47,27 +47,25 @@ fn check_evidence_fixture(input: Option<&str>, legacy: bool) -> Output {
 #[test]
 fn check_evidence_fresh() {
     let output = check_evidence_fixture(Some("fn main() {}\n"), false);
-    assert_eq!(output.status.code(), Some(0));
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        "evidence digests stale: 0\n"
-    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("STALE Example:"));
 }
 
 #[test]
 fn check_evidence_semantic_change() {
     let output = check_evidence_fixture(Some("fn other() {}\n"), false);
     assert_eq!(output.status.code(), Some(1));
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "STALE Example: 1 bound input(s) changed since its evidence was written\n  input.rs\nQUINT_HOME=$HOME/.quint cargo run -p fireemu-verification-quint -- mutate-model --model Example --evidence verification/quint/evidence/Example.json\nevidence digests stale: 1\n");
+    assert!(String::from_utf8_lossy(&output.stdout).contains(
+        "STALE Example: 1 bound input(s) changed since its evidence was written\n  input.rs\n"
+    ));
 }
 
 #[test]
 fn check_evidence_comment_only_change() {
     let output = check_evidence_fixture(Some("// comment\nfn main() {}\n"), false);
-    assert_eq!(output.status.code(), Some(0));
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        "evidence digests stale: 0\n"
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("STALE Example: 1 bound input(s) changed")
     );
 }
 
@@ -83,7 +81,7 @@ fn check_evidence_old_format() {
     let output = check_evidence_fixture(Some("fn main() {}\n"), true);
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stdout)
-        .starts_with("STALE Example: evidence predates digest kinds; regenerate\n"));
+        .contains("STALE Example: evidence predates digest kinds; regenerate\n"));
 }
 
 #[test]
@@ -106,6 +104,68 @@ fn check_evidence_obsolete_workflow_digest_requires_regeneration() {
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stdout)
         .contains("obsolete workflow digest kind; regenerate"));
+}
+
+#[test]
+fn check_evidence_obsolete_rust_digest_requires_regeneration() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("verification/quint/evidence");
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(
+        directory.join("Example.json"),
+        r#"{"boundInputs":[],"digests":{"source.rs":{"kind":"rust-semantic","value":"old"}}}"#,
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_fireemu-verification-quint"))
+        .arg("check-evidence")
+        .current_dir(root.path())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stdout)
+        .contains("STALE Example: obsolete Rust digest kind; regenerate"));
+}
+
+#[test]
+fn check_evidence_detects_new_build_script() {
+    use fireemu_verification_quint::evidence::{expected_bound_inputs, input_digest};
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let descriptor = fireemu_verification_quint::model::model("EventDelivery").unwrap();
+    let inputs = expected_bound_inputs(&source, descriptor, None).unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let mut digests = serde_json::Map::new();
+    for path in &inputs {
+        let bytes = fs::read(source.join(path)).unwrap();
+        let destination = root.path().join(path);
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        fs::write(destination, &bytes).unwrap();
+        digests.insert(
+            path.clone(),
+            serde_json::to_value(input_digest(path, &bytes).unwrap()).unwrap(),
+        );
+    }
+    let evidence = serde_json::json!({"boundInputs": inputs, "digests": digests});
+    let evidence_file = root
+        .path()
+        .join("verification/quint/evidence/EventDelivery.json");
+    fs::write(evidence_file, evidence.to_string()).unwrap();
+    let check = || {
+        Command::new(env!("CARGO_BIN_EXE_fireemu-verification-quint"))
+            .arg("check-evidence")
+            .current_dir(root.path())
+            .output()
+            .unwrap()
+    };
+    assert!(!String::from_utf8_lossy(&check().stdout).contains("STALE EventDelivery:"));
+    fs::write(
+        root.path().join("crates/fireemu-core-events/build.rs"),
+        "fn main() { panic!(\"changed\"); }",
+    )
+    .unwrap();
+    let output = check();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stdout)
+        .contains("STALE EventDelivery: required bound input inventory changed; regenerate"));
 }
 
 #[test]
@@ -136,11 +196,7 @@ fn check_evidence_requires_registered_models() {
             stdout.contains("evidence file missing; regenerate"),
             "{scenario}: {stdout}"
         );
-        let count = if scenario == "missing model" {
-            1
-        } else {
-            fireemu_verification_quint::model::all_models().count()
-        };
+        let count = fireemu_verification_quint::model::all_models().count();
         assert!(
             stdout.contains(&format!("evidence digests stale: {count}\n")),
             "{scenario}: {stdout}"

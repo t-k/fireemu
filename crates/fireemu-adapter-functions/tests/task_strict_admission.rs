@@ -97,6 +97,7 @@ async fn start_full(
     let runtime = FunctionsRuntime::with_codebases(
         vec![CodebaseSpec {
             name: "default".to_owned(),
+            function: None,
             manifest,
             runner: Arc::new(runner),
             spawn: Some(spec),

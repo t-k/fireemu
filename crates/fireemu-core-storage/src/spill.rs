@@ -34,6 +34,7 @@ macro_rules! spill_io {
 #[derive(Clone)]
 pub struct SpillDir {
     dir: PathBuf,
+    #[cfg(unix)]
     owner: Option<Arc<SpillOwner>>,
 }
 
@@ -42,6 +43,7 @@ impl SpillDir {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         Self {
             dir: dir.into(),
+            #[cfg(unix)]
             owner: None,
         }
     }
@@ -267,6 +269,7 @@ impl Drop for SpillFile {
     }
 }
 
+#[cfg(unix)]
 const PREFIX: &str = "fireemu-spill-";
 
 /// Owns a process-specific directory for temporary body files.
@@ -355,6 +358,7 @@ impl ProcessSpill {
         })
     }
 
+    /// Process-specific spill directories are unsupported on non-Unix platforms.
     #[cfg(not(unix))]
     pub fn create(_root: &Path) -> io::Result<Self> {
         Err(io::Error::new(
@@ -372,6 +376,7 @@ impl ProcessSpill {
     pub fn spill_dir(&self) -> SpillDir {
         SpillDir {
             dir: self.path().to_owned(),
+            #[cfg(unix)]
             owner: Some(Arc::clone(&self.owner)),
         }
     }

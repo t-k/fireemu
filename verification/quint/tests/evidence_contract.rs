@@ -155,7 +155,26 @@ fn every_bound_input_tamper_invalidates_evidence() {
             .expect("untampered copied fixture must validate");
         let path = temporary.path.join(target);
         let mut bytes = fs::read(&path).expect("read copied bound input");
-        bytes.push(b'!');
+        if target == "verification/quint/evidence/cargo-authority.json" {
+            let mut authority: serde_json::Value =
+                serde_json::from_slice(&bytes).expect("valid authority");
+            authority["packages"][0]["version"] = "tampered-version".into();
+            bytes = serde_json::to_vec(&authority).expect("serialize authority");
+        } else if std::path::Path::new(AsRef::<str>::as_ref(&target))
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+        {
+            let mut json: serde_json::Value = serde_json::from_slice(&bytes).expect("valid JSON");
+            json["tampered"] = true.into();
+            bytes = serde_json::to_vec(&json).expect("serialize JSON");
+        } else if std::path::Path::new(AsRef::<str>::as_ref(&target))
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("rs"))
+        {
+            bytes.extend_from_slice(b"\nconst _: () = ();\n");
+        } else {
+            bytes.push(b'!');
+        }
         fs::write(&path, bytes).expect("tamper copied bound input");
         assert!(
             validate_evidence_json(EVIDENCE, descriptor(), Some(&temporary.path)).is_err(),
@@ -220,7 +239,7 @@ fn firestore_value_changes_invalidate_dependent_model_evidence() {
             .expect("untampered fixture must validate");
         let path = fixture.path.join(TARGET);
         let mut bytes = fs::read(&path).expect("read value source");
-        bytes.extend_from_slice(b"\n// Value-only mutation.\n");
+        bytes.extend_from_slice(b"\nconst _: () = ();\n");
         fs::write(path, bytes).expect("mutate value source only");
         let error = validate_evidence_json(&json, descriptor, Some(&fixture.path))
             .expect_err("value-only change must stale evidence");
@@ -259,7 +278,7 @@ fn transitive_helper_tampering_and_inventory_changes_stale_evidence() {
             match operation {
                 "edit" => {
                     let mut bytes = fs::read(&path).expect("read helper");
-                    bytes.extend_from_slice(b"\n// Semantic source mutation.\n");
+                    bytes.extend_from_slice(b"\nconst _: () = ();\n");
                     fs::write(&path, bytes).expect("edit helper");
                 }
                 "add" => fs::write(

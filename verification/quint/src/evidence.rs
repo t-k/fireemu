@@ -71,7 +71,7 @@ pub struct Evidence {
     /// Sorted repository-relative inputs bound by SHA-256.
     pub bound_inputs: Vec<String>,
     /// SHA-256 digests keyed by repository-relative input path.
-    pub digests: BTreeMap<String, String>,
+    pub digests: BTreeMap<String, InputDigest>,
     /// Safety property names checked by the baseline.
     pub invariants: Vec<String>,
     /// Temporal property names checked by the baseline.
@@ -86,6 +86,16 @@ pub struct Evidence {
     pub projection_fields: Vec<String>,
     /// Bounded generated-trace campaign configuration.
     pub simulation: SimulationEvidence,
+}
+
+/// Digest algorithm and value for one bound input.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct InputDigest {
+    /// Canonicalization applied before SHA-256.
+    pub kind: String,
+    /// Lowercase hexadecimal SHA-256.
+    pub value: String,
 }
 
 /// Tool versions bound into evidence.
@@ -223,8 +233,7 @@ pub fn validate_evidence_json(
     descriptor: &'static ModelDescriptor,
     repository_root: Option<&Path>,
 ) -> Result<Evidence, String> {
-    let evidence: Evidence =
-        serde_json::from_str(json).map_err(|error| format!("invalid evidence JSON: {error}"))?;
+    let evidence = parse_evidence(json, descriptor)?;
     validate_semantics(&evidence, descriptor, repository_root, None)?;
     Ok(evidence)
 }
@@ -247,8 +256,7 @@ pub fn validate_evidence_file_with_cargo_authority(
 ) -> Result<Evidence, String> {
     let json = fs::read_to_string(path)
         .map_err(|error| format!("cannot read evidence {}: {error}", path.display()))?;
-    let evidence: Evidence =
-        serde_json::from_str(&json).map_err(|error| format!("invalid evidence JSON: {error}"))?;
+    let evidence = parse_evidence(&json, descriptor)?;
     validate_semantics(
         &evidence,
         descriptor,
@@ -256,6 +264,39 @@ pub fn validate_evidence_file_with_cargo_authority(
         cargo_authority,
     )?;
     Ok(evidence)
+}
+
+fn parse_evidence(json: &str, descriptor: &ModelDescriptor) -> Result<Evidence, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(json).map_err(|error| format!("invalid evidence JSON: {error}"))?;
+    if value
+        .get("digests")
+        .and_then(|value| value.as_object())
+        .is_some_and(|digests| digests.values().any(|digest| digest.get("kind").is_none()))
+    {
+        return Err(format!(
+            "evidence digest kind missing; regenerate {}",
+            descriptor.name
+        ));
+    }
+    if value
+        .get("digests")
+        .and_then(|v| v.as_object())
+        .is_some_and(|digests| {
+            digests.values().any(|digest| {
+                matches!(
+                    digest.get("kind").and_then(|v| v.as_str()),
+                    Some("yaml-workflow" | "rust-semantic")
+                )
+            })
+        })
+    {
+        return Err(format!(
+            "obsolete digest kind; regenerate {}",
+            descriptor.name
+        ));
+    }
+    serde_json::from_value(value).map_err(|error| format!("invalid evidence JSON: {error}"))
 }
 
 fn validate_semantics(
@@ -400,7 +441,8 @@ fn normalize_mutations(
     Ok(normalized)
 }
 
-fn expected_bound_inputs(
+/// Derives the complete inventory of inputs required for a model.
+pub fn expected_bound_inputs(
     repository_root: &Path,
     descriptor: &ModelDescriptor,
     cargo_authority: Option<&Path>,
@@ -500,7 +542,7 @@ fn compute_digests(
     repository_root: &Path,
     relative_paths: &[String],
     cargo_authority: Option<&Path>,
-) -> Result<BTreeMap<String, String>, String> {
+) -> Result<BTreeMap<String, InputDigest>, String> {
     relative_paths
         .iter()
         .map(|relative| {
@@ -523,9 +565,164 @@ fn compute_digests(
             }
             let bytes = fs::read(&path)
                 .map_err(|error| format!("cannot read bound input {}: {error}", path.display()))?;
-            Ok((relative.clone(), format!("{:x}", Sha256::digest(bytes))))
+            Ok((relative.clone(), input_digest(relative, &bytes)?))
         })
         .collect()
+}
+
+/// Computes the current digest of one bound input with the same path checks as validation.
+pub fn current_input_digest(repository_root: &Path, relative: &str) -> Result<InputDigest, String> {
+    let mut digests = compute_digests(repository_root, &[relative.to_owned()], None)?;
+    digests
+        .remove(relative)
+        .ok_or_else(|| format!("missing digest for {relative}"))
+}
+
+/// Whether `path` has the given extension, compared without regard to ASCII case.
+fn has_extension(path: &str, extension: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .is_some_and(|found| found.eq_ignore_ascii_case(extension))
+}
+
+/// Computes the digest used to bind an input to evidence.
+pub fn input_digest(path: &str, bytes: &[u8]) -> Result<InputDigest, String> {
+    let (kind, normalized) = if has_extension(path, "json") {
+        fn strip(value: &mut serde_json::Value) {
+            let Some(map) = value.as_object_mut() else {
+                return;
+            };
+            for key in ["description", "title", "$comment", "markdownDescription"] {
+                if map.get(key).is_some_and(serde_json::Value::is_string) {
+                    map.remove(key);
+                }
+            }
+            for key in [
+                "properties",
+                "patternProperties",
+                "$defs",
+                "definitions",
+                "dependentSchemas",
+            ] {
+                if let Some(entries) = map.get_mut(key).and_then(|v| v.as_object_mut()) {
+                    for schema in entries.values_mut() {
+                        strip(schema);
+                    }
+                }
+            }
+            for key in [
+                "additionalProperties",
+                "unevaluatedProperties",
+                "propertyNames",
+                "items",
+                "contains",
+                "unevaluatedItems",
+                "not",
+                "if",
+                "then",
+                "else",
+                "contentSchema",
+                "additionalItems",
+            ] {
+                if let Some(schema) = map.get_mut(key) {
+                    strip(schema);
+                }
+            }
+            for key in ["allOf", "anyOf", "oneOf", "prefixItems"] {
+                if let Some(schemas) = map.get_mut(key).and_then(|v| v.as_array_mut()) {
+                    for schema in schemas {
+                        strip(schema);
+                    }
+                }
+            }
+        }
+        // Sort explicitly even if serde_json is built with preserve_order enabled.
+        fn sorted(value: serde_json::Value) -> serde_json::Value {
+            match value {
+                serde_json::Value::Object(map) => {
+                    let entries: BTreeMap<_, _> =
+                        map.into_iter().map(|(k, v)| (k, sorted(v))).collect();
+                    serde_json::Value::Object(entries.into_iter().collect())
+                }
+                serde_json::Value::Array(values) => {
+                    serde_json::Value::Array(values.into_iter().map(sorted).collect())
+                }
+                other => other,
+            }
+        }
+        let mut value: serde_json::Value = serde_json::from_slice(bytes)
+            .map_err(|error| format!("invalid JSON bound input {path}: {error}"))?;
+        let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+        if serde::de::DeserializeSeed::deserialize(NoDuplicateKeys, &mut deserializer).is_err() {
+            return Ok(InputDigest {
+                kind: "sha256".to_owned(),
+                value: format!("{:x}", Sha256::digest(bytes)),
+            });
+        }
+        if path.ends_with(".schema.json") {
+            strip(&mut value);
+        }
+        (
+            "json-semantic",
+            serde_json::to_vec(&sorted(value)).map_err(|error| error.to_string())?,
+        )
+    } else {
+        ("sha256", bytes.to_vec())
+    };
+    Ok(InputDigest {
+        kind: kind.to_owned(),
+        value: format!("{:x}", Sha256::digest(normalized)),
+    })
+}
+
+struct NoDuplicateKeys;
+
+impl<'de> serde::de::DeserializeSeed<'de> for NoDuplicateKeys {
+    type Value = ();
+
+    fn deserialize<D: serde::Deserializer<'de>>(self, deserializer: D) -> Result<(), D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = ();
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("JSON without duplicate object keys")
+            }
+            fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<(), E> {
+                Ok(())
+            }
+            fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<(), E> {
+                Ok(())
+            }
+            fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<(), E> {
+                Ok(())
+            }
+            fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<(), E> {
+                Ok(())
+            }
+            fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<(), E> {
+                Ok(())
+            }
+            fn visit_unit<E: serde::de::Error>(self) -> Result<(), E> {
+                Ok(())
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+                while seq.next_element_seed(NoDuplicateKeys)?.is_some() {}
+                Ok(())
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
+                let mut keys = BTreeSet::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    if !keys.insert(key) {
+                        return Err(serde::de::Error::custom("duplicate object key"));
+                    }
+                    map.next_value_seed(NoDuplicateKeys)?;
+                }
+                Ok(())
+            }
+        }
+        deserializer.deserialize_any(Visitor)
+    }
 }
 
 fn strings(values: &[&str]) -> Vec<String> {
@@ -537,6 +734,87 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn semantic_digests_ignore_only_the_requested_changes() {
+        let json = |text: &str| input_digest("config.schema.json", text.as_bytes()).unwrap();
+        let baseline = json(r#"{"type":"object","description":"old","properties":{}}"#);
+        assert_eq!(
+            baseline,
+            json(r#"{"properties":{},"description":"new","type":"object"}"#)
+        );
+        assert_ne!(
+            baseline,
+            json(r#"{"type":"object","properties":{"title":{"type":"string"}}}"#)
+        );
+        for key in ["properties", "patternProperties", "$defs", "definitions"] {
+            let empty = format!(r#"{{"{key}":{{}}}}"#);
+            let named = format!(r#"{{"{key}":{{"description":{{"type":"string"}}}}}}"#);
+            assert_ne!(json(&empty), json(&named));
+        }
+        assert_ne!(
+            input_digest("data.json", br#"{"description":"old"}"#).unwrap(),
+            input_digest("data.json", br#"{"description":"new"}"#).unwrap()
+        );
+
+        assert_ne!(json(r#"{"title":"valid"}"#), json(r#"{"title":false}"#));
+        for key in ["description", "title", "$comment", "markdownDescription"] {
+            assert_ne!(json("{}"), json(&format!(r#"{{"{key}":false}}"#)));
+            assert_eq!(json("{}"), json(&format!(r#"{{"{key}":"text"}}"#)));
+        }
+        assert_ne!(json(r#"{"examples":[]}"#), json("{}"));
+        assert_ne!(json(r#"{"examples":[]}"#), json(r#"{"examples":false}"#));
+        let single = br#"{"schemaVersion":1}"#;
+        let duplicate = br#"{"schemaVersion":1,"schemaVersion":1}"#;
+        assert_ne!(
+            input_digest("mutation.json", single).unwrap(),
+            input_digest("mutation.json", duplicate).unwrap()
+        );
+        assert_eq!(
+            input_digest("mutation.json", duplicate).unwrap().kind,
+            "sha256"
+        );
+        assert_eq!(
+            input_digest("mutation.json", br#"{"nested":{"x":1,"x":1}}"#)
+                .unwrap()
+                .kind,
+            "sha256"
+        );
+        assert_eq!(
+            input_digest("source.rs", b"// comment").unwrap().kind,
+            "sha256"
+        );
+        let rust = |text: &str| input_digest("source.rs", text.as_bytes()).unwrap();
+        let suffix = r#"const S: &str = stringify!(r""r"\"//before");"#;
+        assert_ne!(rust(suffix), rust(&suffix.replace("before", "after")));
+        assert_ne!(rust("fn main() {}"), rust("fn main() {} // \u{202e}"));
+        assert_eq!(
+            input_digest(".github/workflows/test.yml", b"x")
+                .unwrap()
+                .kind,
+            "sha256"
+        );
+    }
+
+    #[test]
+    fn legacy_digests_require_regeneration() {
+        let descriptor = crate::model::model("EventDelivery").unwrap();
+        let legacy = r#"{"digests":{"old.rs":"abc"}}"#;
+        let error = parse_evidence(legacy, descriptor).unwrap_err();
+        assert!(error.contains("regenerate EventDelivery"), "{error}");
+        let obsolete = r#"{"digests":{"workflow.yml":{"kind":"yaml-workflow","value":"abc"}}}"#;
+        assert!(parse_evidence(obsolete, descriptor)
+            .unwrap_err()
+            .contains("regenerate EventDelivery"));
+        let obsolete_rust = r#"{"digests":{"source.rs":{"kind":"rust-semantic","value":"abc"}}}"#;
+        assert!(parse_evidence(obsolete_rust, descriptor)
+            .unwrap_err()
+            .contains("regenerate EventDelivery"));
+        let missing_kind = r#"{"digests":{"old.rs":{"value":"abc"}}}"#;
+        assert!(parse_evidence(missing_kind, descriptor)
+            .unwrap_err()
+            .contains("regenerate EventDelivery"));
+    }
 
     #[test]
     fn production_roots_bind_previously_omitted_transitive_helpers() {
@@ -599,8 +877,8 @@ mod tests {
         let staged = temporary.path.join("staged/cargo-authority.json");
         fs::create_dir_all(live.parent().expect("live parent")).expect("create live parent");
         fs::create_dir_all(staged.parent().expect("staged parent")).expect("create staged parent");
-        fs::write(&live, b"live").expect("write live authority");
-        fs::write(&staged, b"staged").expect("write staged authority");
+        fs::write(&live, b"{\"live\":true}").expect("write live authority");
+        fs::write(&staged, b"{\"staged\":true}").expect("write staged authority");
 
         let digests = compute_digests(
             &temporary.path,
@@ -611,7 +889,7 @@ mod tests {
 
         assert_eq!(
             digests["verification/quint/evidence/cargo-authority.json"],
-            format!("{:x}", Sha256::digest(b"staged"))
+            input_digest(CARGO_AUTHORITY_INPUT, b"{\"staged\":true}").unwrap()
         );
     }
 

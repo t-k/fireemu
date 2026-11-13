@@ -475,39 +475,48 @@ pub fn expected_bound_inputs(
     )
     .map_err(|error| format!("invalid source closure Cargo authority: {error}"))?;
     let explicit_inputs = inputs.clone();
-    inputs.extend(source_closure::production_inputs(
+    let closure = source_closure::production_inputs(
         repository_root,
         descriptor.production_sources,
         &authority,
-    )?);
-    // Build scripts can compute reads of any package file, so no test-only exclusion is safe.
-    let build_script_packages: Vec<_> = authority
-        .packages
-        .iter()
-        .filter_map(|package| {
-            let directory = Path::new(package.manifest.as_deref()?).parent()?;
-            (package.build_script.is_some()
-                || inputs
-                    .iter()
-                    .any(|input| Path::new(input) == directory.join("build.rs")))
-            .then_some(directory)
-        })
-        .collect();
+    )?;
+    inputs.extend(closure.iter().cloned());
+    // Compile-time code can read across package boundaries: guard the entire model.
+    for package in &authority.packages {
+        let Some(manifest) = package
+            .manifest
+            .as_deref()
+            .filter(|path| closure.contains(*path))
+        else {
+            continue;
+        };
+        let directory = Path::new(manifest).parent().expect("validated manifest");
+        let contents = fs::read_to_string(repository_root.join(manifest))
+            .map_err(|error| format!("cannot read source closure manifest {manifest}: {error}"))?;
+        // Conservatively recognize key candidates, including quoted and dotted TOML keys.
+        // Escapes may conceal keys; ambiguous manifests cannot justify exclusions.
+        if package.build_script.is_some()
+            || closure.contains(&directory.join("build.rs").to_string_lossy().into_owned())
+            || contents.contains('\\')
+            || contents
+                .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-' && ch != '_')
+                .any(|word| matches!(word, "build" | "proc-macro" | "proc_macro"))
+        {
+            return Ok(inputs.into_iter().collect());
+        }
+    }
     // Directory exclusions use package roots, not arbitrary directories named "tests" in src.
     inputs.retain(|input| {
-        build_script_packages
+        !authority
+            .packages
             .iter()
-            .any(|directory| Path::new(input).starts_with(directory))
-            || !authority
-                .packages
-                .iter()
-                .filter_map(|package| package.manifest.as_deref())
-                .filter_map(|manifest| Path::new(manifest).parent())
-                .any(|directory| {
-                    ["tests", "benches", "examples"]
-                        .iter()
-                        .any(|name| Path::new(input).starts_with(directory.join(name)))
-                })
+            .filter_map(|package| package.manifest.as_deref())
+            .filter_map(|manifest| Path::new(manifest).parent())
+            .any(|directory| {
+                ["tests", "benches", "examples"]
+                    .iter()
+                    .any(|name| Path::new(input).starts_with(directory.join(name)))
+            })
     });
 
     // Tokenize only to prove file-level exclusions. Digests still cover every byte of bound files.
@@ -535,11 +544,6 @@ pub fn expected_bound_inputs(
         }
     }
     let mut candidates = test_module_candidates(&syntax, &authority, &inputs, &explicit_inputs);
-    candidates.retain(|input, _| {
-        !build_script_packages
-            .iter()
-            .any(|directory| Path::new(input).starts_with(directory))
-    });
     if !retain_referenced_candidates(&syntax, &unparsed, &mut candidates) {
         return Ok(inputs.iter().cloned().collect());
     }

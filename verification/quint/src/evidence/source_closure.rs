@@ -510,8 +510,8 @@ mod tests {
     }
 
     #[test]
-    fn build_scripts_prevent_all_test_only_exclusions() {
-        for script in ["tests/build.rs", "build.rs"] {
+    fn reachable_compile_time_code_prevents_all_model_test_only_exclusions() {
+        for script in ["tests/build.rs", "build.rs", "src/lib.rs"] {
             let mut fixture = Fixture::new();
             let root = fixture.directory.path();
             let descriptor = crate::model::ModelDescriptor {
@@ -522,6 +522,7 @@ mod tests {
                     "normal/tests/input.txt",
                     "normal/benches/input.txt",
                     "normal/examples/input.txt",
+                    "root/tests/input.txt",
                 ],
                 ..*crate::model::model("EventDelivery").expect("registered model")
             };
@@ -536,12 +537,24 @@ mod tests {
             for package in ["root", "normal"] {
                 fs::write(
                     root.join(format!("{package}/src/lib.rs")),
-                    "#[cfg(test)]\nmod probe;\npub fn value() -> &'static str { env!(\"VALUE\") }\n",
+                    if package == "root" {
+                        "#[cfg(test)]\nmod probe;\npub fn value() -> &'static str { normal::value() }\n"
+                    } else {
+                        "#[cfg(test)]\nmod probe;\npub fn value() -> &'static str { env!(\"VALUE\") }\n"
+                    },
                 )
                 .expect("test-only declaration");
                 fs::write(root.join(format!("{package}/src/probe.rs")), "// Probe.\n")
                     .expect("test-only module");
             }
+            // Unreachable compile-time code must not disable this model's exclusions.
+            fs::write(root.join("unrelated/build.rs"), "fn main() {}\n")
+                .expect("unreachable build script");
+            fs::write(
+                root.join("unrelated/Cargo.toml"),
+                "[package]\n[lib]\nproc-macro = true\n",
+            )
+            .expect("unreachable proc-macro manifest");
             let authority_path = root.join(super::super::CARGO_AUTHORITY_INPUT);
             fs::write(
                 &authority_path,
@@ -556,7 +569,28 @@ mod tests {
             }
 
             let script_path = format!("normal/{script}");
-            let source = if script == "tests/build.rs" {
+            let source = if script == "src/lib.rs" {
+                fs::write(
+                    root.join("normal/Cargo.toml"),
+                    "[package]\n[lib]\nproc-macro = true\n",
+                )
+                .expect("reachable proc-macro manifest");
+                fs::write(
+                    root.join("root/src/lib.rs"),
+                    "#[cfg(test)] mod probe; pub fn value() -> usize { normal::measured!() }\n",
+                )
+                .expect("production macro invocation");
+                r#"extern crate proc_macro;
+#[cfg(test)]
+mod probe;
+#[proc_macro]
+pub fn measured(_: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src").join("probe").with_extension("rs");
+    std::fs::read(path).unwrap().len().to_string().parse().unwrap()
+}
+"#
+            } else if script == "tests/build.rs" {
                 fs::write(
                     root.join("normal/Cargo.toml"),
                     "[package]\nbuild = \"tests/build.rs\"\n",
@@ -567,7 +601,7 @@ mod tests {
             } else {
                 // Leave authority unchanged to cover discovery of a new default build script.
                 r#"fn main() {
-    let path = std::path::Path::new("src").join("probe").with_extension("rs");
+    let path = std::path::Path::new("../root").join("src").join("probe").with_extension("rs");
     let bytes = std::fs::read(&path).unwrap();
     println!("cargo:rerun-if-changed={}", path.display());
     println!("cargo:rustc-env=VALUE={}", bytes.len());
@@ -583,9 +617,7 @@ mod tests {
             let bound = super::super::expected_bound_inputs(root, &descriptor, None)
                 .expect("inventory with build script");
             for path in fixture.inputs().expect("unfiltered inventory") {
-                if path.starts_with("normal/") {
-                    assert!(bound.contains(&path), "{script} must retain {path}");
-                }
+                assert!(bound.contains(&path), "{script} must retain {path}");
             }
             for path in descriptor.additional_evidence_inputs {
                 assert!(
@@ -593,8 +625,11 @@ mod tests {
                     "{script} must retain {path}"
                 );
             }
-            assert!(!bound.iter().any(|input| input == "root/src/probe.rs"));
-            for path in [script_path.as_str(), "normal/src/probe.rs"] {
+            for path in [
+                script_path.as_str(),
+                "normal/src/probe.rs",
+                "root/src/probe.rs",
+            ] {
                 let before = super::super::current_input_digest(root, path).expect("bound digest");
                 let mut bytes = fs::read(root.join(path)).expect("bound bytes");
                 bytes.extend_from_slice(b"// Changed build input.\n");

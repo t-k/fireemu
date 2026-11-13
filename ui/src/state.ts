@@ -54,8 +54,8 @@ const store = createRoot(() => {
     completedEpoch = mine;
     info.map((i) => setClock(i.clock.clock));
     const answered = info.isOk() && list.isOk();
-    setConnected(answered);
     if (answered) setLastConnectedAt(new Date().toISOString());
+    setConnected(answered);
   };
 
   return {

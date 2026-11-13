@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, Show, type Component } from "solid-js";
+import { createEffect, createMemo, createSignal, For, on, Show, type Component } from "solid-js";
 import type {
   FunctionLog,
   FunctionsCausality,
@@ -18,6 +18,10 @@ export const FunctionsTimeline: Component<{
   logs: FunctionLog[];
   logGaps: boolean;
   stale: boolean;
+  linkSession?: string;
+  linkedEvent?: string | undefined;
+  linkedFunction?: string | undefined;
+  onSelectEvent?: (event: string, fn: string) => void;
 }> = (props) => {
   const events = createMemo(() =>
     buildTimeline(
@@ -30,12 +34,30 @@ export const FunctionsTimeline: Component<{
   );
   const byKey = createMemo(() => new Map(events().map((event) => [event.key, event])));
   const [selection, setSelection] = createSignal("");
+  createEffect(
+    on(
+      () => props.linkSession,
+      () => setSelection(""),
+      { defer: true },
+    ),
+  );
+  createEffect(
+    on(
+      () => [props.linkedEvent, props.linkedFunction],
+      () => setSelection(""),
+      { defer: true },
+    ),
+  );
   const [source, setSource] = createSignal("");
   const [status, setStatus] = createSignal("");
   const [eventId, setEventId] = createSignal("");
   const [fn, setFn] = createSignal("");
   const [attempt, setAttempt] = createSignal("");
-  const selected = () => byKey().get(selection());
+  const selectedKey = () =>
+    props.linkedEvent && props.linkedFunction
+      ? JSON.stringify([props.project, props.linkedEvent, props.linkedFunction])
+      : selection();
+  const selected = () => byKey().get(selectedKey());
   const sources = createMemo(() =>
     [...new Set(events().flatMap((e) => (e.causal ? [e.causal.source] : [])))].toSorted(),
   );
@@ -171,21 +193,52 @@ export const FunctionsTimeline: Component<{
                   {(key) => (
                     <tr>
                       <td>
-                        <button
-                          type="button"
-                          class="btn mono text-xs focus-visible:outline-2 focus-visible:outline-offset-2"
-                          aria-pressed={selection() === key}
-                          aria-label={t("functions.timelineSelect", {
-                            event: byKey().get(key)!.eventId,
-                            function: byKey().get(key)!.function,
-                          })}
-                          onClick={() => {
-                            setSelection(key);
-                            setAttempt("");
-                          }}
+                        <Show
+                          when={!byKey().get(key)!.synthetic}
+                          fallback={
+                            <button
+                              type="button"
+                              class="btn mono text-xs"
+                              aria-pressed={selectedKey() === key}
+                              onClick={() => {
+                                setSelection(key);
+                                props.onSelectEvent?.("", "");
+                                setAttempt("");
+                              }}
+                            >
+                              {byKey().get(key)!.eventId}
+                            </button>
+                          }
                         >
-                          {byKey().get(key)!.eventId}
-                        </button>
+                          <a
+                            href={`/functions?event=${encodeURIComponent(byKey().get(key)!.eventId)}&eventFunction=${encodeURIComponent(byKey().get(key)!.function)}&eventSession=${encodeURIComponent(props.linkSession ?? props.session)}&eventProject=${encodeURIComponent(props.project)}`}
+                            class="btn mono text-xs focus-visible:outline-2 focus-visible:outline-offset-2"
+                            aria-current={selectedKey() === key ? "true" : undefined}
+                            aria-label={t("functions.timelineSelect", {
+                              event: byKey().get(key)!.eventId,
+                              function: byKey().get(key)!.function,
+                            })}
+                            onClick={(event) => {
+                              if (
+                                event.button !== 0 ||
+                                event.metaKey ||
+                                event.ctrlKey ||
+                                event.shiftKey ||
+                                event.altKey
+                              )
+                                return;
+                              event.preventDefault();
+                              setSelection(key);
+                              props.onSelectEvent?.(
+                                byKey().get(key)!.synthetic ? "" : byKey().get(key)!.eventId,
+                                byKey().get(key)!.synthetic ? "" : byKey().get(key)!.function,
+                              );
+                              setAttempt("");
+                            }}
+                          >
+                            {byKey().get(key)!.eventId}
+                          </a>
+                        </Show>
                       </td>
                       <td class="mono text-xs">{byKey().get(key)!.function}</td>
                       <td>{byKey().get(key)!.causal?.source ?? "—"}</td>
@@ -198,12 +251,19 @@ export const FunctionsTimeline: Component<{
           </div>
         </Show>
       </Show>
-      <Show when={selection()}>
+      <Show when={selectedKey()}>
         <div
           class="mt-4 rounded-md border border-zinc-200 p-3 dark:border-zinc-700"
           data-testid="timeline-detail"
         >
-          <button type="button" class="btn mb-2" onClick={() => setSelection("")}>
+          <button
+            type="button"
+            class="btn mb-2"
+            onClick={() => {
+              setSelection("");
+              props.onSelectEvent?.("", "");
+            }}
+          >
             {t("functions.timelineClearSelection")}
           </button>
           <Show

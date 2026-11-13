@@ -711,7 +711,18 @@ const Functions: Component = () => {
       setLogLevel("all");
       setLogText("");
       setIncludeSearch(false);
-      setFilterSearch({ function: undefined, level: undefined, q: undefined }, { replace: true });
+      setFilterSearch(
+        {
+          function: undefined,
+          level: undefined,
+          q: undefined,
+          event: undefined,
+          eventFunction: undefined,
+          eventSession: undefined,
+          eventProject: undefined,
+        },
+        { replace: true },
+      );
       return;
     }
     filterScope = scope;
@@ -980,6 +991,29 @@ const Functions: Component = () => {
             logs={scopedRecords()}
             logGaps={logGaps()}
             stale={!!errorOf(overview())}
+            linkSession={appState.session()}
+            linkedEvent={
+              filterSearch.eventSession === appState.session() &&
+              filterSearch.eventProject === o()?.project &&
+              typeof filterSearch.event === "string"
+                ? filterSearch.event
+                : undefined
+            }
+            linkedFunction={
+              filterSearch.eventSession === appState.session() &&
+              filterSearch.eventProject === o()?.project &&
+              typeof filterSearch.eventFunction === "string"
+                ? filterSearch.eventFunction
+                : undefined
+            }
+            onSelectEvent={(event, fn) =>
+              setFilterSearch({
+                event: event || undefined,
+                eventFunction: fn || undefined,
+                eventSession: event ? appState.session() : undefined,
+                eventProject: event ? o()?.project : undefined,
+              })
+            }
           />
           <div class="grid gap-4 xl:grid-cols-2">
             <Section

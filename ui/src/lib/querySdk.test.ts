@@ -122,3 +122,36 @@ it("executes the generated script without dropping special map keys and always c
   expect(JSON.stringify(sent)).toContain('"__proto__":{"stringValue":"kept"}');
   expect(closed).toBe(true);
 });
+
+it("keeps IPv6 brackets in the generated SDK endpoint", async () => {
+  const query = compileQuery(
+    "projects/demo/databases/(default)/documents",
+    "cities",
+    defaultQuery(),
+  )._unsafeUnwrap();
+  let options: { apiEndpoint: string; port: number } | undefined;
+  const source = querySdkSource(query).replace("main().catch", "globalThis.done = main().catch");
+  const context = {
+    URL,
+    process: { env: { FIRESTORE_EMULATOR_HOST: "[::1]:8080" }, exitCode: 0 },
+    console,
+    done: undefined as Promise<void> | undefined,
+    require: (name: string) =>
+      name === "@grpc/grpc-js"
+        ? { credentials: { createInsecure: () => ({}) } }
+        : {
+            v1: {
+              FirestoreClient: class {
+                constructor(value: { apiEndpoint: string; port: number }) {
+                  options = value;
+                }
+                async *runQuery() {}
+                async close() {}
+              },
+            },
+          },
+  };
+  runInNewContext(source, context);
+  await context.done;
+  expect(`${options?.apiEndpoint}:${options?.port}`).toBe("[::1]:8080");
+});

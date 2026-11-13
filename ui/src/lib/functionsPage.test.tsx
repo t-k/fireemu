@@ -281,7 +281,7 @@ it("reconnects explicitly without dropping retained attributed logs or accepting
     logRecords: [first],
     logScopes: [],
   });
-  fireEvent.click(ui.getByTestId("event-timeline").querySelector("button")!);
+  fireEvent.click(ui.getByTestId("event-timeline").querySelector("a")!);
   const oldEvent = mocks.event!;
   expect(ui.queryByTestId("logs-reconnect")).toBeNull();
   mocks.close?.();
@@ -512,4 +512,40 @@ it("keeps private text across filter changes when browser storage is blocked", a
     get.mockRestore();
     set.mockRestore();
   }
+});
+
+it("restores an event link, reports eviction, and clears it on session change", async () => {
+  history.replaceState(
+    null,
+    "",
+    "/functions?event=7&eventFunction=consume&eventSession=owner&eventProject=demo-owner",
+  );
+  appState.setSession("owner");
+  const ui = render(() => (
+    <Router>
+      <Route path="*" component={Functions} />
+    </Router>
+  ));
+  await waitFor(() =>
+    expect(ui.getByTestId("timeline-detail").textContent).toContain(
+      t("functions.timelineMissingSelection"),
+    ),
+  );
+  mocks.event?.({
+    kind: "snapshot",
+    project: "demo-owner",
+    generation: 1,
+    logs: [],
+    invocations: [{ eventId: "7", function: "consume", attempt: 1, outcome: "success" }],
+    logRecords: [],
+    logScopes: [],
+  });
+  await waitFor(() =>
+    expect(ui.getByTestId("timeline-detail").textContent).toContain("7 / consume"),
+  );
+  expect(ui.getByRole("link", { name: /Select event 7/ }).getAttribute("href")).toContain(
+    "event=7",
+  );
+  appState.setSession("other");
+  await waitFor(() => expect(ui.queryByTestId("timeline-detail")).toBeNull());
 });

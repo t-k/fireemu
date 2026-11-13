@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { cleanup, render } from "@solidjs/testing-library";
+import { cleanup, render, waitFor } from "@solidjs/testing-library";
 import { Router } from "@solidjs/router";
-import { okAsync } from "neverthrow";
+import { errAsync, okAsync } from "neverthrow";
 import { App } from "./App";
 import { appState } from "./state";
 import { routes } from "./routes";
@@ -47,4 +47,21 @@ it("says in the header whether the clock is frozen or follows real time", () => 
   const live = render(() => <Router root={App}>{routes}</Router>);
   expect(live.getByTestId("context-bar").textContent).toContain("real time");
   expect(live.getByTestId("context-bar").textContent).not.toContain("frozen");
+});
+
+it("announces connection transitions without announcing each successful poll", async () => {
+  const ui = render(() => <Router root={App}>{routes}</Router>);
+  await waitFor(() =>
+    expect(ui.getByTestId("connection-status").textContent).toContain("Control API responding"),
+  );
+  const status = ui.getByTestId("connection-status");
+  const before = status.textContent;
+  await appState.refreshClock();
+  expect(status.textContent).toBe(before);
+  vi.mocked(control.sessionInfo).mockReturnValueOnce(errAsync({ status: 0, message: "offline" }));
+  await appState.refreshClock();
+  expect(status.textContent).toContain("Control API not answering");
+  expect(status.textContent).toContain("Last");
+  await appState.refreshClock();
+  expect(status.textContent).toContain("Control API responding");
 });

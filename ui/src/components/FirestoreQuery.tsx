@@ -10,7 +10,7 @@ import {
   Show,
   type Component,
 } from "solid-js";
-import { createStore, reconcile } from "solid-js/store";
+import { createStore, reconcile, unwrap } from "solid-js/store";
 import {
   loadMissingIndexes,
   runQuery,
@@ -82,6 +82,8 @@ const FirestoreQuery: Component<{ root: string; collection: string; db: string }
   const [reports, setReports] = createSignal<MissingIndexReports | null>(null);
   const [reportError, setReportError] = createSignal<string | null>(null);
   const [reportsLoading, setReportsLoading] = createSignal(false);
+  const drafts = new Map<string, ReturnType<typeof defaultQuery>>();
+  let previousScope: string | undefined;
   let queryId = 0;
   let reportId = 0;
   let queryAbort: AbortController | undefined;
@@ -106,7 +108,11 @@ const FirestoreQuery: Component<{ root: string; collection: string; db: string }
   };
 
   createEffect(
-    on(scopeKey, () => {
+    on(scopeKey, (scope) => {
+      if (previousScope !== undefined) {
+        drafts.set(previousScope, structuredClone(unwrap(draft)));
+      }
+      previousScope = scope;
       queryId++;
       reportId++;
       queryAbort?.abort();
@@ -120,7 +126,7 @@ const FirestoreQuery: Component<{ root: string; collection: string; db: string }
       const text = new URL(window.location.href).searchParams.get("query");
       const shared = text === null ? null : decodeSharedQuery(text);
       if (shared?.isErr()) setShareError(t("firestore.querySharedInvalid"));
-      setDraft(reconcile(shared?.isOk() ? shared.value : defaultQuery()));
+      setDraft(reconcile(drafts.get(scope) ?? (shared?.isOk() ? shared.value : defaultQuery())));
     }),
   );
   onCleanup(() => {

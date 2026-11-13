@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { okAsync, errAsync, ResultAsync } from "neverthrow";
 import DatabasePicker from "./DatabasePicker";
+import FirestoreQuery from "./FirestoreQuery";
 import * as api from "../api/firestore";
 vi.mock("../api/firestore", () => ({ listDatabases: vi.fn() }));
 afterEach(() => {
@@ -86,4 +87,28 @@ it("does not assert absence from a stale catalog after refresh fails", async () 
   fireEvent.click(view.getByText("Refresh"));
   await waitFor(() => expect(view.getByText(/Database list unavailable/)).toBeTruthy());
   expect(view.queryByText(/does not exist/)).toBeNull();
+});
+
+it("preserves query edits through database picker changes", async () => {
+  vi.mocked(api.listDatabases).mockReturnValue(okAsync(["(default)", "other"]));
+  const [db, setDb] = createSignal("(default)");
+  const ui = render(() => (
+    <>
+      <DatabasePicker project="p" session="default" database={db()} onSelect={setDb} />
+      <FirestoreQuery
+        root={`projects/p/databases/${db()}/documents`}
+        collection="cities"
+        db={db()}
+      />
+    </>
+  ));
+  expect(ui.getByTestId("query-sdk").textContent).toContain("apiEndpoint: target.hostname");
+  fireEvent.click(ui.getByText("Add condition"));
+  fireEvent.input(ui.getByLabelText("Field path"), { target: { value: "population" } });
+  fireEvent.input(ui.getByTestId("database-input"), { target: { value: "other" } });
+  fireEvent.click(ui.getByText("Open database"));
+  expect(ui.queryByTestId("query-filter-0")).toBeNull();
+  fireEvent.input(ui.getByTestId("database-input"), { target: { value: "(default)" } });
+  fireEvent.click(ui.getByText("Open database"));
+  expect((ui.getByLabelText("Field path") as HTMLInputElement).value).toBe("population");
 });

@@ -47,7 +47,7 @@ if (!endpoint || !/^(localhost|127\\.0\\.0\\.1|\\[::1\\]):[0-9]+$/.test(endpoint
 }
 const target = new URL("http://" + endpoint);
 const client = new v1.FirestoreClient({
-  apiEndpoint: target.hostname.replace(/^\\[|\\]$/g, ""),
+  apiEndpoint: target.hostname,
   port: Number(target.port),
   sslCreds: credentials.createInsecure(),
 });

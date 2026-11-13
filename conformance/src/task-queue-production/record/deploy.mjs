@@ -13,7 +13,6 @@ import {
   PROJECT,
   REGION,
   ROLES,
-  ROLE_IDS,
   functionName,
   functionsOf,
   roleOf,
@@ -46,7 +45,7 @@ const FIXTURE = DIRECTORY + "/functions";
  * bytes; the function ids and so the queue ids come from it) and the installed dependency tree `depsDir` next to the
  * fixture: firebase-tools resolves firebase-functions from the source directory before it creates anything.
  */
-export function prepareSource({ repoRoot, commit, target, depsDir, runId }) {
+export function prepareSource({ repoRoot, commit, target, depsDir, runId, program = "default" }) {
   if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error("the source commit must be a full SHA");
   mkdirSync(target, { recursive: true, mode: 0o700 });
   const archive = execFileSync("git", ["-C", repoRoot, "archive", commit, DIRECTORY], {
@@ -56,7 +55,10 @@ export function prepareSource({ repoRoot, commit, target, depsDir, runId }) {
   const fixtureDir = join(target, FIXTURE);
   writeFileSync(
     join(fixtureDir, "suffix.json"),
-    JSON.stringify({ suffix: suffixOf(runId) }) + "\n",
+    JSON.stringify({
+      suffix: suffixOf(runId),
+      ...(program === "burst" ? { roles: ["tqrate"] } : {}),
+    }) + "\n",
   );
   if (depsDir)
     cpSync(realpathSync(depsDir), join(fixtureDir, "node_modules"), {
@@ -67,9 +69,9 @@ export function prepareSource({ repoRoot, commit, target, depsDir, runId }) {
 }
 
 /** What the discovered endpoints must declare: the names, the region, the task queue and its settings. */
-export function declarationProblems(endpoints, runId) {
+export function declarationProblems(endpoints, runId, program = "default") {
   const problems = [];
-  const wanted = [...functionsOf(runId)].toSorted();
+  const wanted = [...functionsOf(runId, program)].toSorted();
   const found = Object.keys(endpoints).toSorted();
   if (JSON.stringify(found) !== JSON.stringify(wanted))
     return [`the fixture exports ${found.join(", ")}; expected ${wanted.join(", ")}`];
@@ -112,6 +114,7 @@ export function sourceProblems({
   node,
   directory,
   runId,
+  program = "default",
   discoverFn = discoverManifest,
   checkDependencies = true,
 }) {
@@ -124,7 +127,7 @@ export function sourceProblems({
       `the SDK discovery of the fixture failed: ${String(error.stderr ?? error.message).slice(0, 300)}`,
     ];
   }
-  return [...dependencies, ...declarationProblems(endpoints, runId)];
+  return [...dependencies, ...declarationProblems(endpoints, runId, program)];
 }
 
 /** The pinned SDK is the one in the dependency tree (a `node_modules` directory) the deploy resolves it from. */
@@ -164,7 +167,7 @@ export function cliPlan(action, options) {
     action === "delete"
       ? [
           "functions:delete",
-          ...functionsOf(options.runId),
+          ...functionsOf(options.runId, options.program),
           "--config",
           options.configPath,
           "--region",
@@ -209,11 +212,11 @@ export function cliPlan(action, options) {
  * ids; every name here is lower-case already). A function of this id in another region is `stray`: not ours to delete,
  * so the run stops (preflight) or leaves it for recovery (cleanup).
  */
-export function summarize({ v2, run }, runId) {
+export function summarize({ v2, run }, runId, program = "default") {
   const items = new Map((v2?.functions ?? []).map((item) => [item.name, item]));
   const services = new Set((run?.services ?? []).map((s) => String(s.name).split("/").at(-1)));
   const out = {};
-  for (const fn of functionsOf(runId)) {
+  for (const fn of functionsOf(runId, program)) {
     const name = functionName(fn);
     const item = items.get(name);
     const stray = [...items.keys()].some((n) => n !== name && n.split("/").at(-1) === fn);
@@ -289,37 +292,88 @@ const READ_ONLY_POST = /:(?:getIamPolicy|testIamPermissions|generateUploadUrl)$|
 /**
  * Every mutating request in the CLI output with its answers: `{ method, url, requests, statuses, class }`. The class is
  * "ok" (every request answered 2xx), "unanswered" (fewer answers than requests), "non-2xx" (any other answer) or
- * "retried" (more than one request to the same method and URL, whatever the answers). Anything but
+ * "retried" (more than one request to the same method, URL and resource identity, whatever the answers). Anything but
  * "ok" is an unknown write for the run (coordinator ruling R1).
  */
 export function cliWritesFromOutput(text) {
-  const writes = new Map();
+  const requests = [];
   for (const line of String(text).split(/\r?\n/u)) {
     const request = REQUEST_LINE.exec(line);
     const status = request ? null : STATUS_LINE.exec(line);
-    const hit = request ?? status;
+    const body =
+      /^.*>>> \[apiv2\]\[body\] (POST|PUT|PATCH|DELETE) (https:\/\/\S+) (\{.*\})\s*$/u.exec(line);
+    const hit = request ?? status ?? body;
     if (!hit) continue;
-    let url;
+    let parsed;
     try {
-      const parsed = new URL(hit[2]);
-      url = parsed.host + parsed.pathname;
+      parsed = new URL(hit[2]);
     } catch {
       continue;
     }
+    const url = parsed.host + parsed.pathname;
     if (hit[1] === "POST" && READ_ONLY_POST.test(url)) continue;
     if (hit[1] === "PUT" && /\.cloudfunctions\.appspot\.com\//u.test(url)) continue;
-    const key = hit[1] + " " + url;
+    let identity = parsed.searchParams.get("functionId");
+    if (request) {
+      try {
+        const query = JSON.parse(line.slice(request.index + request[0].length).trim());
+        identity ??= query.functionId ?? null;
+      } catch {
+        // An absent or unreadable identity keeps the conservative URL-only grouping.
+      }
+      requests.push({ method: hit[1], url, identity, statuses: [], requested: true });
+    } else if (body) {
+      const entry = requests.findLast(
+        (r) => r.method === hit[1] && r.url === url && r.statuses.length === 0,
+      );
+      if (!entry) continue;
+      try {
+        const json = JSON.parse(body[3]);
+        if (/\/(?:queues|functions)$/.test(parsed.pathname))
+          entry.identity ??= json.name ?? json.queue?.name ?? null;
+      } catch {
+        // Do not invent an identity when a request body cannot be parsed.
+      }
+    } else {
+      const entry = requests.find(
+        (r) =>
+          r.method === hit[1] &&
+          r.url === url &&
+          r.statuses.length === 0 &&
+          (identity === null || r.identity === identity),
+      );
+      if (entry) entry.statuses.push(Number(status[3]));
+      else
+        requests.push({
+          method: hit[1],
+          url,
+          identity,
+          statuses: [Number(status[3])],
+          requested: false,
+        });
+    }
+  }
+  const writes = new Map();
+  for (const request of requests) {
+    const key = JSON.stringify([request.method, request.url, request.identity]);
     if (!writes.has(key))
-      writes.set(key, { method: hit[1], url, requests: 0, statuses: [], class: "ok" });
+      writes.set(key, {
+        method: request.method,
+        url: request.url,
+        ...(request.identity === null ? {} : { identity: request.identity }),
+        requests: 0,
+        statuses: [],
+        class: "ok",
+      });
     const entry = writes.get(key);
-    if (request) entry.requests += 1;
-    else entry.statuses.push(Number(status[3]));
+    entry.requests += Number(request.requested);
+    entry.statuses.push(...request.statuses);
   }
   for (const entry of writes.values()) {
     entry.class =
       entry.requests > 1
         ? "retried"
-        : entry.statuses.length < entry.requests
+        : entry.requests === 0 || entry.statuses.length !== entry.requests
           ? "unanswered"
           : entry.statuses.every((code) => code >= 200 && code < 300)
             ? "ok"
@@ -380,11 +434,6 @@ export function withCliLog(result, directory) {
 
 // ---- the inventory the closure compares ---------------------------------------------------------------------
 
-const OWN_SOURCE_COPY = new RegExp(
-  "^(?:" + ROLE_IDS.join("|") + ")[0-9a-f]{6}/function-source\\.zip$",
-  "u",
-);
-
 export const INVENTORY_KINDS = Object.freeze([
   "channels",
   "triggers",
@@ -403,7 +452,21 @@ export const INVENTORY_KINDS = Object.freeze([
  * The upload bucket must be as it was; the sources bucket may only have gained the build's copy of each function
  * (`<function>/function-source.zip`), which stays and is reported.
  */
-export function inventoryDifferences({ before, after, enabled = [], kinds = INVENTORY_KINDS }) {
+export function inventoryDifferences({
+  runId,
+  program = "default",
+  before,
+  after,
+  enabled = [],
+  kinds = INVENTORY_KINDS,
+}) {
+  const OWN_SOURCE_COPY =
+    runId === undefined
+      ? null
+      : new RegExp(
+          "^(?:" + functionsOf(runId, program).join("|") + ")/function-source\\.zip$",
+          "u",
+        );
   const differences = [];
   const missing = [];
   const compare = (kind, b, a, allowedAdded = () => false) => {
@@ -417,8 +480,11 @@ export function inventoryDifferences({ before, after, enabled = [], kinds = INVE
   for (const kind of kinds) compare(kind, before?.[kind], after?.[kind]);
   compare("services", before?.services, after?.services, (name) => enabled.includes(name));
   compare("uploadObjects", before?.sourceObjects?.uploads, after?.sourceObjects?.uploads);
-  compare("sourceObjects", before?.sourceObjects?.sources, after?.sourceObjects?.sources, (name) =>
-    OWN_SOURCE_COPY.test(name),
+  compare(
+    "sourceObjects",
+    before?.sourceObjects?.sources,
+    after?.sourceObjects?.sources,
+    (name) => OWN_SOURCE_COPY?.test(name) === true,
   );
   return { complete: missing.length === 0, missing, differences };
 }

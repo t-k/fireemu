@@ -163,7 +163,11 @@ test("a delivery's time is counted from the moment its createTask was sent, on t
 // ---- the cleanup's second look ---------------------------------------------------------------------------------
 
 test("nothing is deleted through REST when the CLI delete removed everything: no function or queue request", async () => {
-  const { world } = await go();
+  const { world } = await go({}, {}, undefined, (runCli, w) => async (options) => {
+    const answer = await runCli(options);
+    if (options.action === "delete") w.queues.clear();
+    return answer;
+  });
   assert.equal(count(world, "DELETE cloudfunctions.googleapis.com"), 0);
   const queueDeletes = world.calls.filter((c) =>
     /^DELETE cloudtasks\.googleapis\.com\/.*\/queues\/[^/]+$/.test(c),

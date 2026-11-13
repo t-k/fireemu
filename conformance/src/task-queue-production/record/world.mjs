@@ -66,6 +66,9 @@ export function queueSettings(role) {
       maxConcurrentDispatches: 1000,
       maxDispatchesPerSecond: 500,
       ...options.rateLimits,
+      // The tqrate readback reported 100; other model queues use their configured rate, capped at 500.
+      maxBurstSize:
+        role === "tqrate" ? 100 : Math.min(500, options.rateLimits?.maxDispatchesPerSecond ?? 500),
     },
     state: "RUNNING",
     retryConfig: {
@@ -95,6 +98,7 @@ const decode = (text) => Buffer.from(text, "base64").toString("utf8");
  */
 export function createWorld({
   runId = "0123456789abcdef",
+  program = "default",
   hooks = {},
   leaveOnDelete = [],
   failDeploy = false,
@@ -122,7 +126,7 @@ export function createWorld({
   baselineUploads = [],
   logVisibleAfterMs = 0,
 } = {}) {
-  const FNS = functionsOf(runId);
+  const FNS = functionsOf(runId, program);
   const w = {
     runId,
     now: START,
@@ -199,6 +203,7 @@ export function createWorld({
   };
 
   /** The deliveries of one accepted task under the queue's settings (the model's rules, not production's). */
+  const buckets = new Map();
   const dispatch = (fn, taskId, data, sentAt, scheduleMs, deadlineSeconds) => {
     const taskKey = queueName(fn) + "/tasks/" + taskId;
     const role = roleOf(fn);
@@ -221,6 +226,21 @@ export function createWorld({
       const hold = step.sleepMs ?? 0;
       // A delivery that outlasts the dispatch deadline fails with a timeout and is retried like any other failure.
       const status = hold > deadlineSeconds * 1000 ? "timeout" : (step.status ?? "ok");
+      // This corpus probes the token bucket on tqrate; other roles retain their retry/deadline model.
+      if (role === "tqrate") {
+        const rate = settings.rateLimits.maxDispatchesPerSecond;
+        const capacity = settings.rateLimits.maxBurstSize;
+        const bucket = buckets.get(fn) ?? { at, tokens: capacity };
+        at = Math.max(at, bucket.at);
+        bucket.tokens = Math.min(capacity, bucket.tokens + ((at - bucket.at) * rate) / 1000);
+        if (bucket.tokens < 1) {
+          at += ((1 - bucket.tokens) * 1000) / rate;
+          bucket.tokens = 1;
+        }
+        bucket.tokens -= 1;
+        bucket.at = at;
+        buckets.set(fn, bucket);
+      }
       print(
         fn,
         at,
@@ -332,10 +352,7 @@ export function createWorld({
       w.functions.delete(functionName(fn));
       w.runServices.delete(fn);
       w.policies.delete(fn);
-      if (!leaveOnDelete.includes("queue:" + fn)) {
-        w.queues.delete(fn);
-        queueTombstones.add(fn);
-      }
+      if (w.queues.has(fn)) w.queues.get(fn).state = "DISABLED";
     }
   };
 

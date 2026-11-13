@@ -54,3 +54,36 @@ test("every step of the program is sent once and recorded under its key", async 
   );
   assert.ok(mutations(world).length > 0);
 });
+
+test("the default world uses 243 requests and explicitly deletes all eight disabled queues within the cleanup ceiling", async () => {
+  const { world, result, journal } = await go(
+    {},
+    {},
+    undefined,
+    (runCli, world) => async (options) => {
+      const answer = await runCli(options);
+      if (options.action === "delete") {
+        assert.equal(world.queues.size, 8);
+        assert.ok([...world.queues.values()].every((q) => q.state === "DISABLED"));
+      }
+      return answer;
+    },
+  );
+  const cleanupStart = journal.findIndex(
+    (r) => r.id === "cleanup-invoker-functions-v2" && r.state === "before-send",
+  );
+  assert.ok(cleanupStart >= 0);
+  const cleanup = journal.slice(cleanupStart).filter((r) => r.state === "before-send");
+  assert.equal(
+    cleanup.filter(
+      (r) => r.method === "DELETE" && /^https:\/\/cloudtasks.*\/queues\/[^/]+$/.test(r.url),
+    ).length,
+    8,
+  );
+  assert.equal(cleanup.length, 93);
+  assert.ok(cleanup.length <= 260);
+  // Setup 26 + default program 122 (107 creates) + observation 2 + cleanup 93.
+  assert.equal(result.attempted, 26 + 122 + 2 + 93);
+  assert.equal(world.calls.length, 243);
+  assert.equal(result.closureReady, true);
+});

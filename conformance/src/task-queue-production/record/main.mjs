@@ -69,8 +69,9 @@ export const PACKET_FILES = [
 ];
 
 /** The digest of the packet files, each by name and sha256 (the order is fixed). */
-export function packetDigest(read = (name) => readFileSync(join(root, name))) {
+export function packetDigest(read = (name) => readFileSync(join(root, name)), program = "default") {
   return createHash("sha256")
+    .update("program\t" + program + "\n")
     .update(
       PACKET_FILES.map(
         (name) => name + "\t" + createHash("sha256").update(read(name)).digest("hex") + "\n",
@@ -221,12 +222,21 @@ export function resultOf(path) {
     return { ok: false, why: "the run's result has no list of unconfirmed creates" };
   return {
     ok: true,
+    program: result.programName ?? "default",
     creates: result.unconfirmedCreates,
     uploadObjects: uploadObjectEntries(result.cleanup?.uploadObjectsDeleted),
     // What the A2 read-back compares against and the obligations the result leaves open (a read-back that cannot see a
     // baseline closes nothing).
     baseline: result.inventory?.before ?? null,
     carried: [
+      ...(result.unknownMutationList ?? [])
+        .filter(
+          (m) =>
+            ["createTask", "deleteTask"].includes(m.kind) ||
+            (m.id?.startsWith("step-") &&
+              ["create", "delete"].includes(result.program?.[m.id.slice(5)]?.kind)),
+        )
+        .map((m) => "unknown-task-mutation:" + m.id + ":" + m.class),
       ...(result.cleanup?.uploadReasons ?? []).map((reason) => "upload:" + reason),
       ...(result.cleanup?.uploadObjectsUnexplained ?? []).map(
         (item) => "unexplained-upload-object:" + item.name,
@@ -271,11 +281,17 @@ async function readbackCommand({ values, env, deps, out, err, digest }) {
     return 2;
   }
   const judged = resultOf(join(runDir, "result-" + runId + ".json"));
+  const program = values.program ?? "default";
+  if (judged.ok && judged.program !== program) {
+    err("--program does not match the run's result");
+    return 2;
+  }
   const stamp = String((deps.now ?? Date.now)());
   const journal = openSync(join(runDir, "readback-" + runId + "-" + stamp + ".jsonl"), "wx", 0o600);
   try {
     const result = await deps.readback({
       runId,
+      program,
       projectNumber: values["project-number"],
       uploadObjects: judged.ok ? judged.uploadObjects : [],
       baseline: judged.ok ? judged.baseline : null,
@@ -342,13 +358,7 @@ async function readbackCommand({ values, env, deps, out, err, digest }) {
 
 export async function main(
   argv,
-  {
-    env = process.env,
-    deps = realDeps,
-    out = console.log,
-    err = console.error,
-    digest = packetDigest(),
-  } = {},
+  { env = process.env, deps = realDeps, out = console.log, err = console.error, digest } = {},
 ) {
   const parsed = parseArgs(argv);
   if (parsed.error || !["check", "record", "readback"].includes(parsed.command)) {
@@ -356,12 +366,19 @@ export async function main(
     return 2;
   }
   const { command, values } = parsed;
+  const program = values.program ?? "default";
+  if (!["default", "burst"].includes(program)) {
+    err("--program is default or burst");
+    return 2;
+  }
+  digest ??= packetDigest(undefined, program);
   if (command === "readback") {
     out(
       JSON.stringify(
         {
           project: PROJECT,
           command,
+          program,
           maxRequests: READBACK_MAX_REQUESTS,
           packetDigest: digest,
         },
@@ -376,6 +393,7 @@ export async function main(
       {
         project: PROJECT,
         command,
+        program,
         maxRequests: MAX_REQUESTS,
         packetDigest: digest,
       },
@@ -398,12 +416,14 @@ export async function main(
     target: join(runDir, "source"),
     depsDir: values["deps-dir"],
     runId,
+    program,
   });
   const source = deps.sourceProblems({
     fixtureDir: prepared.fixtureDir,
     node: values.node,
     directory: join(runDir, "discovery"),
     runId,
+    program,
   });
   if (source.length) {
     err("the source copy failed its offline checks:\n" + source.map((p) => "- " + p).join("\n"));
@@ -455,6 +475,7 @@ export async function main(
           home: env.HOME,
           path: dirname(values.node) + ":" + (env.PATH ?? ""),
           runId,
+          program,
         }),
         firebaseJs: values["firebase-js"],
         node: values.node,
@@ -466,6 +487,7 @@ export async function main(
   try {
     result = await deps.record({
       runId,
+      program,
       projectNumber: values["project-number"],
       accessToken,
       save: async (row) => {

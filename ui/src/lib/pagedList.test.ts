@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { errAsync, ResultAsync } from "neverthrow";
+import { errAsync, okAsync, ResultAsync } from "neverthrow";
 import { createRoot } from "solid-js";
 import { createPagedList, type Page } from "./pagedList";
 import type { ApiError } from "../api/client";
@@ -319,6 +319,119 @@ describe("createPagedList, survivors of the first mutation run", () => {
       await again;
       expect(list.items()).toEqual(["1", "2", "3"]);
       expect(list.nextToken()).toBeUndefined();
+      dispose();
+    });
+  });
+});
+
+describe("createPagedList keyed rows", () => {
+  it("keeps unchanged row objects while replacing only the updated key", async () => {
+    await createRoot(async (dispose) => {
+      const pages = [
+        {
+          items: [
+            { name: "a", value: 1 },
+            { name: "b", value: 1 },
+          ],
+        },
+        {
+          items: [
+            { name: "a", value: 2 },
+            { name: "b", value: 1 },
+          ],
+        },
+      ];
+      const list = createPagedList(
+        () => okAsync(pages.shift()!),
+        (item) => item.name,
+      );
+      await list.load();
+      const unchanged = list.items()[1];
+      await list.refresh();
+      expect(list.items()[0]).not.toBe(unchanged);
+      expect(list.items()[1]).toBe(unchanged);
+      expect(list.items()[0]?.value).toBe(2);
+      dispose();
+    });
+  });
+});
+
+describe("paged row update races", () => {
+  it("keeps an update that arrives while the initial page is loading", async () => {
+    await createRoot(async (dispose) => {
+      type Row = { name: string; value: number };
+      const calls: { resolve: (page: Page<Row>) => void }[] = [];
+      const fetchPage = () =>
+        ResultAsync.fromPromise(
+          new Promise<Page<Row>>((resolve) => calls.push({ resolve })),
+          (e) => e as ApiError,
+        );
+      const list = createPagedList(fetchPage, (item) => item.name);
+      const initial = list.load();
+      expect(list.loading()).toBe(true);
+      expect(list.updateItem({ name: "one", value: 2 })).toBe(false);
+      calls[0]!.resolve({ items: [{ name: "one", value: 1 }] });
+      await initial;
+      expect(list.items()).toEqual([{ name: "one", value: 2 }]);
+      dispose();
+    });
+  });
+
+  it("keeps a row update that finishes while a stale refresh is still pending", async () => {
+    await createRoot(async (dispose) => {
+      type Row = { name: string; value: number };
+      const calls: { resolve: (page: Page<Row>) => void }[] = [];
+      const fetchPage = () =>
+        ResultAsync.fromPromise(
+          new Promise<Page<Row>>((resolve) => calls.push({ resolve })),
+          (e) => e as ApiError,
+        );
+      const list = createPagedList(fetchPage, (item) => item.name);
+      const initial = list.load();
+      calls[0]!.resolve({ items: [{ name: "one", value: 1 }] });
+      await initial;
+      const staleRefresh = list.refresh();
+      expect(list.updateItem({ name: "one", value: 2 })).toBe(true);
+      calls[1]!.resolve({ items: [{ name: "one", value: 1 }] });
+      await staleRefresh;
+      expect(list.items()).toEqual([{ name: "one", value: 2 }]);
+      dispose();
+    });
+  });
+
+  it("applies a row update queued before its next page arrives", async () => {
+    await createRoot(async (dispose) => {
+      type Row = { name: string; value: number };
+      const calls: { token: string | undefined; resolve: (page: Page<Row>) => void }[] = [];
+      const fetchPage = (token: string | undefined) =>
+        ResultAsync.fromPromise(
+          new Promise<Page<Row>>((resolve) => calls.push({ token, resolve })),
+          (e) => e as ApiError,
+        );
+      const list = createPagedList(fetchPage, (item) => item.name);
+      const initial = list.load();
+      calls[0]!.resolve({ items: [{ name: "one", value: 1 }], nextToken: "next" });
+      await initial;
+      const more = list.more();
+      expect(calls[1]!.token).toBe("next");
+      expect(list.updateItem({ name: "two", value: 2 })).toBe(false);
+      calls[1]!.resolve({ items: [{ name: "two", value: 1 }] });
+      await more;
+      expect(list.items()).toEqual([
+        { name: "one", value: 1 },
+        { name: "two", value: 2 },
+      ]);
+      dispose();
+    });
+  });
+
+  it("reports a row read failure as stale while keeping the last good rows", async () => {
+    await createRoot(async (dispose) => {
+      const list = createPagedList(() => okAsync({ items: ["one"] }));
+      await list.load();
+      list.reportStale("row read failed");
+      expect(list.items()).toEqual(["one"]);
+      expect(list.stale()).toBe("row read failed");
       dispose();
     });
   });

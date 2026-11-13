@@ -27,10 +27,14 @@ export type PagedList<T> = {
   refresh: () => Promise<void>;
   /** Appends the next page. */
   more: () => Promise<void>;
+  /** Replaces a loaded item with the same key; returns false when it is not loaded. */
+  updateItem: (item: T) => boolean;
+  reportStale: (message: string) => void;
 };
 
 export const createPagedList = <T>(
   fetchPage: (token: string | undefined) => ResultAsync<Page<T>, ApiError>,
+  keyOf?: (item: T) => string,
 ): PagedList<T> => {
   const [items, setItems] = createSignal<T[]>([]);
   const [nextToken, setNextToken] = createSignal<string | undefined>(undefined);
@@ -38,6 +42,26 @@ export const createPagedList = <T>(
   const [error, setError] = createSignal<string | null>(null);
   const [stale, setStale] = createSignal<string | null>(null);
   let generation = 0;
+  let itemRevision = 0;
+  const newerItems = new Map<string, { revision: number; item: T }>();
+  const preserveUnchanged = (incoming: T[], revisionAtStart: number): T[] => {
+    if (!keyOf) return incoming;
+    const previous = new Map(items().map((item) => [keyOf(item), item]));
+    return incoming.map((item) => {
+      const key = keyOf(item);
+      const update = newerItems.get(key);
+      if (update && update.revision > revisionAtStart) return update.item;
+      const old = previous.get(key);
+      return old !== undefined && JSON.stringify(old) === JSON.stringify(item) ? old : item;
+    });
+  };
+  const pruneUpdates = (liveItems: T[]): void => {
+    if (!keyOf) return;
+    const liveKeys = new Set(liveItems.map(keyOf));
+    for (const key of newerItems.keys()) {
+      if (!liveKeys.has(key)) newerItems.delete(key);
+    }
+  };
 
   /** Reads pages from the start until `minimum` items are held or the pages run out. */
   const readFrom = async (
@@ -57,7 +81,9 @@ export const createPagedList = <T>(
   };
 
   const load = async (): Promise<void> => {
+    const revisionAtStart = itemRevision;
     const mine = ++generation;
+    newerItems.clear();
     batch(() => {
       setItems([]);
       setNextToken(undefined);
@@ -70,7 +96,8 @@ export const createPagedList = <T>(
     batch(() => {
       setLoading(false);
       if (r.ok) {
-        setItems(r.page.items);
+        setItems(preserveUnchanged(r.page.items, revisionAtStart));
+        pruneUpdates(r.page.items);
         setNextToken(r.page.nextToken);
       } else {
         setError(r.message);
@@ -82,13 +109,16 @@ export const createPagedList = <T>(
     // A failed load left nothing good to keep (the list is empty whenever `error` is set):
     // behave as a fresh load.
     if (error() !== null) return load();
+    const revisionAtStart = itemRevision;
     const mine = ++generation;
     const r = await readFrom(Math.max(items().length, 1));
     if (mine !== generation) return;
     batch(() => {
       setLoading(false);
       if (r.ok) {
-        setItems(r.page.items);
+        const stableItems = preserveUnchanged(r.page.items, revisionAtStart);
+        setItems(stableItems);
+        pruneUpdates(stableItems);
         setNextToken(r.page.nextToken);
         setStale(null);
       } else {
@@ -100,13 +130,16 @@ export const createPagedList = <T>(
   const more = async (): Promise<void> => {
     const token = nextToken();
     if (!token) return;
+    const revisionAtStart = itemRevision;
     const mine = generation;
     const r = await fetchPage(token);
     if (mine !== generation) return;
     r.match(
       (page) => {
         batch(() => {
-          setItems([...items(), ...page.items]);
+          const nextItems = preserveUnchanged([...items(), ...page.items], revisionAtStart);
+          setItems(nextItems);
+          pruneUpdates(nextItems);
           setNextToken(page.nextToken);
         });
       },
@@ -114,5 +147,28 @@ export const createPagedList = <T>(
     );
   };
 
-  return { items, nextToken, loading, error, stale, load, refresh, more };
+  const updateItem = (item: T): boolean => {
+    if (!keyOf) return false;
+    const key = keyOf(item);
+    const revision = ++itemRevision;
+    newerItems.set(key, { revision, item });
+    let found = false;
+    setItems((current) =>
+      current.map((old) => {
+        if (keyOf(old) !== key) return old;
+        found = true;
+        return item;
+      }),
+    );
+    return found;
+  };
+
+  const reportStale = (message: string): void => {
+    batch(() => {
+      if (items().length > 0) setStale(message);
+      else setError(message);
+    });
+  };
+
+  return { items, nextToken, loading, error, stale, load, refresh, more, updateItem, reportStale };
 };

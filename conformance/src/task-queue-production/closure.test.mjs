@@ -58,7 +58,7 @@ test("the record is the verified parent on the events sandbox, verified only whe
     ],
   );
   for (const r of record.recordings) assert.equal(r.corpusSha256, record.corpusContentSha256);
-  const notVerified = ["dedup-window-expiry", "queue-config-mapping", "max-dispatches-per-second"];
+  const notVerified = ["dedup-window-expiry", "queue-config-mapping"];
   for (const condition of record.conditions) {
     const name = condition.conditionId.split("/")[1];
     const expected = notVerified.includes(name) ? "NOT_COMPARED" : "VERIFIED";

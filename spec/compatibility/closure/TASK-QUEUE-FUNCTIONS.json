@@ -1387,7 +1387,7 @@
       "recipeIds": [
         "task-queue/max-dispatches-per-second"
       ],
-      "status": "NOT_COMPARED",
+      "status": "VERIFIED",
       "corpusSteps": [
         "rate-a",
         "rate-b",
@@ -1404,11 +1404,36 @@
           "sha256": "daffc864935cb8074205aeda533cab4fe4268887d64e24fe15a75781e6549900"
         },
         {
-          "path": "conformance/task-queue-production-burst-strict-vs-pass-1.json",
-          "sha256": "b56e1962070a576339cd20abfdab642bc53e489b0d24beb6e442767ebc1e70de"
+          "path": "conformance/task-queue-production-burst-pass-2.json",
+          "sha256": "27abaef69373f410d105042f71a765f926e984edb5296e34c36e217e69a66348"
         }
       ],
-      "reason": "One pass: the strict replay matches the 2026-11-13 burst recording (burst, cadence, count); the second recording is pending."
+      "observedPasses": 2,
+      "comparisons": [
+        {
+          "path": "conformance/task-queue-production-burst-run-comparison.json",
+          "sha256": "b56e1962070a576339cd20abfdab642bc53e489b0d24beb6e442767ebc1e70de",
+          "verdict": "MATCH"
+        },
+        {
+          "path": "conformance/task-queue-production-burst-strict-vs-pass-1.json",
+          "sha256": "b56e1962070a576339cd20abfdab642bc53e489b0d24beb6e442767ebc1e70de",
+          "verdict": "MATCH"
+        },
+        {
+          "path": "conformance/task-queue-production-burst-strict-vs-pass-2.json",
+          "sha256": "5eb2bc23fc145ed4fe601525cb8f1df0bbd3ca379e60df54e33f7aab8fabfd9c",
+          "verdict": "MATCH"
+        }
+      ],
+      "knownDifferences": [
+        {
+          "id": "KD-BURST-LOCAL-START",
+          "what": "The strict replay starts the burst earlier after the due time than production did (local 24-56 ms; production 153-214 and 128-170 ms), inside each comparison's cadence tolerance (the production pass's own spread plus 250 ms).",
+          "bound": "the cadence tolerance of each strict comparison",
+          "ruling": 21
+        }
+      ]
     },
     {
       "conditionId": "TASK-QUEUE-FUNCTIONS/delete-task",

@@ -25,6 +25,9 @@ export const FILES = Object.freeze({
   burstProduction: "conformance/task-queue-production-burst-pass-1.json",
   burstLocal: "conformance/task-queue-production-burst-local-strict.json",
   burstComparison: "conformance/task-queue-production-burst-strict-vs-pass-1.json",
+  burstProduction2: "conformance/task-queue-production-burst-pass-2.json",
+  burstComparison2: "conformance/task-queue-production-burst-strict-vs-pass-2.json",
+  burstRuns: "conformance/task-queue-production-burst-run-comparison.json",
 });
 
 /**
@@ -138,46 +141,83 @@ const read = (path) => readFileSync(root + path);
 const json = (path) => JSON.parse(read(path));
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
+/** The burst projections must be complete recordings (production) or a strict replay (local) of the burst program. */
+function checkedProjection(bytes, local = false) {
+  const p = JSON.parse(bytes);
+  if (
+    p.kind !== "task-queue-burst-projection-v1" ||
+    p.program !== "burst" ||
+    p.tasks !== 120 ||
+    p.observationComplete !== true ||
+    (local && p.profile !== "strict")
+  )
+    throw new Error("invalid burst projection");
+  return p;
+}
+
+/** A committed comparison must rebuild from its projections and match. */
+function checkedComparison(bytes, a, b) {
+  const comparison = JSON.parse(bytes);
+  if (!isDeepStrictEqual(comparison, compareBurst(a, b)) || comparison.verdict !== "MATCH")
+    throw new Error("burst comparison differs from its projections or does not match");
+  return comparison;
+}
+
+/**
+ * max-dispatches-per-second from the burst program: VERIFIED only with two production recordings that agree with each other
+ * (run against run) and each agree with the strict replay. Each comparison's cadence tolerance is the production side's own
+ * spread plus 250 ms (burst-compare.mjs). One recording that matches is reported as one pass, never verified.
+ */
 export function burstEvidence(readFile = read) {
   const evidence = [];
+  const comparisons = [];
   try {
-    const productionBytes = readFile(FILES.burstProduction);
-    evidence.push({ path: FILES.burstProduction, sha256: sha(productionBytes) });
-    const comparisonBytes = readFile(FILES.burstComparison);
-    evidence.push({ path: FILES.burstComparison, sha256: sha(comparisonBytes) });
-    const production = JSON.parse(productionBytes);
-    const local = JSON.parse(readFile(FILES.burstLocal));
-    const comparison = JSON.parse(comparisonBytes);
-    if (
-      [production, local].some(
-        (p) =>
-          p.kind !== "task-queue-burst-projection-v1" ||
-          p.program !== "burst" ||
-          p.tasks !== 120 ||
-          p.observationComplete !== true,
-      ) ||
-      local.profile !== "strict"
-    )
-      throw new Error("invalid burst projection");
-    if (
-      !isDeepStrictEqual(comparison, compareBurst(production, local)) ||
-      comparison.verdict !== "MATCH"
-    )
-      throw new Error("burst comparison differs from its projections or does not match");
-    // Every verified condition needs two production recordings (recordingPolicy); the burst
-    // program has one so far, so a matching comparison still leaves the condition open.
+    const p1Bytes = readFile(FILES.burstProduction);
+    evidence.push({ path: FILES.burstProduction, sha256: sha(p1Bytes) });
+    const local = checkedProjection(readFile(FILES.burstLocal), true);
+    const p1 = checkedProjection(p1Bytes);
+    const c1Bytes = readFile(FILES.burstComparison);
+    checkedComparison(c1Bytes, p1, local);
+    comparisons.push({ path: FILES.burstComparison, sha256: sha(c1Bytes), verdict: "MATCH" });
+    let p2Bytes;
+    try {
+      p2Bytes = readFile(FILES.burstProduction2);
+    } catch {
+      return {
+        status: "NOT_COMPARED",
+        productionEvidence: evidence,
+        reason:
+          "One pass: the strict replay matches the 2026-11-13 burst recording (burst, cadence, count); the second recording is pending.",
+      };
+    }
+    evidence.push({ path: FILES.burstProduction2, sha256: sha(p2Bytes) });
+    const p2 = checkedProjection(p2Bytes);
+    const runsBytes = readFile(FILES.burstRuns);
+    checkedComparison(runsBytes, p1, p2);
+    const c2Bytes = readFile(FILES.burstComparison2);
+    checkedComparison(c2Bytes, p2, local);
+    comparisons.unshift({ path: FILES.burstRuns, sha256: sha(runsBytes), verdict: "MATCH" });
+    comparisons.push({ path: FILES.burstComparison2, sha256: sha(c2Bytes), verdict: "MATCH" });
     return {
-      status: "NOT_COMPARED",
+      status: "VERIFIED",
       productionEvidence: evidence,
-      reason:
-        "One pass: the strict replay matches the 2026-11-13 burst recording (burst, cadence, count); the second recording is pending.",
+      observedPasses: 2,
+      comparisons,
+      knownDifferences: [
+        {
+          id: "KD-BURST-LOCAL-START",
+          what: "The strict replay starts the burst earlier after the due time than production did (local 24-56 ms; production 153-214 and 128-170 ms), inside each comparison's cadence tolerance (the production pass's own spread plus 250 ms).",
+          bound: "the cadence tolerance of each strict comparison",
+          ruling: 21,
+        },
+      ],
     };
   } catch {
     return {
       status: "NOT_COMPARED",
       productionEvidence: evidence,
       reason:
-        "The burst comparison is missing, invalid, does not rebuild from its projections, or does not match.",
+        "The burst comparisons are missing, invalid, do not rebuild from their projections, or do not match.",
     };
   }
 }

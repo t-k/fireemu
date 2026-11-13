@@ -208,18 +208,18 @@ test("a timing allowance used by a strict row is a known difference of the condi
   assert.deepEqual(conditionEvidence(condition(), docs, evidence).knownDifferences, []);
 });
 
-test("burst evidence verifies only a matching comparison rebuilt from the projections", async () => {
+test("burst evidence is verified only by two matching recordings, each matching the strict replay", async () => {
   const { burstEvidence, FILES } = await import("./closure-evidence.mjs");
   const { compareBurst } = await import("./burst-compare.mjs");
   const { readFileSync } = await import("node:fs");
-  const production = JSON.parse(
-    readFileSync(new URL("../../task-queue-production-burst-pass-1.json", import.meta.url)),
-  );
-  const local = { ...production, profile: "strict" };
+  const load = (name) => JSON.parse(readFileSync(new URL("../../" + name, import.meta.url)));
+  const pass1 = load("task-queue-production-burst-pass-1.json");
+  const pass2 = load("task-queue-production-burst-pass-2.json");
+  const local = load("task-queue-production-burst-local-strict.json");
   const files = {
-    [FILES.burstProduction]: JSON.stringify(production),
+    [FILES.burstProduction]: JSON.stringify(pass1),
     [FILES.burstLocal]: JSON.stringify(local),
-    [FILES.burstComparison]: JSON.stringify(compareBurst(production, local)),
+    [FILES.burstComparison]: JSON.stringify(compareBurst(pass1, local)),
   };
   const read = (path) => {
     if (!(path in files)) throw new Error("missing");
@@ -228,21 +228,53 @@ test("burst evidence verifies only a matching comparison rebuilt from the projec
   const target = condition({ conditionId: "TASK-QUEUE-FUNCTIONS/max-dispatches-per-second" });
   const derive = () =>
     conditionEvidence(target, ok(), evidence, { burst: () => burstEvidence(read) });
+  // One recording that matches is one pass, never verified.
   assert.equal(derive().status, "NOT_COMPARED");
   assert.match(derive().reason, /^One pass: .*second recording is pending/);
   assert.deepEqual(
     derive().productionEvidence.map((item) => item.path),
-    [FILES.burstProduction, FILES.burstComparison],
+    [FILES.burstProduction],
   );
-  delete files[FILES.burstComparison];
+  // The second pass without its comparisons is not verified.
+  files[FILES.burstProduction2] = JSON.stringify(pass2);
   assert.equal(derive().status, "NOT_COMPARED");
   assert.doesNotMatch(derive().reason, /^One pass/);
-  const mismatch = { ...local, offsetsMs: local.offsetsMs.slice(0, 119) };
-  files[FILES.burstLocal] = JSON.stringify(mismatch);
-  files[FILES.burstComparison] = JSON.stringify(compareBurst(production, mismatch));
+  files[FILES.burstRuns] = JSON.stringify(compareBurst(pass1, pass2));
+  assert.equal(derive().status, "NOT_COMPARED");
+  files[FILES.burstComparison2] = JSON.stringify(compareBurst(pass2, local));
+  const verified = derive();
+  assert.equal(verified.status, "VERIFIED");
+  assert.equal(verified.observedPasses, 2);
+  assert.deepEqual(
+    verified.productionEvidence.map((item) => item.path),
+    [FILES.burstProduction, FILES.burstProduction2],
+  );
+  assert.deepEqual(
+    verified.comparisons.map((item) => item.path),
+    [FILES.burstRuns, FILES.burstComparison, FILES.burstComparison2],
+  );
+  assert.ok(verified.knownDifferences.length > 0);
+  // A second pass that disagrees with the strict replay, or a comparison that does not rebuild, is not verified.
+  const late = { ...pass2, offsetsMs: pass2.offsetsMs.map((n) => n + 1000) };
+  files[FILES.burstProduction2] = JSON.stringify(late);
+  files[FILES.burstRuns] = JSON.stringify(compareBurst(pass1, late));
+  files[FILES.burstComparison2] = JSON.stringify(compareBurst(late, local));
   assert.equal(derive().status, "NOT_COMPARED");
   assert.doesNotMatch(derive().reason, /^One pass/);
-  files[FILES.burstComparison] = JSON.stringify(compareBurst(production, local));
+  files[FILES.burstProduction2] = JSON.stringify(pass2);
+  files[FILES.burstRuns] = JSON.stringify(compareBurst(pass1, pass2));
   assert.equal(derive().status, "NOT_COMPARED");
-  assert.doesNotMatch(derive().reason, /^One pass/);
+  files[FILES.burstComparison2] = JSON.stringify(compareBurst(pass2, local));
+  assert.equal(derive().status, "VERIFIED");
+  // The two recordings must agree with each other.
+  files[FILES.burstRuns] = JSON.stringify(
+    compareBurst(pass1, { ...pass2, offsetsMs: pass2.offsetsMs.slice(0, 119) }),
+  );
+  assert.equal(derive().status, "NOT_COMPARED");
+  files[FILES.burstRuns] = JSON.stringify(compareBurst(pass1, pass2));
+  // The local side must be a strict replay.
+  files[FILES.burstLocal] = JSON.stringify({ ...local, profile: "emulator" });
+  assert.equal(derive().status, "NOT_COMPARED");
+  files[FILES.burstLocal] = JSON.stringify(local);
+  assert.equal(derive().status, "VERIFIED");
 });

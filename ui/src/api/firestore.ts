@@ -183,3 +183,14 @@ export const deleteCollection = (
   };
   return ResultAsync.fromSafePromise(run()).andThen((r) => r);
 };
+
+/** The admin list is unpaginated; absent databases means an empty catalog. */
+export const listDatabases = (project: string): ResultAsync<string[], ApiError> =>
+  request<{ databases?: { name: string }[] }>(
+    "GET",
+    `firestore/v1/projects/${encodeURIComponent(project)}/databases`,
+  ).map((response) =>
+    (response.databases ?? []).map((database) =>
+      database.name.slice(database.name.lastIndexOf("/") + 1),
+    ),
+  );

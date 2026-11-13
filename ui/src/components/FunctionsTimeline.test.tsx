@@ -45,15 +45,15 @@ it("preserves event selection and keyboard focus across polling and filtering; r
       stale={false}
     />
   ));
-  const button = ui.getByTestId("event-timeline").querySelector("button")!;
+  const button = ui.getByTestId("event-timeline").querySelector("a")!;
   button.focus();
   fireEvent.click(button);
-  expect(button.getAttribute("aria-pressed")).toBe("true");
+  expect(button.getAttribute("aria-current")).toBe("true");
   expect(ui.getByTestId("timeline-no-outcomes")).toBeTruthy();
   expect(ui.getByTestId("timeline-phases").textContent).toContain("future-phase");
   setSnapshot({ ...causal, events: causal.events.map((e) => ({ ...e, phases: [...e.phases] })) });
   expect(document.activeElement).toBe(button);
-  expect(ui.getByTestId("event-timeline").querySelector("button")).toBe(button);
+  expect(ui.getByTestId("event-timeline").querySelector("a")).toBe(button);
   fireEvent.input(ui.container.querySelector("input")!, { target: { value: "unmatched" } });
   expect(ui.getByTestId("timeline-detail").textContent).toContain("17");
   setSnapshot({ ...causal, events: [] });
@@ -98,7 +98,7 @@ it("filters attempts and keeps unrelated concurrent logs out of the detail", () 
       stale={false}
     />
   ));
-  fireEvent.click(ui.getByTestId("event-timeline").querySelector("button")!);
+  fireEvent.click(ui.getByTestId("event-timeline").querySelector("a")!);
   expect(ui.getByTestId("timeline-logs").textContent).toContain("first-attempt");
   expect(ui.getByTestId("timeline-logs").textContent).not.toContain("other-event");
   const detail = ui.getByTestId("timeline-detail");
@@ -106,4 +106,30 @@ it("filters attempts and keeps unrelated concurrent logs out of the detail", () 
   expect(ui.getByTestId("timeline-outcomes").textContent).not.toContain("failed");
   expect(ui.getByTestId("timeline-outcomes").textContent).toContain("success");
   expect(ui.getByTestId("timeline-logs").textContent).not.toContain("first-attempt");
+});
+
+it("opens a linked event and explains when it is no longer retained", () => {
+  const [snapshot, setSnapshot] = createSignal(causal);
+  const ui = render(() => (
+    <FunctionsTimeline
+      project="demo"
+      session="owner"
+      causality={snapshot()}
+      codebases={[]}
+      invocations={[]}
+      logs={[]}
+      logGaps={false}
+      stale={false}
+      linkedEvent="17"
+      linkedFunction="consume"
+    />
+  ));
+  expect(ui.getByTestId("timeline-detail").textContent).toContain("17 / consume");
+  expect(ui.getByRole("link", { name: /Select event 17/ }).getAttribute("href")).toContain(
+    "event=17",
+  );
+  setSnapshot({ ...causal, events: [] });
+  expect(ui.getByTestId("timeline-detail").textContent).toContain(
+    t("functions.timelineMissingSelection"),
+  );
 });

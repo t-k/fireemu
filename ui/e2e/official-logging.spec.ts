@@ -119,7 +119,10 @@ test("the pinned official Emulator UI renders a live fireemu Functions log", asy
     const id = `official-ui-log-${Date.now()}`;
     const write = await request.patch(
       `http://${firestore}/v1/projects/demo-app/databases/(default)/documents/todos/${id}`,
-      { data: { fields: { title: { stringValue: "official-ui-live-log" } } } },
+      {
+        headers: { authorization: "Bearer owner" },
+        data: { fields: { title: { stringValue: "official-ui-live-log" } } },
+      },
     );
     expect(write.ok(), await write.text()).toBeTruthy();
 

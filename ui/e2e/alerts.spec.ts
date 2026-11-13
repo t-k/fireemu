@@ -24,9 +24,13 @@ test.describe("Alerts", () => {
     );
     await page.getByTestId("alert-publish").click();
     // At least one handler received it.
-    await expect(page.getByRole("status").filter({ hasNotText: "Loading" })).toContainText(
-      "handler(s) received",
-    );
+    await expect(
+      page
+        .locator("section")
+        .filter({ has: page.getByRole("heading", { name: "Publish an alert" }) })
+        .getByRole("status")
+        .filter({ hasNotText: "Loading" }),
+    ).toContainText("handler(s) received");
 
     // Let the delivery run, then read the document the handler wrote.
     await api(request, "POST", "control/v1/sessions/default:awaitIdle", { timeoutSeconds: 30 });

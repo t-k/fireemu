@@ -1,5 +1,15 @@
 import { A, type RouteSectionProps } from "@solidjs/router";
-import { For, Show, createSignal, onCleanup, onMount, type Component } from "solid-js";
+import {
+  For,
+  Show,
+  createMemo,
+  createSignal,
+  on,
+  onCleanup,
+  onMount,
+  untrack,
+  type Component,
+} from "solid-js";
 import { t, type MessageKey } from "./i18n";
 import { requestScopeChange } from "./lib/unsaved";
 import { appState } from "./state";
@@ -50,6 +60,12 @@ export const App: Component<RouteSectionProps> = (props) => {
         return t("header.connecting");
     }
   };
+  const announcement = createMemo(
+    on(appState.connected, () => ({
+      label: connectionLabel(),
+      time: untrack(appState.lastConnectedAt),
+    })),
+  );
   return (
     <div class="flex min-h-screen flex-col md:flex-row">
       <button
@@ -151,9 +167,29 @@ export const App: Component<RouteSectionProps> = (props) => {
               )
             </span>
           </span>
-          <span class={`badge ${connectionClass()}`} data-testid="connection-badge">
+          <span role="status" class="sr-only" data-testid="connection-status">
+            {announcement().label} {t("header.controlHint")}{" "}
+            {announcement().time && t("header.lastSuccess", { time: announcement().time! })}
+          </span>
+          <span
+            aria-hidden="true"
+            class={`badge ${connectionClass()}`}
+            data-testid="connection-badge"
+          >
             {connectionLabel()}
           </span>
+          <Show when={appState.lastConnectedAt()}>
+            {(time) => (
+              <span
+                class="text-xs text-zinc-500"
+                title={t("header.controlHint")}
+                aria-hidden="true"
+                data-testid="control-last-success"
+              >
+                {t("header.lastSuccess", { time: time() })}
+              </span>
+            )}
+          </Show>
         </header>
         <main class="min-w-0 flex-1 p-4 lg:p-6">
           <Show when={!appState.config().controlToken}>

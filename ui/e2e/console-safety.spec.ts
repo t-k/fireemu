@@ -101,7 +101,7 @@ test.describe("Console safety", () => {
     await page.getByTestId("session-select").selectOption("demo-b");
     await expect(page.getByTestId("header-project")).toHaveText("demo-b");
     await expect(page.getByTestId("env-dotenv")).toContainText("GOOGLE_CLOUD_PROJECT=demo-b");
-    await expect(page.getByTestId("connection-badge")).toHaveText("Connected");
+    await expect(page.getByTestId("connection-badge")).toHaveText("Control API responding");
     await api(request, "DELETE", "control/v1/sessions/demo-b");
   });
 

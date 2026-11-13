@@ -718,7 +718,7 @@ test.describe("Firestore data browser", () => {
     await expect(page.getByTestId("document-save")).toBeDisabled();
     await expect(page.getByLabel("Value")).toBeDisabled();
     await page.getByTestId("database-input").fill("scope-db");
-    await page.getByTestId("database-input").press("Tab");
+    await page.getByRole("button", { name: "Open database" }).click();
     // Leaving the document with a draft asks first; the reader discards it.
     await page.getByTestId("unsaved-discard").click();
     await expect(page).toHaveURL(/db=scope-db/);

@@ -9,25 +9,29 @@ import { createScopedFetch } from "../lib/rules-state";
 /** A block of text with a copy button (clipboard, or select-all when denied). */
 const CopyBlock: Component<{ text: string; testId: string }> = (props) => {
   const [copied, setCopied] = createSignal(false);
-  const [pre, setPre] = createSignal<HTMLPreElement>();
+  const [copyStatus, setCopyStatus] = createSignal("");
+  const [manualCopy, setManualCopy] = createSignal(false);
+  let manualInput: HTMLTextAreaElement | undefined;
   const copy = async () => {
+    setManualCopy(false);
+    setCopied(false);
+    setCopyStatus("");
     try {
       await navigator.clipboard.writeText(props.text);
+      setCopied(true);
+      setCopyStatus(t("app.copied"));
     } catch {
-      const node = pre();
-      if (node) {
-        const range = document.createRange();
-        range.selectNodeContents(node);
-        window.getSelection()?.removeAllRanges();
-        window.getSelection()?.addRange(range);
-      }
+      setCopyStatus(t("app.copyManually"));
+      setManualCopy(true);
+      queueMicrotask(() => {
+        manualInput?.focus();
+        manualInput?.select();
+      });
     }
-    setCopied(true);
   };
   return (
     <div class="relative">
       <pre
-        ref={setPre}
         class="mono whitespace-pre-wrap rounded-md bg-zinc-100 p-3 pr-20 text-xs dark:bg-zinc-800"
         data-testid={props.testId}
       >
@@ -40,6 +44,20 @@ const CopyBlock: Component<{ text: string; testId: string }> = (props) => {
       >
         {copied() ? t("app.copied") : t("app.copy")}
       </AsyncButton>
+      <p role="status" class="mt-1 text-sm" data-testid={`${props.testId}-copy-status`}>
+        {copyStatus()}
+      </p>
+      <Show when={manualCopy()}>
+        <textarea
+          ref={(element) => {
+            manualInput = element;
+          }}
+          class="input mono mt-2 w-full"
+          readonly
+          value={props.text}
+          aria-label={t("app.copyManually")}
+        />
+      </Show>
     </div>
   );
 };

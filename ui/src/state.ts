@@ -8,14 +8,31 @@ const store = createRoot(() => {
   const [clock, setClock] = createSignal<string>("");
   const [sessions, setSessionSnapshot] = createSignal<Session[]>(initialConfig().sessions);
   // Keep row-local forms for unchanged targets, but discard them for a replacement project.
-  const setSessions = (snapshot: Session[]) =>
+  const setSessions = (snapshot: Session[]) => {
+    const before = project();
     setSessionSnapshot((previous) =>
       snapshot.map(
         (next) =>
           previous.find((old) => old.name === next.name && old.project === next.project) ?? next,
       ),
     );
-  const [session, setSession] = createSignal<string>("default");
+    if (before !== project()) resetPoll();
+  };
+  const [session, setSelectedSession] = createSignal<string>("default");
+  let pollEpoch = 0;
+  let completedEpoch = 0;
+  const [lastConnectedAt, setLastConnectedAt] = createSignal<string | null>(null);
+  const setSession = (name: string) => {
+    if (name === session()) return;
+    setSelectedSession(name);
+    resetPoll();
+  };
+  const resetPoll = () => {
+    completedEpoch = ++pollEpoch;
+    setConnected(null);
+    setLastConnectedAt(null);
+    setClock("");
+  };
   /** Whether the last poll of the daemon answered (null until the first one). */
   const [connected, setConnected] = createSignal<boolean | null>(null);
 
@@ -27,11 +44,18 @@ const store = createRoot(() => {
 
   /** Re-reads the clock (and the session list) from the daemon. */
   const refreshClock = async (): Promise<void> => {
-    const info = await sessionInfo(session());
-    info.map((i) => setClock(i.clock.clock));
-    const list = await listSessions();
+    const mine = ++pollEpoch;
+    const selected = session();
+    const selectedProject = project();
+    const [info, list] = await Promise.all([sessionInfo(selected), listSessions()]);
+    if (mine <= completedEpoch || selected !== session() || selectedProject !== project()) return;
     list.map((l) => setSessions(l.sessions));
-    setConnected(info.isOk() && list.isOk());
+    if (mine <= completedEpoch) return;
+    completedEpoch = mine;
+    info.map((i) => setClock(i.clock.clock));
+    const answered = info.isOk() && list.isOk();
+    if (answered) setLastConnectedAt(new Date().toISOString());
+    setConnected(answered);
   };
 
   return {
@@ -45,6 +69,7 @@ const store = createRoot(() => {
     setSession,
     project,
     connected,
+    lastConnectedAt,
     refreshClock,
   };
 });

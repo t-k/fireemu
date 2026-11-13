@@ -17,6 +17,19 @@ use crate::store::ObjectDigests;
 
 static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
 
+macro_rules! spill_io {
+    ($operation:literal, $path:expr, $call:expr) => {{
+        #[cfg(test)]
+        {
+            fault_injection::call($operation, $path, || $call)
+        }
+        #[cfg(not(test))]
+        {
+            $call
+        }
+    }};
+}
+
 /// Directory in which temporary body files are created.
 #[derive(Clone)]
 pub struct SpillDir {
@@ -79,7 +92,7 @@ impl SpillDir {
             options.read(true).write(true).create_new(true);
             #[cfg(unix)]
             options.mode(0o600);
-            match options.open(&path) {
+            match spill_io!("open", &path, options.open(&path)) {
                 Ok(file) => {
                     #[cfg(unix)]
                     file.set_permissions(fs::Permissions::from_mode(0o600))?;
@@ -146,7 +159,7 @@ impl SpillFile {
         let file = self.file.as_mut().expect("spill file is open");
         file.seek(SeekFrom::End(0))?;
         while !bytes.is_empty() {
-            match file.write(bytes) {
+            match spill_io!("write", &self.path, file.write(bytes)) {
                 Ok(0) => {
                     return Err(io::Error::new(
                         io::ErrorKind::WriteZero,
@@ -180,7 +193,11 @@ impl SpillFile {
             let file = self.file.as_ref().expect("spill file is open");
             let mut offset = 0;
             while offset < len {
-                match file.read_at(&mut bytes[offset..], start + offset as u64) {
+                match spill_io!(
+                    "read",
+                    &self.path,
+                    file.read_at(&mut bytes[offset..], start + offset as u64)
+                ) {
                     Ok(0) => {
                         return Err(io::Error::new(
                             io::ErrorKind::UnexpectedEof,
@@ -267,7 +284,7 @@ impl ProcessSpill {
     /// Removes stale directories and creates a fresh directory for this process.
     #[cfg(unix)]
     pub fn create(root: &Path) -> io::Result<Self> {
-        let missing = match fs::symlink_metadata(root) {
+        let missing = match spill_io!("metadata", root, fs::symlink_metadata(root)) {
             Ok(_) => false,
             Err(error) if error.kind() == io::ErrorKind::NotFound => true,
             Err(error) => return Err(error),
@@ -472,7 +489,7 @@ fn read_marker(dir: &Path, pid: u32) -> Option<String> {
 /// Removes directories with verified markers belonging to absent processes.
 #[cfg(unix)]
 pub fn sweep_stale(root: &Path, state: impl Fn(u32) -> ProcessState) -> io::Result<usize> {
-    let entries = match fs::read_dir(root) {
+    let entries = match spill_io!("read_dir", root, fs::read_dir(root)) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
         Err(error) => return Err(error),
@@ -527,4 +544,152 @@ pub fn sweep_stale(_root: &Path, _state: impl Fn(u32) -> ProcessState) -> io::Re
         io::ErrorKind::Unsupported,
         "process sweeping is unsupported",
     ))
+}
+
+#[cfg(test)]
+mod fault_injection {
+    use std::cell::RefCell;
+    use std::io;
+    use std::path::{Path, PathBuf};
+
+    #[derive(Default)]
+    struct Fault {
+        operation: &'static str,
+        error: Option<io::ErrorKind>,
+        paths: Vec<PathBuf>,
+    }
+
+    thread_local! {
+        static FAULT: RefCell<Fault> = RefCell::new(Fault::default());
+    }
+
+    pub(super) fn inject(operation: &'static str, error: io::ErrorKind) {
+        FAULT.with(|fault| {
+            *fault.borrow_mut() = Fault {
+                operation,
+                error: Some(error),
+                paths: Vec::new(),
+            }
+        });
+    }
+
+    pub(super) fn paths() -> Vec<PathBuf> {
+        FAULT.with(|fault| fault.borrow().paths.clone())
+    }
+
+    pub(super) fn call<T>(
+        operation: &str,
+        path: &Path,
+        call: impl FnOnce() -> io::Result<T>,
+    ) -> io::Result<T> {
+        let error = FAULT.with(|fault| {
+            let mut fault = fault.borrow_mut();
+            if fault.operation == operation {
+                fault.paths.push(path.to_owned());
+                fault.error.take()
+            } else {
+                None
+            }
+        });
+        match error {
+            Some(kind) => Err(io::Error::from(kind)),
+            None => call(),
+        }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    fn temp_path(name: &str) -> PathBuf {
+        let counter = NEXT_FILE.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "spill-fault-{name}-{}-{counter}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn create_file_retries_collision_with_new_name() {
+        let dir = temp_path("collision");
+        fault_injection::inject("open", io::ErrorKind::AlreadyExists);
+        let file = SpillDir::new(&dir).create_file().unwrap();
+        let paths = fault_injection::paths();
+        assert_eq!(paths.len(), 2);
+        assert_ne!(paths[0], paths[1]);
+        assert_eq!(paths[1], file.path());
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        drop(file);
+        fs::remove_dir(&dir).unwrap();
+    }
+
+    #[test]
+    fn append_and_digests_retry_interrupted_io() {
+        let dir = temp_path("interrupted");
+        let mut file = SpillDir::new(&dir).create_file().unwrap();
+        fault_injection::inject("write", io::ErrorKind::Interrupted);
+        file.append(b"spill contents").unwrap();
+        assert_eq!(fault_injection::paths().len(), 2);
+        assert_eq!(file.len(), 14);
+        fault_injection::inject("read", io::ErrorKind::Interrupted);
+        assert_eq!(
+            file.digests().unwrap(),
+            ObjectDigests::new(b"spill contents")
+        );
+        assert_eq!(fault_injection::paths().len(), 2);
+        assert_eq!(file.read_all().unwrap(), b"spill contents");
+        drop(file);
+        fs::remove_dir(&dir).unwrap();
+    }
+
+    #[test]
+    fn missing_process_root_is_created_and_missing_sweep_root_is_ignored() {
+        let root = temp_path("missing");
+        fault_injection::inject("metadata", io::ErrorKind::NotFound);
+        let process = ProcessSpill::create(&root).unwrap();
+        assert_eq!(fault_injection::paths(), vec![root.clone()]);
+        assert!(process.path().is_dir());
+        drop(process);
+        fs::remove_dir(&root).unwrap();
+        fault_injection::inject("read_dir", io::ErrorKind::NotFound);
+        assert_eq!(sweep_stale(&root, |_| ProcessState::Absent).unwrap(), 0);
+        assert_eq!(fault_injection::paths(), vec![root]);
+    }
+
+    #[test]
+    fn other_io_errors_are_not_retried_or_ignored() {
+        let root = temp_path("other-errors");
+        fault_injection::inject("metadata", io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            ProcessSpill::create(&root).err().unwrap().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        fault_injection::inject("read_dir", io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            sweep_stale(&root, |_| ProcessState::Absent)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        fault_injection::inject("open", io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            SpillDir::new(&root).create_file().unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        let mut file = SpillDir::new(&root).create_file().unwrap();
+        fault_injection::inject("write", io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            file.append(b"x").unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        file.append(b"x").unwrap();
+        fault_injection::inject("read", io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            file.digests().unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        drop(file);
+        fs::remove_dir(&root).unwrap();
+    }
 }

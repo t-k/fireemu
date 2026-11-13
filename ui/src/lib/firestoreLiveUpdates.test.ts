@@ -193,6 +193,69 @@ describe("Firestore live updates with delayed responses", () => {
     },
   );
 
+  it("replaces a row with an older updateTime after reset and ignores a pending pre-reset read", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => {
+        throw new Error("Unexpected network request");
+      }),
+    );
+    appState.setSessions([{ name: "default", project: "p" }]);
+    appState.setSession("default");
+    const root = "projects/p/databases/(default)/documents";
+    const alice = {
+      name: `${root}/users/alice`,
+      fields: { value: { stringValue: "current" } },
+      updateTime: "2026-11-13T12:00:01Z",
+    };
+    const restored = {
+      ...alice,
+      fields: { value: { stringValue: "restored" } },
+      updateTime: "2026-11-13T12:00:00Z",
+    };
+    let emit!: (event: SseEvent) => void;
+    vi.mocked(subscribe).mockImplementation((_path, onEvent) => {
+      emit = onEvent;
+      return vi.fn();
+    });
+    vi.mocked(listDocuments)
+      .mockReturnValueOnce(okAsync({ documents: [alice] }))
+      .mockReturnValue(okAsync({ documents: [restored] }));
+    let releaseRow!: (document: FsDocument) => void;
+    vi.mocked(getDocument).mockImplementation(() =>
+      ResultAsync.fromSafePromise(
+        new Promise<FsDocument>((resolve) => {
+          releaseRow = resolve;
+        }),
+      ),
+    );
+    const history = createMemoryHistory();
+    history.set({ value: "/users" });
+    const view = render(() =>
+      createComponent(MemoryRouter, {
+        history,
+        get children() {
+          return createComponent(Route, { path: "/:path", component: Firestore });
+        },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    emit({
+      event: "commit",
+      data: JSON.stringify({ changes: [{ path: alice.name, kind: "updated" }] }),
+    });
+    expect(getDocument).toHaveBeenCalledExactlyOnceWith(root, "users/alice");
+    emit({ event: "reset", data: "{}" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(view.getByTestId("document-list").textContent).toContain("restored");
+    releaseRow(alice);
+    await vi.advanceTimersByTimeAsync(150);
+    expect(view.getByTestId("document-list").textContent).toContain("restored");
+    expect(view.getByTestId("document-list").textContent).not.toContain("current");
+    expect(listDocuments).toHaveBeenCalledTimes(2);
+  });
+
   it.each([
     ["2026-11-13T12:00:00.000000002Z", "2026-11-13T12:00:00.000000001Z", false],
     ["2026-11-13T12:00:00.000000001Z", "2026-11-13T12:00:00.000000002Z", true],

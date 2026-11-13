@@ -1093,9 +1093,9 @@ const Firestore: Component = () => {
     const project = appState.project();
     const database = db();
     const route = path();
+    let documentTimer: number | undefined;
     let pending = {
       collection: false,
-      document: false,
       subcollections: false,
       full: false,
       updatedRows: new Set<string>(),
@@ -1104,13 +1104,11 @@ const Firestore: Component = () => {
       const current = pending;
       pending = {
         collection: false,
-        document: false,
         subcollections: false,
         full: false,
         updatedRows: new Set<string>(),
       };
       if (current.collection || current.full) setCollectionVersion((v) => v + 1);
-      if (current.document || current.full) setDocumentVersion((v) => v + 1);
       if (current.subcollections || current.full) setSubcollectionVersion((v) => v + 1);
       if (current.updatedRows.size > 0) setRowUpdates([...current.updatedRows]);
     }, 150);
@@ -1122,15 +1120,34 @@ const Firestore: Component = () => {
         } else {
           const parsed = parseFirestoreWatchEvent(event);
           const affected = affectedFirestoreViews(parsed, root(), route);
+          // Keep the editor's authoritative reads on the original delayed invalidation path.
+          if (
+            isDocumentPath(route) &&
+            (parsed.kind === "commit" || affected.full) &&
+            documentTimer === undefined
+          ) {
+            documentTimer = window.setTimeout(() => {
+              documentTimer = undefined;
+              setDocumentVersion((v) => v + 1);
+            }, 150);
+          }
+          // A restore starts a new row epoch even inside an active coalescing window.
+          if (parsed.kind === "reset") {
+            pending.collection = false;
+            pending.subcollections = false;
+            pending.full = false;
+            pending.updatedRows.clear();
+            setCollectionVersion((v) => v + 1);
+            setSubcollectionVersion((v) => v + 1);
+            return;
+          }
           pending.collection ||= affected.collection;
-          pending.document ||= affected.document;
           pending.subcollections ||= affected.subcollections;
           pending.full ||= affected.full;
           for (const id of affected.updatedRows) pending.updatedRows.add(id);
           if (
             affected.full ||
             affected.collection ||
-            affected.document ||
             affected.subcollections ||
             affected.updatedRows.length > 0
           )
@@ -1142,6 +1159,7 @@ const Firestore: Component = () => {
     onCleanup(() => {
       stop();
       scheduler.dispose();
+      if (documentTimer !== undefined) window.clearTimeout(documentTimer);
     });
   });
 

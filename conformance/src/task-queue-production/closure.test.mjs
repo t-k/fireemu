@@ -58,11 +58,23 @@ test("the record is the verified parent on the events sandbox, verified only whe
     ],
   );
   for (const r of record.recordings) assert.equal(r.corpusSha256, record.corpusContentSha256);
-  const notVerified = ["dedup-window-expiry", "queue-config-mapping", "max-dispatches-per-second"];
+  const notVerified = ["dedup-window-expiry", "queue-config-mapping"];
+  // Backed by the one burst recording of 2026-11-13 (run f7e5c776424f470a) and its strict replay comparison.
+  const burstBacked = "max-dispatches-per-second";
   for (const condition of record.conditions) {
     const name = condition.conditionId.split("/")[1];
     const expected = notVerified.includes(name) ? "NOT_COMPARED" : "VERIFIED";
     assert.equal(condition.status, expected, condition.conditionId);
+    if (name === burstBacked) {
+      assert.deepEqual(
+        condition.productionEvidence.map((e) => e.path),
+        [
+          "conformance/task-queue-production-burst-pass-1.json",
+          "conformance/task-queue-production-burst-strict-vs-pass-1.json",
+        ],
+      );
+      continue;
+    }
     if (expected === "VERIFIED" && condition.evidenceType === "production-parity") {
       assert.equal(condition.productionEvidence.length, 2, condition.conditionId);
       assert.equal(condition.observedPasses, 2, condition.conditionId);

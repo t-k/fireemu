@@ -10,7 +10,7 @@
     {
       "name": "cadence",
       "toleranceMs": 271,
-      "verdict": "MISMATCH"
+      "verdict": "MATCH"
     },
     {
       "name": "count",
@@ -19,5 +19,5 @@
       "verdict": "MATCH"
     }
   ],
-  "verdict": "MISMATCH"
+  "verdict": "MATCH"
 }

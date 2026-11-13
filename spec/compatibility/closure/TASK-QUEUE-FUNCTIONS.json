@@ -1387,7 +1387,7 @@
       "recipeIds": [
         "task-queue/max-dispatches-per-second"
       ],
-      "status": "NOT_COMPARED",
+      "status": "VERIFIED",
       "corpusSteps": [
         "rate-a",
         "rate-b",
@@ -1405,10 +1405,9 @@
         },
         {
           "path": "conformance/task-queue-production-burst-strict-vs-pass-1.json",
-          "sha256": "58080f1208c10e0da0ea75e4197648210faca56aae3d6e4d1f786d6fa3c253c6"
+          "sha256": "b56e1962070a576339cd20abfdab642bc53e489b0d24beb6e442767ebc1e70de"
         }
-      ],
-      "reason": "The burst comparison is missing, invalid, does not rebuild from its projections, or does not match."
+      ]
     },
     {
       "conditionId": "TASK-QUEUE-FUNCTIONS/delete-task",

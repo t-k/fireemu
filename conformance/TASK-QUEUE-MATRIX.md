@@ -24,13 +24,13 @@ The program (`conformance/src/task-queue-production/corpus.manifest.json`) has 1
 | retry-backoff-schedule | Production parity | 2 | Verified: two recordings, strict matches (known differences listed) |
 | retry-limits | Production parity | 3 | Verified: two recordings, strict matches (known differences listed) |
 | max-concurrent-dispatches | Production parity | 9 | Verified: two recordings, strict matches (known differences listed) |
-| max-dispatches-per-second | Production parity | 8 | Not compared (reason in the record) |
+| max-dispatches-per-second | Production parity | 8 | Verified: burst recording (one pass, run f7e5c776424f470a), strict replay matches burst, cadence and count |
 | delete-task | Production parity | 6 | Verified: two recordings, strict matches (known differences listed) |
 | local-controls | Fireemu-only | - | Verified by local tests (named in the record) |
 | final-artifact-regression | Gate | - | Verified: release run R38 |
 | closure-review | Gate | - | Verified: closureReview |
 
-The burst probe of 2026-11-13 (run f7e5c776424f470a; 120 tasks due at one instant on a rate-1 queue) started 10 tasks within 214 ms and then one per second; the queue read back `maxBurstSize` 10. The strict profile now starts such a queue with 10 tokens; rate 500 uses production's read-back burst of 100; other rates are unrecorded. The closure record still marks the condition NOT_COMPARED until the comparison is recorded.
+The burst probe of 2026-11-13 (run f7e5c776424f470a; 120 tasks due at one instant on a rate-1 queue) started 10 tasks within 214 ms and then one per second; the queue read back `maxBurstSize` 10. The strict profile now starts such a queue with 10 tokens; rate 500 uses production's read-back burst of 100; other rates are unrecorded. The strict replay of that program now matches (burst 10 within 24-56 ms, then 1/s, 120th at +110.0 s).
 
 In the emulator profile, deleting a pending task returns `200 {"res":"OK"}` and prevents its dispatch; deleting a missing task returns 404. A task that was already dispatched can be deleted once with the same `200` (firebase-tools 15.28.2 keeps every enqueued name until its first delete); a second delete returns 404. The plain-text 404 and 409 answers are `text/plain; charset=utf-8` in fireemu and `text/html; charset=utf-8` in firebase-tools, with identical bodies (declared difference). GET and PUT on a task route return the official emulator's Express 404.
 

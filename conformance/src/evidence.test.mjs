@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import {
   classifyProductionCase,
+  publicEvidence,
   summarizeStatuses,
   validateEvidenceJoin,
   validateRecordedExpectation,
@@ -125,4 +126,12 @@ describe("production evidence identity", () => {
     assert.deepEqual(summary, { parity: 2, unverified: 1 });
     assert.equal(Object.hasOwn(summary, "percentage"), false);
   });
+});
+
+it("a known difference's path patterns are public, a real path under the same key is not", () => {
+  for (const pattern of ["/.*/", "/^\\/body\\/httpRequest\\/url$/", "/^\\[\\]\\/request\\/path$/"])
+    assert.doesNotThrow(() => publicEvidence({ knownDifferences: [{ paths: [pattern] }] }));
+  for (const path of ["/home/runner/work/x", "/Users/someone/", "/tmp/a/", "/.*"])
+    assert.throws(() => publicEvidence({ knownDifferences: [{ paths: [path] }] }), /filesystem path/);
+  assert.throws(() => publicEvidence({ other: "/^\\/body$/" }), /filesystem path/);
 });

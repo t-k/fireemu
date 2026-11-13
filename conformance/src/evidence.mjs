@@ -166,6 +166,10 @@ const isPubsubCoordinate = (key, value) =>
   key === "coordinate" && /^\/conditions\/\d+\/cases\/\d+$/.test(value);
 const isKnownDifferencePointer = (key, value) =>
   key === "knownDifferences" && /^\/knownDifferences\/[A-Za-z0-9_-]+$/.test(value);
+// A known difference's `paths` entry is a regular expression over JSON pointers: either the
+// match-all `/.*/` or an anchored `/^...$/`. No filesystem path begins with `/^`.
+const isKnownDifferencePathPattern = (key, value) =>
+  key === "paths" && (value === "/.*/" || /^\/\^.*\$\/$/.test(value));
 const isKnownRootUrl = (key, value) => /url/i.test(key) && value === "/";
 const isRecordedRootRoute = (key, value) => ["production", "local"].includes(key) && value === "/";
 // The EVENTARC recorder's CloudEvents source (a scheme-relative URI reference, not a path) and the
@@ -231,6 +235,7 @@ export function publicEvidence(value) {
         isSelector(key, current) ||
         isPubsubCoordinate(key, current) ||
         isKnownDifferencePointer(key, current) ||
+        isKnownDifferencePathPattern(key, current) ||
         isApiOrRpc(key, current) ||
         isKnownRootUrl(key, current) ||
         isRecordedRootRoute(key, current) ||

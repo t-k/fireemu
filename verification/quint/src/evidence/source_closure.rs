@@ -224,6 +224,181 @@ mod tests {
     }
 
     #[test]
+    fn test_only_declaration_shapes_preserve_reference_guards() {
+        let cases: &[(&str, &[(&str, &str)], &[&str])] = &[
+            (
+                "non-mod.rs parent",
+                &[("feature.rs", "#[cfg(test)]\nmod probe;"), ("feature/probe.rs", "")],
+                &["feature/probe.rs"],
+            ),
+            (
+                "attributes after cfg with visibility and documentation",
+                &[("lib.rs", "#[cfg(test)]\n#[allow(dead_code)]\n/// Probe.\npub(crate) mod probe;"), ("probe.rs", "")],
+                &["probe.rs"],
+            ),
+            (
+                "multiline attributes after cfg",
+                &[("lib.rs", "#[cfg(test)]\n#[allow(\n dead_code,\n)]\nmod probe;"), ("probe.rs", "")],
+                &["probe.rs"],
+            ),
+            (
+                "inline test parent and nested inline module",
+                &[("feature.rs", "#[cfg(test)] mod suite { mod nested { mod probe; } }"), ("feature/suite/nested/probe.rs", "")],
+                &["feature/suite/nested/probe.rs"],
+            ),
+            (
+                "test declaration inside production inline parent",
+                &[("feature.rs", "mod suite { #[cfg(test)] mod probe; }"), ("feature/suite/probe.rs", "")],
+                &["feature/suite/probe.rs"],
+            ),
+            (
+                "external test parent propagates through mod.rs and file parents",
+                &[("feature.rs", "#[cfg(test)] mod suite;"), ("feature/suite/mod.rs", "mod probe;"), ("feature/suite/probe.rs", "mod leaf;"), ("feature/suite/probe/leaf.rs", "")],
+                &["feature/suite/mod.rs", "feature/suite/probe.rs", "feature/suite/probe/leaf.rs"],
+            ),
+            (
+                "match arm named path does not retain every candidate",
+                &[("lib.rs", "#[cfg(test)] mod probe; fn f() { match value { None => (), path => () } }"), ("probe.rs", "")],
+                &["probe.rs"],
+            ),
+            (
+                "non-test duplicate declaration",
+                &[("lib.rs", "#[cfg(test)] mod probe; mod probe;"), ("probe.rs", "")],
+                &[],
+            ),
+            (
+                "non-test declaration in another source",
+                &[("lib.rs", "#[cfg(test)] mod probe;"), ("mod.rs", "mod probe;"), ("probe.rs", "")],
+                &[],
+            ),
+            (
+                "non-test declaration outside guarded inline parent",
+                &[("lib.rs", "#[cfg(test)] mod suite { mod probe; } mod suite { mod probe; }"), ("suite/probe.rs", "")],
+                &[],
+            ),
+            (
+                "production inline parent remains bound",
+                &[("feature.rs", "mod suite { mod probe; }"), ("feature/suite/probe.rs", "")],
+                &[],
+            ),
+            (
+                "path attribute before cfg",
+                &[("lib.rs", "#[path = \"elsewhere.rs\"] #[cfg(test)] mod probe;"), ("probe.rs", "")],
+                &[],
+            ),
+            (
+                "path attribute after cfg",
+                &[("lib.rs", "#[cfg(test)] #[path = \"elsewhere.rs\"] mod probe;"), ("probe.rs", "")],
+                &[],
+            ),
+            (
+                "redirected inline ancestor",
+                &[("lib.rs", "#[cfg(test)] #[path = \"elsewhere\"] mod suite { mod probe; }"), ("suite/probe.rs", "")],
+                &[],
+            ),
+            (
+                "alternate literal path reference",
+                &[("lib.rs", "#[cfg(test)] mod probe; #[path = \"probe.rs\"] mod other;"), ("probe.rs", "")],
+                &[],
+            ),
+            (
+                "computed path retains all candidates",
+                &[("lib.rs", "#[cfg(test)] mod probe; #[path = env!(\"MODULE\")] mod other;"), ("probe.rs", "")],
+                &[],
+            ),
+            (
+                "literal include retains referenced candidate",
+                &[("lib.rs", "#[cfg(test)] mod probe; include!(\"probe.rs\");"), ("probe.rs", "")],
+                &[],
+            ),
+            (
+                "manifest-relative include retains referenced candidate",
+                &[("lib.rs", "#[cfg(test)] mod probe; include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/probe.rs\"));"), ("probe.rs", "")],
+                &[],
+            ),
+            (
+                "computed include retains all candidates",
+                &[("lib.rs", "#[cfg(test)] mod probe; include!(env!(\"MODULE\"));"), ("probe.rs", "")],
+                &[],
+            ),
+            (
+                "retained parent restores inherited descendants",
+                &[("lib.rs", "#[cfg(test)] mod suite; include!(\"suite/mod.rs\");"), ("suite/mod.rs", "mod probe;"), ("suite/probe.rs", "mod leaf;"), ("suite/probe/leaf.rs", "")],
+                &[],
+            ),
+            (
+                "retained parent preserves independently guarded child",
+                &[("lib.rs", "#[cfg(test)] mod suite; mod suite;"), ("suite/mod.rs", "#[cfg(test)] mod probe;"), ("suite/probe.rs", "")],
+                &["suite/probe.rs"],
+            ),
+            (
+                "alternate reference retains inherited child",
+                &[("lib.rs", "#[cfg(test)] mod suite; include!(\"suite/probe.rs\");"), ("suite/mod.rs", "mod probe;"), ("suite/probe.rs", "")],
+                &[],
+            ),
+            (
+                "unrecognized cfg remains bound",
+                &[("lib.rs", "#[cfg(all(test))] mod probe;"), ("probe.rs", "")],
+                &[],
+            ),
+            (
+                "comments and literals cannot supply declarations",
+                &[("lib.rs", "/* #[cfg(test)] mod probe; */ const TEXT: &str = r#\"#[cfg(test)] mod probe;\"#;"), ("probe.rs", "")],
+                &[],
+            ),
+            (
+                "macro bodies are not module scopes",
+                &[("lib.rs", "emit! { #[cfg(test)] mod probe; }"), ("probe.rs", "")],
+                &[],
+            ),
+            (
+                "ambiguous module paths remain bound",
+                &[("lib.rs", "#[cfg(test)] mod probe;"), ("probe.rs", ""), ("probe/mod.rs", "")],
+                &[],
+            ),
+            (
+                "unparsed production source retains every candidate",
+                &[("lib.rs", "#[cfg(test)] mod probe;"), ("probe.rs", ""), ("other.rs", "/*")],
+                &[],
+            ),
+        ];
+        let fixture = Fixture::new();
+        for &(case, files, excluded) in cases {
+            let sources: BTreeMap<_, _> = files
+                .iter()
+                .map(|(path, source)| (format!("root/src/{path}"), *source))
+                .collect();
+            let inputs = sources.keys().cloned().collect();
+            let mut syntax = BTreeMap::new();
+            let mut unparsed = BTreeSet::new();
+            for (path, source) in &sources {
+                if let Some(tokens) = super::super::tokenize_source(source) {
+                    syntax.insert(path.as_str(), tokens);
+                } else {
+                    unparsed.insert(path.as_str());
+                }
+            }
+            let mut candidates = super::super::test_module_candidates(
+                &syntax,
+                &fixture.authority,
+                &inputs,
+                &BTreeSet::new(),
+            );
+            if !super::super::retain_referenced_candidates(&syntax, &unparsed, &mut candidates) {
+                candidates.clear();
+            }
+            assert_eq!(
+                candidates.into_keys().collect::<BTreeSet<_>>(),
+                excluded
+                    .iter()
+                    .map(|path| format!("root/src/{path}"))
+                    .collect(),
+                "{case}"
+            );
+        }
+    }
+
+    #[test]
     fn closure_is_sorted_transitive_and_excludes_unreachable_packages() {
         let fixture = Fixture::new();
         let inputs = fixture.inputs().expect("valid closure");

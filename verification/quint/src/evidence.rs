@@ -518,8 +518,7 @@ pub fn expected_bound_inputs(
             unparsed.insert(path);
         }
     }
-    let mut candidates =
-        test_module_candidates(&syntax, &sources, &authority, &inputs, &explicit_inputs);
+    let mut candidates = test_module_candidates(&syntax, &authority, &inputs, &explicit_inputs);
     if !retain_referenced_candidates(&syntax, &unparsed, &mut candidates) {
         return Ok(inputs.iter().cloned().collect());
     }
@@ -619,80 +618,26 @@ type TestModuleCandidates<'a> = BTreeMap<String, (String, BTreeSet<(&'a str, usi
 
 fn test_module_candidates<'a>(
     syntax: &BTreeMap<&'a str, Vec<(usize, &'a str)>>,
-    sources: &BTreeMap<&str, String>,
     authority: &CargoAuthority,
     inputs: &BTreeSet<String>,
     explicit_inputs: &BTreeSet<String>,
 ) -> TestModuleCandidates<'a> {
     let mut candidates: TestModuleCandidates<'_> = BTreeMap::new();
-    for (&parent, tokens) in syntax {
-        let path = Path::new(parent);
-        if !authority
-            .packages
-            .iter()
-            .filter_map(|package| package.manifest.as_deref())
-            .filter_map(|manifest| Path::new(manifest).parent())
-            .any(|directory| path.starts_with(directory.join("src")))
-        {
-            continue;
-        }
-        let source = &sources[parent];
-        let mut depth = 0usize;
-        for (index, &(offset, token)) in tokens.iter().enumerate() {
-            if matches!(token, "{" | "(" | "[") {
-                depth += 1;
-            }
-            if matches!(token, "}" | ")" | "]") {
-                depth = depth.saturating_sub(1);
-            }
-            if depth != 0 || token != "mod" {
+    // Discover descendants until every cfg(test)-only file has propagated to its children.
+    loop {
+        let previous_count = candidates.len();
+        for (&parent, tokens) in syntax {
+            let path = Path::new(parent);
+            if !authority
+                .packages
+                .iter()
+                .filter_map(|package| package.manifest.as_deref())
+                .filter_map(|manifest| Path::new(manifest).parent())
+                .any(|directory| path.starts_with(directory.join("src")))
+            {
                 continue;
             }
-            let Some(&(name_offset, name)) = tokens.get(index + 1) else {
-                continue;
-            };
-            if tokens.get(index + 2).map(|(_, token)| *token) != Some(";") {
-                continue;
-            }
-            let line_start = source[..offset]
-                .rfind('\n')
-                .map_or(0, |position| position + 1);
-            if !matches!(
-                source[line_start..offset].trim(),
-                "" | "pub" | "pub(crate)" | "pub(super)" | "pub(self)"
-            ) {
-                continue;
-            }
-            let mut test_only = false;
-            let mut redirected = false;
-            let mut end = line_start;
-            while end > 0 {
-                let start = source[..end - 1]
-                    .rfind('\n')
-                    .map_or(0, |position| position + 1);
-                let line = source[start..end].trim();
-                if line == "#[cfg(test)]" {
-                    test_only |= tokens
-                        .iter()
-                        .any(|&(offset, token)| offset >= start && offset < end && token == "#");
-                }
-                if line.starts_with("#[") {
-                    redirected |= line
-                        .split(|ch: char| !ch.is_alphanumeric() && ch != '_')
-                        .any(|word| word == "path");
-                }
-                if !(line.starts_with("///") || (line.starts_with("#[") && line.ends_with(']'))) {
-                    // A multiline attribute is not proof of the narrow convention.
-                    if line.ends_with(']') {
-                        test_only = false;
-                    }
-                    break;
-                }
-                end = start;
-            }
-            if !test_only || redirected {
-                continue;
-            }
+            let inherited = candidates.contains_key(parent);
             let directory = if matches!(
                 path.file_name().and_then(|name| name.to_str()),
                 Some("lib.rs" | "main.rs" | "mod.rs")
@@ -701,26 +646,104 @@ fn test_module_candidates<'a>(
             } else {
                 path.with_extension("")
             };
-            let alternatives = [
-                directory.join(format!("{name}.rs")),
-                directory.join(name).join("mod.rs"),
-            ];
-            let present: Vec<_> = alternatives
-                .iter()
-                .filter_map(|path| path.to_str())
-                .filter(|path| inputs.contains(*path))
-                .collect();
-            if present.len() != 1 || explicit_inputs.contains(present[0]) {
-                continue;
+            let mut scopes = vec![(0usize, directory, false)];
+            let mut depth = 0usize;
+            for (index, &(_, token)) in tokens.iter().enumerate() {
+                if matches!(token, "{" | "(" | "[") {
+                    depth += 1;
+                    continue;
+                }
+                if matches!(token, "}" | ")" | "]") {
+                    depth = depth.saturating_sub(1);
+                    while scopes.len() > 1 && scopes.last().unwrap().0 > depth {
+                        scopes.pop();
+                    }
+                    continue;
+                }
+                let (scope_depth, directory, scope_test_only) = scopes.last().unwrap();
+                if depth != *scope_depth || token != "mod" {
+                    continue;
+                }
+                let Some(&(name_offset, name)) = tokens.get(index + 1) else {
+                    continue;
+                };
+                let delimiter = tokens.get(index + 2).map(|(_, token)| *token);
+                if !matches!(delimiter, Some(";" | "{")) {
+                    continue;
+                }
+                let mut start = index;
+                if start > 0 && tokens[start - 1].1 == "pub" {
+                    start -= 1;
+                } else if start >= 4
+                    && tokens[start - 4].1 == "pub"
+                    && tokens[start - 3].1 == "("
+                    && matches!(tokens[start - 2].1, "crate" | "super" | "self")
+                    && tokens[start - 1].1 == ")"
+                {
+                    start -= 4;
+                }
+                let mut test_only = *scope_test_only;
+                let mut redirected = false;
+                while start > 0 && tokens[start - 1].1 == "]" {
+                    let end = start;
+                    let mut brackets = 1usize;
+                    start -= 1;
+                    while start > 0 && brackets > 0 {
+                        start -= 1;
+                        match tokens[start].1 {
+                            "]" => brackets += 1,
+                            "[" => brackets -= 1,
+                            _ => {}
+                        }
+                    }
+                    if brackets != 0 || start == 0 || tokens[start - 1].1 != "#" {
+                        redirected = true;
+                        break;
+                    }
+                    start -= 1;
+                    test_only |= tokens[start..end]
+                        .iter()
+                        .map(|(_, token)| *token)
+                        .eq(["#", "[", "cfg", "(", "test", ")", "]"]);
+                    redirected |= tokens[start..end].iter().any(|(_, token)| *token == "path");
+                }
+                if redirected || (start > 0 && !matches!(tokens[start - 1].1, ";" | "{" | "}")) {
+                    continue;
+                }
+                if delimiter == Some("{") {
+                    scopes.push((depth + 1, directory.join(name), test_only));
+                    continue;
+                }
+                if !test_only && !inherited {
+                    continue;
+                }
+                let alternatives = [
+                    directory.join(format!("{name}.rs")),
+                    directory.join(name).join("mod.rs"),
+                ];
+                let present: Vec<_> = alternatives
+                    .iter()
+                    .filter_map(|path| path.to_str())
+                    .filter(|path| inputs.contains(*path))
+                    .collect();
+                if present.len() != 1 || explicit_inputs.contains(present[0]) {
+                    continue;
+                }
+                let declarations = &mut candidates
+                    .entry(present[0].to_owned())
+                    .or_insert_with(|| (name.to_owned(), BTreeSet::new()))
+                    .1;
+                // Inherited declarations are valid only while their parent remains excluded.
+                // If a reference retains the parent, the retention pass must also retain its children.
+                if test_only {
+                    declarations.insert((parent, name_offset));
+                }
             }
-            candidates
-                .entry(present[0].to_owned())
-                .or_insert_with(|| (name.to_owned(), BTreeSet::new()))
-                .1
-                .insert((parent, name_offset));
+        }
+        if candidates.len() == previous_count {
+            return candidates;
         }
     }
-    candidates
 }
 
 fn retain_referenced_candidates(
@@ -777,6 +800,7 @@ fn retain_referenced_candidates(
                     && index > 0
                     && matches!(tokens[index - 1].1, "[" | ",")
                     && tokens.get(index + 1).map(|(_, token)| *token) == Some("=")
+                    && tokens.get(index + 2).map(|(_, token)| *token) != Some(">")
                     && !tokens.get(index + 2).is_some_and(|(_, literal)| {
                         literal.starts_with('"')
                             && literal.ends_with('"')

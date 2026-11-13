@@ -5,9 +5,10 @@ import { execFileSync } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { CELLS, requestCount } from "./program.mjs";
+import { CELLS_V5, requestCountV5 } from "./program-v5.mjs";
 import { CAPS, createRecorder } from "./runner.mjs";
 import { createWorld, virtualClock } from "./world.mjs";
-import { judgeRun } from "./judge.mjs";
+import { judgeRun, judgeRunV5 } from "./judge.mjs";
 import { settleA2, A2_MIN_AGE_MS } from "./a2.mjs";
 import { listRequest, kindOfName } from "./requests.mjs";
 import { isOwned } from "./names.mjs";
@@ -73,9 +74,9 @@ export function preflight(env, args, deps = {}) {
 function parse(args) {
   const [mode, ...rest] = args;
   const allowed = {
-    plan: [],
-    local: ["run-id", "world-params"],
-    record: ["run-id", "out", "lock", "packet"],
+    plan: ["program"],
+    local: ["run-id", "world-params", "program"],
+    record: ["run-id", "out", "lock", "packet", "program"],
     a2: ["run-id", "from", "out", "lock"],
     prelist: ["run-id", "out", "lock"],
   }[mode];
@@ -89,11 +90,13 @@ function parse(args) {
     if (name in options) throw new Error("duplicate option");
     options[name] = rest[i + 1];
   }
-  for (const key of allowed.filter((k) => k !== "world-params"))
+  for (const key of allowed.filter((k) => !["world-params", "program"].includes(k)))
     if (!(key.replace(/-([a-z])/g, (_, c) => c.toUpperCase()) in options))
       throw new Error(`missing --${key}`);
   if (mode !== "plan" && !/^[a-f0-9]{12}$/.test(options.runId))
     throw new Error("run id must be 12 lowercase hex characters");
+  if (options.program !== undefined && !["v4", "v5"].includes(options.program))
+    throw new Error("unknown program");
   return options;
 }
 
@@ -141,9 +144,12 @@ async function completeLists(transport, keep) {
 export async function main(args, deps = {}) {
   const options = parse(args),
     { mode, runId } = options;
+  const cells = options.program === "v5" ? CELLS_V5 : CELLS;
+  const judge = options.program === "v5" ? judgeRunV5 : judgeRun;
+  const count = options.program === "v5" ? requestCountV5 : requestCount;
   const print = deps.print ?? ((value) => console.log(JSON.stringify(value)));
   if (mode === "plan") {
-    print({ cells: CELLS.length, scheduledRequests: requestCount(), caps: CAPS });
+    print({ cells: cells.length, scheduledRequests: count(), caps: CAPS });
     return 0;
   }
   if (mode === "local") {
@@ -154,8 +160,14 @@ export async function main(args, deps = {}) {
         params,
         faults: new Map(Object.entries(faults).map(([index, kind]) => [Number(index), kind])),
       });
-    const result = await createRecorder({ runId, clock, transport, journal: { write() {} } }).run();
-    const { answers, invalid } = judgeRun(result.records);
+    const result = await createRecorder({
+      runId,
+      clock,
+      transport,
+      cells,
+      journal: { write() {} },
+    }).run();
+    const { answers, invalid } = judge(result.records);
     print({
       stopped: result.stopped,
       sent: result.sent,
@@ -248,7 +260,7 @@ export async function main(args, deps = {}) {
       execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
     const startedAt = new Date((deps.now ?? Date.now)()).toISOString();
     const journal = createJournal(out, runId);
-    const recorder = createRecorder({ runId, transport, clock, journal, beforeCell });
+    const recorder = createRecorder({ runId, transport, clock, journal, beforeCell, cells });
     let signaled = false;
     const onSignal = () => {
       if (!signaled) {
@@ -260,7 +272,7 @@ export async function main(args, deps = {}) {
     process.on("SIGTERM", onSignal);
     try {
       const result = await recorder.run();
-      const judged = judgeRun(result.records);
+      const judged = judge(result.records);
       const output = {
         runId,
         packetSha256,

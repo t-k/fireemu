@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { CELLS, MIN_GAP_MS, planned, requestCount } from "./program.mjs";
+import { CELLS_V5, requestCountV5 } from "./program-v5.mjs";
 import { buildRequest, setupRequests } from "./requests.mjs";
 import { isOwned } from "./names.mjs";
 import { CAPS } from "./runner.mjs";
@@ -106,4 +107,121 @@ test("the program is frozen: its canonical JSON has the pinned digest", async ()
 
 test("the minimum gap between two requests is 50 ms", () => {
   assert.equal(MIN_GAP_MS, 50);
+});
+
+test("v5 keeps only the two calibration cells from v4 and schedules every repeat", () => {
+  assert.deepEqual(CELLS_V5.slice(0, 2), CELLS.slice(0, 2));
+  const ids = ["C0d", "C0f"];
+  for (let i = 1; i <= 8; i++) ids.push(`DA${i}`);
+  for (let i = 0; i < 16; i++) ids.push(`N1${String.fromCharCode(97 + i)}`);
+  for (const age of [4, 7, 13]) for (const repeat of ["a", "b"]) ids.push(`E200-${age}${repeat}`);
+  for (const edge of [25, 30, 35, 40, 45, 50])
+    for (const repeat of ["a", "b"]) ids.push(`W${edge}${repeat}`);
+  assert.deepEqual(
+    CELLS_V5.map((c) => c.id),
+    ids,
+  );
+  assert.equal(new Set(ids).size, 44);
+});
+
+test("v5 has exactly one probe per cell, the specified anchors, and a final delete for each created X", () => {
+  const neverNames = new Set();
+  for (const cell of CELLS_V5.slice(2)) {
+    assert.equal(cell.conn, "dedicated");
+    const probes = cell.steps.filter((s, i) => s.op === "getSub" && i > cell.arm);
+    assert.equal(probes.length, 1, cell.id);
+    let expected;
+    if (cell.id.startsWith("DA")) {
+      const age = [6000, 7500, 9000, 10500][Math.floor((Number(cell.id.slice(2)) - 1) / 2)];
+      expected = ["putSub", "deleteSub", "deleteSub", "putSub", "getSub", "deleteSub"];
+      assert.equal(cell.arm, 2);
+      assert.deepEqual(probes[0].since, [2, age]);
+    } else if (cell.id.startsWith("N1")) {
+      const age = [3200, 3500, 3800, 4100, 4400, 4700, 5000, 5500][
+        Math.floor((cell.id.charCodeAt(2) - 97) / 2)
+      ];
+      expected = ["getSub", "getSub"];
+      assert.equal(cell.arm, 0);
+      assert.ok(cell.steps.every((s) => s.target === "M2"));
+      assert.deepEqual(probes[0].since, [0, age]);
+      neverNames.add(buildRequest(cell.steps[0], { runId: RUN_ID, cellId: cell.id }).path);
+    } else if (cell.id.startsWith("E200")) {
+      expected = ["putSub", "getSub", "deleteSub", "getSub", "putSub", "getSub", "deleteSub"];
+      assert.equal(cell.arm, 3);
+      assert.deepEqual(cell.steps[3].since, [1, Number(cell.id.slice(5, -1)) * 1000]);
+      assert.equal(probes[0].after, 50);
+    } else {
+      expected = ["getSub", "putSub", "getSub", "deleteSub"];
+      assert.equal(cell.arm, 0);
+      assert.deepEqual(probes[0].since, [0, 10000 + Number(cell.id.slice(1, -1)) * 10]);
+    }
+    assert.deepEqual(
+      cell.steps.map((s) => s.op),
+      expected,
+      cell.id,
+    );
+    if (!cell.id.startsWith("N1")) {
+      assert.deepEqual(cell.steps.at(-1), { op: "deleteSub", target: "X", after: 50 });
+      assert.ok(cell.steps.every((s) => s.target === "X"));
+    }
+    for (const [i, step] of cell.steps.entries()) {
+      if (step.since) assert.ok(step.since[0] < i, cell.id);
+      assert.ok(!step.op.includes("Snap"));
+      const request = buildRequest(step, { runId: RUN_ID, cellId: cell.id });
+      for (const name of request.targets) assert.ok(isOwned(name, RUN_ID), name);
+      if (step.op === "putSub") assert.equal(step.topic, "T");
+    }
+  }
+  assert.equal(neverNames.size, 16);
+});
+
+test("v5 fits the unchanged request reserve, resource budget and 35 minute schedule with 9 s creates and 3 s deletes", () => {
+  assert.equal(requestCountV5(), 177);
+  assert.ok(requestCountV5() <= 230);
+  assert.ok(
+    setupRequests({ runId: RUN_ID }).length + requestCountV5() <=
+      CAPS.requests - CAPS.cleanupRequests,
+  );
+  assert.equal(CAPS.requests, 260);
+  assert.equal(CAPS.wallMs, 45 * 60 * 1000);
+  let duration = 18000; // Conservatively allow two 9 s setup requests.
+  let live = 1; // The setup source subscription.
+  let maximum = live;
+  for (const cell of CELLS_V5) {
+    const starts = [];
+    let done = 0;
+    let created = false;
+    for (const [i, step] of cell.steps.entries()) {
+      const start = Math.max(
+        i ? done + MIN_GAP_MS : 0,
+        step.at ?? 0,
+        step.after === undefined ? 0 : done + step.after,
+        step.since ? starts[step.since[0]] + step.since[1] : 0,
+      );
+      starts.push(start);
+      // Other requests get their full existing timeout, including the calibration pull.
+      const latency =
+        step.op === "putSub"
+          ? 9000
+          : step.op === "deleteSub"
+            ? 3000
+            : step.op === "pullSub"
+              ? 25000
+              : 10000;
+      done = start + latency;
+      if (step.op === "putSub") {
+        created = true;
+        live++;
+      }
+      maximum = Math.max(maximum, live);
+      if (step.op === "deleteSub" && created) {
+        created = false;
+        live--;
+      }
+    }
+    duration += done;
+    assert.equal(live, 1, cell.id);
+  }
+  assert.ok(maximum <= 26);
+  assert.ok(duration <= 35 * 60 * 1000, String(duration));
 });

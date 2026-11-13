@@ -104,16 +104,16 @@
   ],
   "digests": {
     ".github/workflows/quint.yml": {
-      "kind": "yaml-workflow",
-      "value": "86db2c9036e7a52d1cac2f21fd3347ae2bba62917221042fdef7d6745dcb77df"
+      "kind": "sha256",
+      "value": "2e641886ee0d832f95e570f33eead54964a6151bf14c2fc54d5fe10cb8d4cc53"
     },
     "conformance/fixtures/firestore/transaction-read-set-abort.json": {
       "kind": "json-semantic",
-      "value": "a5be5ad4506d639508cee9cc985e00870f5db1a756989d2e76eb6f85db7a3040"
+      "value": "f793dccffe2bfeddcae7d4a5f1c8b316102d46d71d57ca1abab0547caebb61f9"
     },
     "conformance/fixtures/functions/concurrent-conditional-lock.json": {
       "kind": "json-semantic",
-      "value": "8886edd63b3306aa5af2e58ac9690421866773000ad72d374acb473ea3f72eed"
+      "value": "6ba4c9202ca18cc339e49ad9ce572ea3b7351d9e727d3892bae640e320e03459"
     },
     "conformance/functions/index.js": {
       "kind": "sha256",
@@ -133,39 +133,39 @@
     },
     "crates/fireemu-core-firestore/src/field_path.rs": {
       "kind": "rust-semantic",
-      "value": "db81abe4a0feceefdd9412cded5a30c9c4f252bd54997a7cc3d4b24bb5ce3ec0"
+      "value": "d2aa32885c0f4e612118cf517898a6f30c862f0eccd574cad9ec67e3fe8ca8e6"
     },
     "crates/fireemu-core-firestore/src/index.rs": {
       "kind": "rust-semantic",
-      "value": "a2d17009b1f674139a10117db69032397ab7b1763a14df0a998ff2fdfa9165c1"
+      "value": "12a0e588357f3a9930a9e0b309cbf1259cd710f54c6f729c20dd1bb1648d3bd9"
     },
     "crates/fireemu-core-firestore/src/index_usage.rs": {
       "kind": "rust-semantic",
-      "value": "a91e8726c40ed5d77444695ee17bb0a571426dab64d6da94f7495c3728edf1ac"
+      "value": "84b7e15b28806ae7d8a256bd7603de60bfd6639a9542c6b3e244bd1360478b6a"
     },
     "crates/fireemu-core-firestore/src/lib.rs": {
       "kind": "rust-semantic",
-      "value": "661e9b8d19e57f0e51ac2ab79d87f3dea4acbb9545307c215b3ca388c450e83f"
+      "value": "c0fcad99c36df4565cd0a23645b3234176fb007537f6bc54e8009b24f19092f1"
     },
     "crates/fireemu-core-firestore/src/limits.rs": {
       "kind": "rust-semantic",
-      "value": "a9a4f5672d765c86e9fa9d7aca2721839c6ece45f44390693d0e81d8170b357b"
+      "value": "107396888dbc34a0126d01faefd960b1a6e4de2fea2a2f1a2ef8a3a8caac39c9"
     },
     "crates/fireemu-core-firestore/src/path.rs": {
       "kind": "rust-semantic",
-      "value": "807ddeb24e0d23bc4159b624515430d66765ee0d3e8b8a5d8983dbef91665f39"
+      "value": "c537a3d0a5328fdc96887b726e94cf9e3f5a760175bf7294d6528437dd3fa2d2"
     },
     "crates/fireemu-core-firestore/src/pipeline.rs": {
       "kind": "rust-semantic",
-      "value": "0db5a364a1b398e7f456f6d1c00452eb62feb4c2276529a79ef0fbbf14b14d02"
+      "value": "1a6fe165a8c186e0970ea5b207fe9caae18a65e14def1d150107607fdada8ede"
     },
     "crates/fireemu-core-firestore/src/pipeline_exec.rs": {
       "kind": "rust-semantic",
-      "value": "4eb9df6488d28c1b6bddc20099de4a5cf9f1b021f68897ed1657223e4978e127"
+      "value": "189d87db71460f13060a8e53c41f8360760d1f27e3602cb0176dd73140705d59"
     },
     "crates/fireemu-core-firestore/src/pipeline_exec/compare_tests.rs": {
       "kind": "rust-semantic",
-      "value": "184c91ce47164b2efc44d12b190de652161a6c9fd8189ec56fe19f38926738e9"
+      "value": "7add810b0e967e8df1ca9ad460ea3ac53d093752dcf2fa3dac4bead57056a96f"
     },
     "crates/fireemu-core-firestore/src/pipeline_exec/document_argument.generated.tsv": {
       "kind": "sha256",
@@ -173,7 +173,7 @@
     },
     "crates/fireemu-core-firestore/src/pipeline_exec/logic.rs": {
       "kind": "rust-semantic",
-      "value": "20359dda257713540ce252826dbf53d3207a8b01c2da0b8c6f6eae3f728cc327"
+      "value": "c8d0bbf0f7b6e48526737084fabcb8de128f2afacb920033979c7c0ac6b427fa"
     },
     "crates/fireemu-core-firestore/src/pipeline_exec/official_compare.json": {
       "kind": "json-semantic",
@@ -181,7 +181,7 @@
     },
     "crates/fireemu-core-firestore/src/pipeline_exec/official_compare.rs": {
       "kind": "rust-semantic",
-      "value": "a8b8a9cbb38595d673d66b69b71e1ae2c117338c929e0c0be726d487b37b45a7"
+      "value": "1f3ce8086890083af7c3259e8dfcfa68d1e535f52da1b5e92931e722b5450220"
     },
     "crates/fireemu-core-firestore/src/pipeline_exec/regex_port.generated.tsv": {
       "kind": "sha256",
@@ -193,19 +193,19 @@
     },
     "crates/fireemu-core-firestore/src/pipeline_exec/scalar.rs": {
       "kind": "rust-semantic",
-      "value": "0e8f9ff2cb5d8072d5496712bc53ddc69ee3cd6169dc5b6bfbed1b7f0f5141b4"
+      "value": "a32ea50cb3de9a772ebca36334aea4a8b6c415876bdbe51e615c8f5ebafadfeb"
     },
     "crates/fireemu-core-firestore/src/pipeline_exec/scalar_tests.rs": {
       "kind": "rust-semantic",
-      "value": "1de7e473229d195d01d1c6dedcd869dd19fd6b7c4bc1197f08b4b547d0e46dc1"
+      "value": "663cf3a84e2ea6f3735ec3aaf81b4e0ad3707211ca5bea58648fbf54c2399f36"
     },
     "crates/fireemu-core-firestore/src/pipeline_exec/stage_tests.rs": {
       "kind": "rust-semantic",
-      "value": "235ec7367c23396f1180db7f0e97f102b7f2fca7afb444880377b91c3bfdf00a"
+      "value": "bd73db7626a9149297c1fb1c4ecd68edbab6f505f9b31b15814855f7ca417eca"
     },
     "crates/fireemu-core-firestore/src/pipeline_exec/tests.rs": {
       "kind": "rust-semantic",
-      "value": "d37662ea50e591fa2dbe3049758faa048ff8c49fb00cf1e2ceb439a3630e756d"
+      "value": "24788238fa09d464c38d42593ead1eaec7aa330e904c58598d651e70da453675"
     },
     "crates/fireemu-core-firestore/src/pipeline_exec/vector_scalars.generated.tsv": {
       "kind": "sha256",
@@ -213,31 +213,31 @@
     },
     "crates/fireemu-core-firestore/src/query.rs": {
       "kind": "rust-semantic",
-      "value": "94d6e8b7686cfcc62873b914d23de944635f43941263a9d54aa4ecbe9d6f9300"
+      "value": "f04f10249a069708380bab29ef30235d5add114c773d8b15afaa081ba949e818"
     },
     "crates/fireemu-core-firestore/src/size.rs": {
       "kind": "rust-semantic",
-      "value": "064119a4f044031559956a1324bf8521a01716e9d67bdf905656ec4863a7d916"
+      "value": "4ad91f9bdd994f253af16ff4d90d1c7d2da2ac357b93122558be66821401c0ff"
     },
     "crates/fireemu-core-firestore/src/store.rs": {
       "kind": "rust-semantic",
-      "value": "14b0edbcf1f393bea936dedbeacef90aea8bf12066ca5e6cf66830f5a8f553fc"
+      "value": "f8af249b02daaf8f20443d416532ef38483bbb94833a1ffd658cbafb029fffd1"
     },
     "crates/fireemu-core-firestore/src/text_index.rs": {
       "kind": "rust-semantic",
-      "value": "fa044f80901c8707d1cbb40372eec4977f5cd99697ce32f2b54ad88eee88c578"
+      "value": "3d1a639f685ff1a3e60ffe14f08adbb03509befa535e03861b8878f7648999f0"
     },
     "crates/fireemu-core-firestore/src/text_search.rs": {
       "kind": "rust-semantic",
-      "value": "32c88c9f6602de92440e490722b06a165a654e5169d628ec06bc09977a381769"
+      "value": "201a40d76fffaae192374e2a61f14419133a3c79857ec16b6847797250477924"
     },
     "crates/fireemu-core-firestore/src/ttl.rs": {
       "kind": "rust-semantic",
-      "value": "63fe1dd10e8b9035007fde140e781dc4c6bcb20b9059aab5225312e4728380bf"
+      "value": "866d829e05206d2ce887f3df16b542f8f9093b9fe59d4906a9e1b959a7d0f15d"
     },
     "crates/fireemu-core-firestore/src/value.rs": {
       "kind": "rust-semantic",
-      "value": "d67d4b94e3415968bf88d557bcd69b4315c1b698c99e1d726f9fcf626f0ecdd4"
+      "value": "226c545e85010421795a8b65131d56fbd5f7928bbb3d3ad12aaa7c2eeb6c7ca3"
     },
     "crates/fireemu-core-limits/Cargo.toml": {
       "kind": "sha256",
@@ -245,43 +245,43 @@
     },
     "crates/fireemu-core-limits/src/evaluate.rs": {
       "kind": "rust-semantic",
-      "value": "d1f8c67b0554ad74e5e229919097fb7a7cf43e4dd1b0a0e8a237b8ab8a792c05"
+      "value": "148444a668453f37775d79bc82249c0e3f377a620661c940493dd9eb6ace4e35"
     },
     "crates/fireemu-core-limits/src/generated/firebase_auth_2026_08_30.rs": {
       "kind": "rust-semantic",
-      "value": "1e8bbf6ac0ddfb4522063366fdb71703dde89f44c67ef408bda46af12763a55b"
+      "value": "6aebfbfc1d661fa0e23b4c603add13474f7422eb0117a99d4a0166c4b4e0f4ce"
     },
     "crates/fireemu-core-limits/src/generated/firebase_rules_2026_08_25.rs": {
       "kind": "rust-semantic",
-      "value": "bd72801f2466e16581c74da9e5a1bbd159b7e99d2e6894581c4ca0773490f78a"
+      "value": "09cbba81286f045a31f3c72870eaf0523ccd1d354da9e0c95fe0b793848721a5"
     },
     "crates/fireemu-core-limits/src/generated/firestore_enterprise_native_2026_08_27.rs": {
       "kind": "rust-semantic",
-      "value": "13cff68eabbb5569aa4544c6404f72891316d4ae47f5f6a783fbdfc0f5d7f377"
+      "value": "2cef7b29b06af7a5314979badde23f906820cd18d3bfbeb5abce52279c5b4e27"
     },
     "crates/fireemu-core-limits/src/generated/firestore_standard_2026_08_25.rs": {
       "kind": "rust-semantic",
-      "value": "2974c77a1c0d6161fc511a9a6dda26b6cc8eb8544f2678679d8d53c8b9b0529c"
+      "value": "0075521f0a34c07ccd757ca66137d7c317b78746d1fcd27e1b0c890ec62704c4"
     },
     "crates/fireemu-core-limits/src/generated/firestore_standard_query_2026_08_25.rs": {
       "kind": "rust-semantic",
-      "value": "28e9b45c6749324a6936ae326b433c0e442cc7f81970a8cf162debe4e4611423"
+      "value": "87cf712fd2a182a952fc99b169b085456988502f879e5fc008ed0858c722192d"
     },
     "crates/fireemu-core-limits/src/generated/mod.rs": {
       "kind": "rust-semantic",
-      "value": "76c09d75d874d1ea23aad2a00d96dc7943e27fcd801ed445d33d22a12578fbd6"
+      "value": "fde2a1475e80de48ada94b90f03833399c03fb63c05aa2b4c585d381b372a981"
     },
     "crates/fireemu-core-limits/src/lib.rs": {
       "kind": "rust-semantic",
-      "value": "b5682e644382ab48691c5cdd02531561337eb502cb22aa6d89484cd76fb095d0"
+      "value": "2a090b154d8cd856df82eeeb19cd2d68f04ff87ecff259df5760eec394a08679"
     },
     "crates/fireemu-core-limits/src/model.rs": {
       "kind": "rust-semantic",
-      "value": "8720e0731f5981f3b68824b95f649c7a6ab6e784269fd08ceaaf4e100782cb7f"
+      "value": "a7ad26e94d2d8280bfdfebf4c7cb79b1ac186549ef3364b77b10ffca9f94a3a8"
     },
     "crates/fireemu-core-limits/src/plan.rs": {
       "kind": "rust-semantic",
-      "value": "672d53fa74546e20dc846f27dac5b7a213e28ecb82e228c8dc851eec57ed31d0"
+      "value": "a45df7782e27332ed0d7c02245bd2ab421fcf648760685309e105186e974f8cf"
     },
     "crates/fireemu-core-types/Cargo.toml": {
       "kind": "sha256",
@@ -289,47 +289,47 @@
     },
     "crates/fireemu-core-types/src/admission.rs": {
       "kind": "rust-semantic",
-      "value": "85f24a53be9d6c2811d3291efb5a2dca1c38b6fa37f5421abce86d061ac819e6"
+      "value": "7b47b01aab6c2a4d27a0dcfef2e37cc5b9f573c14b4edf501c01aeb4d6ab5e5f"
     },
     "crates/fireemu-core-types/src/codec.rs": {
       "kind": "rust-semantic",
-      "value": "7d6fb8e4561845f598975a62e70b6128c17f46ed0ce138abb87b627cd64d1a3f"
+      "value": "a46310d3157e8d62197142a124aef9da0d93bc59e40b797489988c36e5b3d52e"
     },
     "crates/fireemu-core-types/src/determinism.rs": {
       "kind": "rust-semantic",
-      "value": "dfbcf23e5cb3e5e3792c47bbad60bdab9062fa1482ce3027bc1093bf53a132ef"
+      "value": "17df3c6d1871330201f3a2462d68cf7bee8fb19fcb524c56e69d6ed26faf8e34"
     },
     "crates/fireemu-core-types/src/edition.rs": {
       "kind": "rust-semantic",
-      "value": "901ae26fd198e875a0d52ddf30c50bcff506ecebd50b74623f5f20fddea2e831"
+      "value": "c51112617c63e55c018254fd5ecc4381808600d856cc0ad1d3b42f3b17683553"
     },
     "crates/fireemu-core-types/src/hash.rs": {
       "kind": "rust-semantic",
-      "value": "86abc2132c7581cad88c0248ebc14c43e8322466d3fc7d0af5fe2b3ad178f078"
+      "value": "bf67cb8dbe3f0a2f781b62f009196f1b18b266beda416508acaaa58fb17d9a5e"
     },
     "crates/fireemu-core-types/src/ids.rs": {
       "kind": "rust-semantic",
-      "value": "1e8ad575fab1605d1b019e273283e8c8c11a95b1ade90cbac1faff69094783ae"
+      "value": "6d39d3c6371e6c04130f305561a6785152ded0c6e0560ded08a43ce5eb6cea06"
     },
     "crates/fireemu-core-types/src/json.rs": {
       "kind": "rust-semantic",
-      "value": "3eb1f2e8ea6c397510e44a977dbe4962517992ff649d9011df1cd37468918eab"
+      "value": "3c4d982f704b82c3269d5d28ed5f94439d3417ab05b5a394ea7f26f2cce77caa"
     },
     "crates/fireemu-core-types/src/lib.rs": {
       "kind": "rust-semantic",
-      "value": "b312e2ae431dd3af25478dc9e9569343af33bd00e40a46893a1ac2785faad78b"
+      "value": "547fe8771e1ecc7b3fb96d71c504cdac1ee552a0eac5e2294a5af66eea1f9f42"
     },
     "crates/fireemu-core-types/src/pubsub_message_id.rs": {
       "kind": "rust-semantic",
-      "value": "91e56deec7e44bf82fa544c3211903dda7352c440deb24af70b0597ab20b0de4"
+      "value": "72efd6a72533b7f6957bc7f7fe7eb0ca488443f07b0b552ea745232a33945d9b"
     },
     "crates/fireemu-core-types/src/resources.rs": {
       "kind": "rust-semantic",
-      "value": "910c41bb5e7fb972376a416e559fbd842b9c47bd0624af083d63c4a2b4bb4998"
+      "value": "bb64e1ed6b7ff9d43c119da7c792e2a5747bced22a4e9560fe99f5c2a951933a"
     },
     "crates/fireemu-core-types/src/time.rs": {
       "kind": "rust-semantic",
-      "value": "de9f4f1bba2d1b515f091456597cfb24185bd8553f656380adfbbe9cf4a71990"
+      "value": "e805be1600deb8083ac62710522b76480d74c4de012f0da24d0478f3e4667e29"
     },
     "rust-toolchain.toml": {
       "kind": "sha256",
@@ -385,47 +385,47 @@
     },
     "verification/quint/src/cargo_authority.rs": {
       "kind": "rust-semantic",
-      "value": "50fcc195bb3e3338f210f56b9a7c6e5aa2ac4d3f6f7be7992efebba0ff10fe5d"
+      "value": "8f6ca9668f1e6fdfd9d2cfc60e8fc7959dbc7b8ef0e5aa8556b474bc3e323e18"
     },
     "verification/quint/src/evidence.rs": {
       "kind": "rust-semantic",
-      "value": "4829ae5091254f3a44838298bcf94747fb820311f1f25c6edd22b6fd48392963"
+      "value": "27f081a1b82b58ff33a6d030ec6a4b16286fd5d82357d6d2e85bfc076bbbf1d2"
     },
     "verification/quint/src/evidence/source_closure.rs": {
       "kind": "rust-semantic",
-      "value": "e930010fca4864f005a97ef1d1df3bace6f20b8314a82c357f18e1b4d2b85d57"
+      "value": "b7b5248cbc2a2acbb120750de3e6ca38a0a872b19d000ba68159b6c77c51e87c"
     },
     "verification/quint/src/lib.rs": {
       "kind": "rust-semantic",
-      "value": "f5667897a6ddd5de9c7414937e1e0179fbe5d3bbdbbdd1170e683fe7271a371b"
+      "value": "ffe78b72f35a533303e2650a4ea19a25558823ae7aa6221f3605160949f5067a"
     },
     "verification/quint/src/main.rs": {
       "kind": "rust-semantic",
-      "value": "32a6b902789dab5dfbcbe9640254b3ef3a91df8186bbfc9a20461dac299f2269"
+      "value": "808e47cb74b9eebb12eefbdb192714aff00038f64118d55684290e298a2838c9"
     },
     "verification/quint/src/model.rs": {
       "kind": "rust-semantic",
-      "value": "d9e07487625a4ddfb75169c3d110aad8b93f8e5ce911ff8d70aa31e9255a75da"
+      "value": "81ce3350fc598910178c3c4febd7217c36e4db9ccc12250c5038060d65e882f5"
     },
     "verification/quint/src/process.rs": {
       "kind": "rust-semantic",
-      "value": "fabca6e955090c25eade7c621f01cd843ea284fb3c6ea81157fecffe2fb8fbe4"
+      "value": "1d90f6052b6b326689e91811b00081e4aee8ffc7d64852a62f481957119a0011"
     },
     "verification/quint/src/publication.rs": {
       "kind": "rust-semantic",
-      "value": "9f497b58efc5df5d436758c7d6a44ed31642625f993c17af881aa3d43267c848"
+      "value": "19c1142f0366eed86c13e9c4913b1ef954aa1d13aedadcf1083b378e9615115c"
     },
     "verification/quint/src/server.rs": {
       "kind": "rust-semantic",
-      "value": "b585c0e60b464eabb5213522c2181de1047b3147104f667b82e035e52946fa61"
+      "value": "37bef7f14cb69f3013a9461d846b989ba71ca10c94651d2d319f62ca0cd62b31"
     },
     "verification/quint/src/transaction_conditional_lock.rs": {
       "kind": "rust-semantic",
-      "value": "c11bd45a5a05fa524edaadc9b58fe997d88f1605f549f4d374ecc2123b65dbc8"
+      "value": "2fb86c79e22146ee0adf79d0f0bebf6a9ef7c6b0b59b675c431894fc4ff9d457"
     },
     "verification/quint/tests/transaction_conditional_lock_connect.rs": {
       "kind": "rust-semantic",
-      "value": "82d1eee867f4ef90bc6c1c4e2a600a44d75ea98aec4481c271a9cf5176188db7"
+      "value": "109fed921c1972df5ea862474ea9dfb646f5be835360b90e3927413dd612b7c4"
     }
   },
   "invariants": [

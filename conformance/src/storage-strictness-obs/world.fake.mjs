@@ -37,7 +37,18 @@ export function createFakeWorld(
       if (buckets.has(target.tempBucket))
         return json(409, { error: { code: 409, message: "Already exists" } });
       const body = JSON.parse(r.body);
-      buckets.set(body.name, body);
+      // Production reports int64 fields as strings and adds the effective time.
+      buckets.set(body.name, {
+        ...body,
+        ...(body.softDeletePolicy
+          ? {
+              softDeletePolicy: {
+                retentionDurationSeconds: String(body.softDeletePolicy.retentionDurationSeconds),
+                effectiveTime: "2026-11-13T00:00:00.000Z",
+              },
+            }
+          : {}),
+      });
       return json(200, body);
     }
     if (!buckets.has(bucket)) return missing();

@@ -101,6 +101,8 @@ export function requests(t, location = "US") {
       name: T,
       location,
       iamConfiguration: { uniformBucketLevelAccess: { enabled: true } },
+      // Hard deletes: no soft-deleted copy of T or its object outlives the run (presend Should 1).
+      softDeletePolicy: { retentionDurationSeconds: 0 },
       cors: CORS,
     }),
     headers: { "content-type": "application/json" },

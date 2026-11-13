@@ -5,7 +5,16 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CORS, requests, targetOf, SEND_FLAG } from "./guard.mjs";
-import { main, observe, readback } from "./run.mjs";
+import {
+  assertNoCredentialOverrides,
+  CLEANUP_RESERVE_MS,
+  corsCleared,
+  exitCode,
+  hardDeletes,
+  main,
+  observe,
+  readback,
+} from "./run.mjs";
 import { createWire } from "./wire.mjs";
 import { createFakeWorld } from "./world.fake.mjs";
 import { settlement } from "./judge.mjs";
@@ -573,7 +582,18 @@ test("preconditions reject independently invalid metadata and CORS answers", asy
     ["W2", { status: 200, body: Buffer.from("{}") }],
     ["R2", { status: 403, body: Buffer.from("{}") }],
     ["R2", { status: 200, body: Buffer.from("invalid") }],
-    ["R2", { status: 200, body: Buffer.from('{"cors":[]}') }],
+    ["R2", { status: 200, body: Buffer.from('{"cors":[{"origin":["*"]}]}') }],
+    ["R2", { status: 200, body: Buffer.from('{"cors":null}') }],
+    ["W2", { status: 200, body: Buffer.from(JSON.stringify({ cors: CORS })) }],
+    [
+      "W2",
+      {
+        status: 200,
+        body: Buffer.from(
+          JSON.stringify({ cors: CORS, softDeletePolicy: { retentionDurationSeconds: "604800" } }),
+        ),
+      },
+    ],
   ]) {
     const { report } = await run({ faults: { [id]: fault } });
     assert.equal(report.completed, false, id);
@@ -620,4 +640,108 @@ test("cleanup does not delete a bucket whose creation was refused", async () => 
     world.log.some((request) => ["K1", "K3", "K-retry"].includes(request.case)),
     false,
   );
+});
+
+test("W1 asks for hard deletes and W2 must report them (presend Should 1)", () => {
+  const body = JSON.parse(requests(target).W1.body);
+  assert.deepEqual(body.softDeletePolicy, { retentionDurationSeconds: 0 });
+  assert.equal(hardDeletes({ retentionDurationSeconds: "0" }), true);
+  assert.equal(hardDeletes({ retentionDurationSeconds: 0 }), true);
+  for (const value of [
+    undefined,
+    null,
+    {},
+    { retentionDurationSeconds: "604800" },
+    { retentionDurationSeconds: "" },
+  ])
+    assert.equal(hardDeletes(value), false, JSON.stringify(value));
+});
+
+test("R2 accepts cors absent or [] and nothing else (presend Should 2)", async () => {
+  assert.equal(corsCleared({ name: "b" }), true);
+  assert.equal(corsCleared({ name: "b", cors: [] }), true);
+  for (const value of [null, [], { cors: null }, { cors: [{}] }, { cors: {} }])
+    assert.equal(corsCleared(value), false, JSON.stringify(value));
+  const { report } = await run({
+    faults: { R2: { status: 200, body: Buffer.from('{"name":"x","cors":[]}') } },
+  });
+  assert.equal(report.completed, true);
+  assert.deepEqual(report.violations, []);
+});
+
+test("the sequence stops at the cleanup reserve and the cleanup still runs (presend Should 3)", async () => {
+  assert.equal(CLEANUP_RESERVE_MS, 5 * 60_000);
+  const world = createFakeWorld(target);
+  let t = 0;
+  const now = () => t;
+  const client = createWire({
+    target,
+    net: world.net,
+    journal: { append() {} },
+    now,
+    deadline: 15 * 60_000,
+  });
+  const sent = [];
+  client.wire = ((wire) => async (request, location) => {
+    sent.push(request.case);
+    if (request.case === "A1") t = 15 * 60_000 - CLEANUP_RESERVE_MS + 1;
+    return wire(request, location);
+  })(client.wire);
+  const report = await observe({ target, client, sleep: async () => {} });
+  assert.equal(report.completed, false);
+  assert.ok(sent.includes("A1") && !sent.includes("A2"), sent.join(" "));
+  assert.ok(sent.includes("K3"), "the cleanup ran after the stop");
+});
+
+test("the exit code is 0 only for a closed run: completed and closureReady, or a closed A2 (presend Should 4)", () => {
+  assert.equal(exitCode({ closureReady: true, completed: true }, false), 0);
+  assert.equal(exitCode({ closureReady: true, completed: false }, false), 1);
+  assert.equal(exitCode({ closureReady: false, completed: true }, false), 1);
+  assert.equal(exitCode({ closureReady: true }, true), 0);
+  assert.equal(exitCode({ closureReady: false }, true), 1);
+});
+
+test("credential override variables are refused one by one (presend Should 4)", () => {
+  assert.doesNotThrow(() => assertNoCredentialOverrides({ PATH: "/bin", HOME: "/h" }));
+  for (const key of ["GOOGLE_APPLICATION_CREDENTIALS", "CLOUDSDK_CONFIG", "CLOUDSDK_CORE_PROJECT"])
+    assert.throws(
+      () => assertNoCredentialOverrides({ PATH: "/bin", [key]: "x" }),
+      /credential overrides refused/,
+    );
+});
+
+test("A2 refuses a journal written in another mode (presend Should 4)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ss-a2-mode-"));
+  try {
+    const header = {
+      phase: "header",
+      mode: "production",
+      runId: target.runId,
+      project: target.project,
+      defaultBucket: target.defaultBucket,
+    };
+    const summary = { phase: "summary", endedAt: 1 };
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync(
+      join(dir, "journal.jsonl"),
+      `${JSON.stringify(header)}\n${JSON.stringify(summary)}\n`,
+    );
+    await assert.rejects(
+      main([
+        "readback",
+        "--project",
+        target.project,
+        "--default-bucket",
+        target.defaultBucket,
+        "--run-id",
+        target.runId,
+        "--out",
+        dir,
+      ]),
+      /A2 mode must match the original run/,
+    );
+    assert.throws(() => readFileSync(join(dir, "readback.jsonl")), /ENOENT/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

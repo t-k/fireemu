@@ -36,6 +36,28 @@ const emptyList = (answer) => {
   );
 };
 
+export const CLEANUP_RESERVE_MS = 5 * 60_000;
+// W2 must show the hard-delete policy the run asked for; production reports int64 values as strings.
+export const hardDeletes = (policy) =>
+  policy !== null &&
+  typeof policy === "object" &&
+  (policy.retentionDurationSeconds === "0" || policy.retentionDurationSeconds === 0);
+// After the PATCH, production may omit the empty field or report it as [] (presend Should 2).
+export const corsCleared = (metadata) =>
+  metadata !== null &&
+  typeof metadata === "object" &&
+  !Array.isArray(metadata) &&
+  (!Object.hasOwn(metadata, "cors") || isDeepStrictEqual(metadata.cors, []));
+export const exitCode = (report, a2) => (report.closureReady && (a2 || report.completed) ? 0 : 1);
+export function assertNoCredentialOverrides(env) {
+  if (
+    Object.keys(env).some(
+      (key) => key === "GOOGLE_APPLICATION_CREDENTIALS" || key.startsWith("CLOUDSDK_"),
+    )
+  )
+    throw new GuardError("credential overrides refused");
+}
+
 export async function observe({
   target,
   client,
@@ -67,7 +89,10 @@ export async function observe({
     violations.push(id);
     if (!target.local || hard) throw new Error("sequence precondition failed");
   };
+  // The sequence stops CLEANUP_RESERVE_MS before the run deadline so the cleanup keeps its time (presend Should 3).
   const executeCase = async (id) => {
+    if (client.deadline - client.now() < CLEANUP_RESERVE_MS)
+      throw new Error("sequence stopped to keep the cleanup reserve");
     const answer = await send(id);
     if (answer.unknown) throw new Error("unknown answer");
     return answer;
@@ -105,7 +130,7 @@ export async function observe({
     const w2Metadata = parse(w2);
     check(
       isSuccess(w2.status) &&
-        (isDeepStrictEqual(w2Metadata?.cors, CORS) ||
+        ((isDeepStrictEqual(w2Metadata?.cors, CORS) && hardDeletes(w2Metadata?.softDeletePolicy)) ||
           (target.local &&
             w2Metadata?.name === target.tempBucket &&
             !Object.hasOwn(w2Metadata, "cors"))),
@@ -119,7 +144,7 @@ export async function observe({
     } else {
       check(isSuccess((await executeCase("R1")).status), "R1");
       const r2 = await executeCase("R2");
-      check(isSuccess(r2.status) && parse(r2) !== null && !Object.hasOwn(parse(r2), "cors"), "R2");
+      check(isSuccess(r2.status) && corsCleared(parse(r2)), "R2");
       for (let i = 3; i <= 5; i++) {
         if (i > 3) await sleep(Math.min(20_000, Math.max(0, client.deadline - client.now())));
         const answer = await executeCase(`R${i}`);
@@ -296,12 +321,7 @@ export async function main(argv = process.argv.slice(2)) {
     let token = "fake-owner";
     let net;
     if (mode === "production") {
-      if (
-        Object.keys(process.env).some(
-          (key) => key === "GOOGLE_APPLICATION_CREDENTIALS" || key.startsWith("CLOUDSDK_"),
-        )
-      )
-        throw new GuardError("credential overrides refused");
+      assertNoCredentialOverrides(process.env);
       try {
         token = execFileSync("gcloud", ["auth", "print-access-token"], {
           encoding: "utf8",
@@ -331,7 +351,7 @@ export async function main(argv = process.argv.slice(2)) {
     const summary = { phase: "summary", mode, runId: target.runId, ...report, endedAt: Date.now() };
     journal.append(summary);
     console.log(JSON.stringify(summary));
-    return report.closureReady && (a2 || report.completed) ? 0 : 1;
+    return exitCode(report, a2);
   } finally {
     restore?.();
     journal.close();

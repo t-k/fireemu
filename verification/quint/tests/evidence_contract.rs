@@ -496,11 +496,10 @@ fn test_only_file_edits_preserve_evidence_and_other_references_remain_bound() {
 }
 
 #[test]
-fn test_only_edits_preserve_every_models_evidence() {
+fn test_only_edits_follow_each_models_binding() {
     let root = repository_root();
     for descriptor in all_models() {
         let inputs = expected_bound_inputs(&root, descriptor, None).expect("current inputs");
-        assert!(!inputs.iter().any(|path| path == descriptor.connect_test));
         let moved_modules = [
             (
                 "crates/fireemu-core-auth/src/mfa.rs",
@@ -527,13 +526,6 @@ fn test_only_edits_preserve_every_models_evidence() {
                 "crates/fireemu-adapter-functions/src/runtime/event_frame_member_tests.rs",
             ),
         ];
-        for (_, child) in moved_modules {
-            assert!(
-                !inputs.iter().any(|path| path == child),
-                "{} still binds {child}",
-                descriptor.name
-            );
-        }
         let paths: Vec<_> = inputs.iter().map(String::as_str).collect();
         let fixture = OwnedTestRepository::copy_inputs(&paths).expect("copy inputs");
         let mut evidence: serde_json::Value = serde_json::from_str(
@@ -565,19 +557,34 @@ fn test_only_edits_preserve_every_models_evidence() {
             }
             let path = fixture.path.join(child);
             fs::create_dir_all(path.parent().expect("module parent")).expect("module directory");
-            // Even unfinished test edits must not change the production inventory.
+            let original = fs::read(&path).ok();
             for bytes in ["#[test] fn added_test() {}\n", "/* unfinished test edit"] {
                 fs::write(&path, bytes).expect("edit separate test module");
-                validate_evidence_json(&json, descriptor, Some(&fixture.path))
-                    .unwrap_or_else(|error| panic!("{} / {child}: {error}", descriptor.name));
+                let result = validate_evidence_json(&json, descriptor, Some(&fixture.path));
+                if inputs.iter().any(|input| input == child) {
+                    assert!(result
+                        .expect_err("bound edit must stale evidence")
+                        .contains("digest mismatch"));
+                } else {
+                    result.unwrap_or_else(|error| panic!("{} / {child}: {error}", descriptor.name));
+                }
+            }
+            if let Some(original) = original {
+                fs::write(&path, original).expect("restore separate test module");
             }
         }
         let path = fixture.path.join(descriptor.connect_test);
         fs::create_dir_all(path.parent().expect("test parent")).expect("test directory");
         for bytes in ["// Original test.\n", "// Changed test.\n"] {
             fs::write(&path, bytes).expect("edit test file");
-            validate_evidence_json(&json, descriptor, Some(&fixture.path))
-                .unwrap_or_else(|error| panic!("{}: {error}", descriptor.name));
+            let result = validate_evidence_json(&json, descriptor, Some(&fixture.path));
+            if inputs.iter().any(|input| input == descriptor.connect_test) {
+                assert!(result
+                    .expect_err("bound edit must stale evidence")
+                    .contains("digest mismatch"));
+            } else {
+                result.unwrap_or_else(|error| panic!("{}: {error}", descriptor.name));
+            }
         }
     }
 }

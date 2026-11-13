@@ -509,64 +509,72 @@ mod tests {
         assert!(changed.contains("normal/build.rs"));
     }
 
+    fn compile_time_guard_fixture() -> (Fixture, crate::model::ModelDescriptor) {
+        let fixture = Fixture::new();
+        let root = fixture.directory.path();
+        let descriptor = crate::model::ModelDescriptor {
+            production_sources: &["root/src/lib.rs"],
+            driver: "root/src/lib.rs",
+            connect_test: "root/src/lib.rs",
+            additional_evidence_inputs: &[
+                "normal/tests/input.txt",
+                "normal/benches/input.txt",
+                "normal/examples/input.txt",
+                "root/tests/input.txt",
+            ],
+            ..*crate::model::model("EventDelivery").expect("registered model")
+        };
+        for path in super::super::COMMON_DIGEST_PATHS
+            .iter()
+            .chain(descriptor.additional_evidence_inputs)
+        {
+            let path = root.join(path);
+            fs::create_dir_all(path.parent().expect("input parent")).expect("input directory");
+            fs::write(path, "").expect("common or explicit input");
+        }
+        for package in ["root", "normal"] {
+            fs::write(
+                root.join(format!("{package}/src/lib.rs")),
+                if package == "root" {
+                    "#[cfg(test)]\nmod probe;\npub fn value() -> &'static str { normal::value() }\n"
+                } else {
+                    "#[cfg(test)]\nmod probe;\npub fn value() -> &'static str { env!(\"VALUE\") }\n"
+                },
+            )
+            .expect("test-only declaration");
+            fs::write(root.join(format!("{package}/src/probe.rs")), "// Probe.\n")
+                .expect("test-only module");
+        }
+        // Unreachable compile-time code must not disable this model's exclusions.
+        fs::write(root.join("unrelated/build.rs"), "fn main() {}\n")
+            .expect("unreachable build script");
+        fs::write(
+            root.join("unrelated/Cargo.toml"),
+            "[package]\n[lib]\nproc-macro = true\n",
+        )
+        .expect("unreachable proc-macro manifest");
+        let authority_path = root.join(super::super::CARGO_AUTHORITY_INPUT);
+        fs::write(
+            &authority_path,
+            serde_json::to_vec(&fixture.authority).expect("serialize authority"),
+        )
+        .expect("authority without build script");
+        let baseline = super::super::expected_bound_inputs(root, &descriptor, None)
+            .expect("inventory without build script");
+        assert!(!baseline.iter().any(|input| input.ends_with("/probe.rs")));
+        for path in descriptor.additional_evidence_inputs {
+            assert!(!baseline.iter().any(|input| input == path));
+        }
+
+        (fixture, descriptor)
+    }
+
     #[test]
     fn reachable_compile_time_code_prevents_all_model_test_only_exclusions() {
         for script in ["tests/build.rs", "build.rs", "src/lib.rs"] {
-            let mut fixture = Fixture::new();
+            let (mut fixture, descriptor) = compile_time_guard_fixture();
             let root = fixture.directory.path();
-            let descriptor = crate::model::ModelDescriptor {
-                production_sources: &["root/src/lib.rs"],
-                driver: "root/src/lib.rs",
-                connect_test: "root/src/lib.rs",
-                additional_evidence_inputs: &[
-                    "normal/tests/input.txt",
-                    "normal/benches/input.txt",
-                    "normal/examples/input.txt",
-                    "root/tests/input.txt",
-                ],
-                ..*crate::model::model("EventDelivery").expect("registered model")
-            };
-            for path in super::super::COMMON_DIGEST_PATHS
-                .iter()
-                .chain(descriptor.additional_evidence_inputs)
-            {
-                let path = root.join(path);
-                fs::create_dir_all(path.parent().expect("input parent")).expect("input directory");
-                fs::write(path, "").expect("common or explicit input");
-            }
-            for package in ["root", "normal"] {
-                fs::write(
-                    root.join(format!("{package}/src/lib.rs")),
-                    if package == "root" {
-                        "#[cfg(test)]\nmod probe;\npub fn value() -> &'static str { normal::value() }\n"
-                    } else {
-                        "#[cfg(test)]\nmod probe;\npub fn value() -> &'static str { env!(\"VALUE\") }\n"
-                    },
-                )
-                .expect("test-only declaration");
-                fs::write(root.join(format!("{package}/src/probe.rs")), "// Probe.\n")
-                    .expect("test-only module");
-            }
-            // Unreachable compile-time code must not disable this model's exclusions.
-            fs::write(root.join("unrelated/build.rs"), "fn main() {}\n")
-                .expect("unreachable build script");
-            fs::write(
-                root.join("unrelated/Cargo.toml"),
-                "[package]\n[lib]\nproc-macro = true\n",
-            )
-            .expect("unreachable proc-macro manifest");
             let authority_path = root.join(super::super::CARGO_AUTHORITY_INPUT);
-            fs::write(
-                &authority_path,
-                serde_json::to_vec(&fixture.authority).expect("serialize authority"),
-            )
-            .expect("authority without build script");
-            let baseline = super::super::expected_bound_inputs(root, &descriptor, None)
-                .expect("inventory without build script");
-            assert!(!baseline.iter().any(|input| input.ends_with("/probe.rs")));
-            for path in descriptor.additional_evidence_inputs {
-                assert!(!baseline.iter().any(|input| input == path));
-            }
 
             let script_path = format!("normal/{script}");
             let source = if script == "src/lib.rs" {

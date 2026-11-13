@@ -762,6 +762,7 @@ export async function record({
       out.burst = {
         anchorMs: anchors.burst + 300_000,
         starts: [],
+        anyAttemptStarts: [],
         firstMs: null,
         countWithin1s: 0,
         countWithin5s: 0,
@@ -836,20 +837,26 @@ export async function record({
   const startsSeen = () => {
     if (out.burst) {
       const distinct = new Map();
+      const anyAttempt = new Map();
       for (const { frame } of allFrames) {
-        if (frame.kind !== "start" || frame.context?.retryCount !== 0 || frame.function !== FNS[0])
-          continue;
+        if (frame.kind !== "start" || frame.function !== FNS[0]) continue;
         if (frame.run !== "tqrun-" + runId || !out.program[frame.case]?.sent) continue;
-        const id = frame.context.id;
+        const id = frame.context?.id;
         if (id !== taskId(runId, frame.case)) continue;
         const startMs = Date.parse(frame.at);
         if (!Number.isFinite(startMs)) continue;
-        if (!distinct.has(id) || startMs < distinct.get(id).startMs)
+        if (!anyAttempt.has(id) || startMs < anyAttempt.get(id).startMs)
+          anyAttempt.set(id, { id, startMs, retryCount: frame.context.retryCount });
+        if (
+          frame.context.retryCount === 0 &&
+          (!distinct.has(id) || startMs < distinct.get(id).startMs)
+        )
           distinct.set(id, { id, startMs, attempt: 0 });
       }
       const starts = [...distinct.values()].toSorted((a, b) => a.startMs - b.startMs);
       Object.assign(out.burst, {
         starts,
+        anyAttemptStarts: [...anyAttempt.values()].toSorted((a, b) => a.startMs - b.startMs),
         firstMs: starts.length ? starts[0].startMs - out.burst.anchorMs : null,
         // Half-open windows measured from the scheduled due time.
         countWithin1s: starts.filter(

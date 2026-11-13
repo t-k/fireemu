@@ -125,6 +125,7 @@ export function createWorld({
   uploadName = null,
   baselineUploads = [],
   logVisibleAfterMs = 0,
+  failBeforeHandler = [],
 } = {}) {
   const FNS = functionsOf(runId, program);
   const w = {
@@ -225,7 +226,12 @@ export function createWorld({
         : { status: "ok" };
       const hold = step.sleepMs ?? 0;
       // A delivery that outlasts the dispatch deadline fails with a timeout and is retried like any other failure.
-      const status = hold > deadlineSeconds * 1000 ? "timeout" : (step.status ?? "ok");
+      const beforeHandler = attempt === 0 && failBeforeHandler.includes(data?.case);
+      const status = beforeHandler
+        ? "503"
+        : hold > deadlineSeconds * 1000
+          ? "timeout"
+          : (step.status ?? "ok");
       // This corpus probes the token bucket on tqrate; other roles retain their retry/deadline model.
       if (role === "tqrate") {
         const rate = settings.rateLimits.maxDispatchesPerSecond;
@@ -241,38 +247,40 @@ export function createWorld({
         bucket.at = at;
         buckets.set(fn, bucket);
       }
-      print(
-        fn,
-        at,
-        {
-          kind: "start",
-          at: iso(at),
-          case: data?.case ?? null,
-          request: {
-            method: "POST",
-            path: "/",
-            headers: { "content-type": "application/json", "user-agent": "Google-Cloud-Tasks" },
-            bodyLength: 100,
+      if (!beforeHandler)
+        print(
+          fn,
+          at,
+          {
+            kind: "start",
+            at: iso(at),
+            case: data?.case ?? null,
+            request: {
+              method: "POST",
+              path: "/",
+              headers: { "content-type": "application/json", "user-agent": "Google-Cloud-Tasks" },
+              bodyLength: 100,
+            },
+            context: { id: taskId, retryCount: attempt, executionCount: attempt },
+            step: { status, sleepMs: hold },
           },
-          context: { id: taskId, retryCount: attempt, executionCount: attempt },
-          step: { status, sleepMs: hold },
-        },
-        taskKey,
-      );
-      print(
-        fn,
-        at + hold,
-        {
-          kind: "end",
-          at: iso(at + hold),
-          startedAt: iso(at),
-          case: data?.case ?? null,
-          id: taskId,
-          retryCount: attempt,
-          status,
-        },
-        taskKey,
-      );
+          taskKey,
+        );
+      if (!beforeHandler)
+        print(
+          fn,
+          at + hold,
+          {
+            kind: "end",
+            at: iso(at + hold),
+            startedAt: iso(at),
+            case: data?.case ?? null,
+            id: taskId,
+            retryCount: attempt,
+            status,
+          },
+          taskKey,
+        );
       w.deliveries.push({ fn, taskId, attempt, at });
       if (status === "ok") return;
       const doublings = Math.min(attempt, settings.retryConfig.maxDoublings);

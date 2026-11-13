@@ -182,6 +182,10 @@ test("burst keeps the earlier start when a later duplicate frame appears first i
   const start = result.burst.starts.find((entry) => entry.id === taskId(RUN, "burst-001"));
   assert.ok(start);
   assert.equal(start.startMs, earlierStartMs);
+  const any = result.burst.anyAttemptStarts.find((entry) => entry.id === taskId(RUN, "burst-001"));
+  assert.ok(any);
+  assert.equal(any.startMs, earlierStartMs);
+  assert.equal(any.retryCount, 0);
 });
 
 test("duplicate starts and retry attempts cannot replace a missing attempt-zero start", async () => {
@@ -214,4 +218,75 @@ test("duplicate starts and retry attempts cannot replace a missing attempt-zero 
   assert.equal(result.burst.starts.length, 119);
   assert.equal(result.judged.observationComplete, false);
   assert.ok(result.judged.findings.some((f) => f.kind === "burst-missing-start"));
+});
+
+test("burst-late is caught after the issuance write and before the create is sent", async () => {
+  let world;
+  let creates = 0;
+  const { result, journal } = await go(
+    { program: "burst" },
+    {
+      program: "burst",
+      prepareRequest: async (spec) => {
+        if (spec.method === "POST" && spec.url.endsWith("/tasks") && ++creates === 4)
+          world.advance(300_000);
+      },
+    },
+    (send, w) => {
+      world = w;
+      return send;
+    },
+  );
+  assert.ok(journal.some((row) => row.id === "issue-task-burst-004" && row.state === "issued"));
+  assert.equal(world.calls.filter((c) => /^POST cloudtasks.*\/tasks$/.test(c)).length, 3);
+  assert.deepEqual(Object.keys(result.program), ["burst-001", "burst-002", "burst-003"]);
+  assert.ok(result.judged.findings.some((f) => f.kind === "burst-late"));
+  assert.equal(result.judged.observationComplete, false);
+  assert.ok(world.calls.some((c) => /^DELETE cloudtasks.*\/queues\/[^/]+$/.test(c)));
+});
+
+test("burst records the first handler start even when the first attempt fails before the handler", async () => {
+  const cases = ["burst-001", "burst-002", "burst-003"];
+  const { result } = await go({ program: "burst", failBeforeHandler: cases }, { program: "burst" });
+  assert.equal(result.burst.starts.length, 117);
+  assert.ok(result.judged.findings.some((f) => f.kind === "burst-missing-start"));
+  assert.equal(result.burst.anyAttemptStarts.length, 120);
+  for (const key of cases)
+    assert.equal(
+      result.burst.anyAttemptStarts.find((s) => s.id === taskId(RUN, key)).retryCount,
+      1,
+    );
+  assert.ok(
+    result.burst.anyAttemptStarts.every(
+      (s, i, starts) => i === 0 || starts[i - 1].startMs <= s.startMs,
+    ),
+  );
+});
+
+test("burst checks the last create answer against the anchor", async () => {
+  for (const [delay, late] of [
+    [300_001, true],
+    [299_999, false],
+  ]) {
+    let creates = 0;
+    const { result, world } = await go(
+      {
+        program: "burst",
+        hooks: {
+          [`POST cloudtasks.googleapis.com/v2/${queueName(fn)}/tasks`]: ({ w }) => {
+            if (++creates === 120) w.advance(delay);
+          },
+        },
+      },
+      { program: "burst" },
+    );
+    assert.equal(world.calls.filter((c) => /^POST cloudtasks.*\/tasks$/.test(c)).length, 120);
+    assert.ok(result.program["burst-120"].dispatchedAt < result.burst.anchorMs);
+    assert.equal(result.program["burst-120"].answeredAt, result.burst.anchorMs + (late ? 1 : -1));
+    assert.equal(
+      result.judged.findings.some((f) => f.kind === "burst-late" && f.case === "burst-120"),
+      late,
+    );
+    if (late) assert.equal(result.judged.observationComplete, false);
+  }
 });

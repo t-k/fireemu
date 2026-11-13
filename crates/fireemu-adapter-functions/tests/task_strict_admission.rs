@@ -92,7 +92,11 @@ async fn start_full(
             max_dispatches_per_second: 500.0,
         },
     };
+    let mut other_queue = function.clone();
+    "taskB".clone_into(&mut other_queue.name);
+    "taskB".clone_into(&mut other_queue.entry_point);
     manifest.functions.push(function);
+    manifest.functions.push(other_queue);
     let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
     let runtime = FunctionsRuntime::with_codebases(
         vec![CodebaseSpec {
@@ -723,6 +727,64 @@ async fn emulator_delete_answers_ok_once_for_a_dispatched_task() {
             (404, "Tried to remove a task that doesn't exist")
         );
     }
+    server.abort();
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn emulator_delete_keeps_task_records_in_the_enqueued_queue() {
+    let h = start(
+        "emulator-delete-queue-boundary",
+        FunctionsHttpProfile::Emulator,
+        NameReuse::Retained,
+        60,
+    )
+    .await;
+    let (addr, server) = tasks_listener(&h).await;
+    let queued = body_of(
+        &json!({"name": "projects/demo-app/locations/us-central1/queues/taskB/tasks/cross-queue"}),
+    );
+    assert_eq!(
+        wire(addr, "POST", TASKS, queued.to_string().as_bytes())
+            .await
+            .0,
+        200
+    );
+    h.idle().await;
+    let other = "/projects/demo-app/locations/us-central1/queues/taskB/tasks/cross-queue";
+    assert_eq!(wire(addr, "DELETE", other, b"").await.0, 404);
+    let path = format!("{TASKS}/cross-queue");
+    assert_eq!(wire(addr, "DELETE", &path, b"").await.0, 200);
+    assert_eq!(wire(addr, "DELETE", &path, b"").await.0, 404);
+    server.abort();
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn emulator_reset_discards_task_records() {
+    let h = start(
+        "emulator-delete-after-reset",
+        FunctionsHttpProfile::Emulator,
+        NameReuse::Retained,
+        60,
+    )
+    .await;
+    let (addr, server) = tasks_listener(&h).await;
+    let queued = body_of(&json!({"name": format!("{BASE}/tasks/before-reset")}));
+    assert_eq!(
+        wire(addr, "POST", TASKS, queued.to_string().as_bytes())
+            .await
+            .0,
+        200
+    );
+    h.idle().await;
+    h.runtime.reset();
+    assert_eq!(
+        wire(addr, "DELETE", &format!("{TASKS}/before-reset"), b"")
+            .await
+            .0,
+        404
+    );
     server.abort();
     h.stop().await;
 }

@@ -739,7 +739,7 @@ struct Inner {
     /// Bounded per-function Cloud Tasks queues and conservative retained-data accounting.
     task_scheduler: crate::task_scheduler::TaskScheduler,
     /// Emulator task names retained until their first deletion.
-    emulator_task_names: BTreeSet<String>,
+    emulator_task_names: BTreeSet<(String, String)>,
     /// Supplies the id of a task that did not name itself.
     next_task: u64,
     outbox: Outbox,
@@ -3789,7 +3789,10 @@ impl FunctionsRuntime {
         );
         match admission {
             Ok(()) => {
-                inner.emulator_task_names.insert(task.name.clone());
+                inner.emulator_task_names.insert((
+                    queue.to_owned(),
+                    task.name.rsplit('/').next().unwrap_or_default().to_owned(),
+                ));
             }
             Err(AdmissionError::Duplicate | AdmissionError::QueueFull) => {
                 return Err(refuse(409, "A task with the same name already exists"));
@@ -4009,7 +4012,9 @@ impl FunctionsRuntime {
         })?;
         let mut removed = inner.task_scheduler.delete_pending(queue, &name, now_task);
         if !self.is_strict() {
-            removed |= inner.emulator_task_names.remove(&name);
+            removed |= inner
+                .emulator_task_names
+                .remove(&(queue.to_owned(), id.to_owned()));
         }
         drop(inner);
         if removed {

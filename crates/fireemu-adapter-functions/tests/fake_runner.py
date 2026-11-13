@@ -19,6 +19,7 @@ import http.server
 import json
 import os
 import pathlib
+import socket
 import socketserver
 import sys
 import threading
@@ -38,6 +39,12 @@ if probe := os.environ.get("FIREEMU_FAKE_START_PROBE"):
 
 if os.environ.get("FIREEMU_FAKE_EXIT_BEFORE_HELLO") == "1":
     sys.exit(17)
+
+if barrier := os.environ.get("FIREEMU_FAKE_HELLO_BARRIER"):
+    host, port = barrier.rsplit(":", 1)
+    with socket.create_connection((host, int(port))) as gate:
+        if gate.recv(1) != b"R":
+            sys.exit(17)
 
 
 def send(msg):

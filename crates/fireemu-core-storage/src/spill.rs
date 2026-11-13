@@ -572,6 +572,7 @@ mod fault_injection {
         static FAULT: RefCell<Fault> = RefCell::new(Fault::default());
     }
 
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub(super) fn inject(operation: &'static str, error: io::ErrorKind) {
         FAULT.with(|fault| {
             *fault.borrow_mut() = Fault {
@@ -582,6 +583,7 @@ mod fault_injection {
         });
     }
 
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub(super) fn paths() -> Vec<PathBuf> {
         FAULT.with(|fault| fault.borrow().paths.clone())
     }
@@ -604,6 +606,26 @@ mod fault_injection {
             Some(kind) => Err(io::Error::from(kind)),
             None => call(),
         }
+    }
+}
+
+#[cfg(all(test, not(unix)))]
+mod off_unix_tests {
+    use super::*;
+
+    #[test]
+    fn process_spill_and_sweeping_are_refused_off_unix() {
+        let root = std::env::temp_dir().join("fireemu-spill-off-unix");
+        assert_eq!(
+            ProcessSpill::create(&root).err().unwrap().kind(),
+            io::ErrorKind::Unsupported
+        );
+        assert_eq!(
+            sweep_stale(&root, |_| ProcessState::Absent)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::Unsupported
+        );
     }
 }
 
@@ -803,10 +825,18 @@ mod tests {
         for text in [
             "wrong\npid 42\nstart time\n",
             "fireemu-spill-owner v1\npid 43\nstart time\n",
+            "fireemu-spill-owner v1\npid 42\nstart \n",
+            "fireemu-spill-owner v1\npid 42\nstart time\nextra\n",
         ] {
             fs::write(root.join("fireemu-owner"), text).unwrap();
             assert_eq!(read_marker(&root, 42), None);
         }
+        fs::write(
+            root.join("fireemu-owner"),
+            "fireemu-spill-owner v1\npid 42\nstart time\n",
+        )
+        .unwrap();
+        assert_eq!(read_marker(&root, 42).as_deref(), Some("time"));
         fs::remove_dir_all(&root).unwrap();
     }
 

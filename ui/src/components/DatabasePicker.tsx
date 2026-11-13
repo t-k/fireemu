@@ -83,7 +83,12 @@ const DatabasePicker: Component<{
         )}
       </Show>
       <Show
-        when={catalog.data() && !catalog.loading() && !catalog.data()!.includes(props.database)}
+        when={
+          catalog.data() &&
+          !catalog.loading() &&
+          !catalog.error() &&
+          !catalog.data()!.includes(props.database)
+        }
       >
         <p role="status">{t("firestore.databaseMissing", { name: props.database })}</p>
       </Show>

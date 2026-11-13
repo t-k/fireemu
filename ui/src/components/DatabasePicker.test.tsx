@@ -74,3 +74,16 @@ it("refreshes the catalog when selecting a database created externally", async (
   );
   expect(view.queryByText(/does not exist/)).toBeNull();
 });
+
+it("does not assert absence from a stale catalog after refresh fails", async () => {
+  vi.mocked(api.listDatabases)
+    .mockReturnValueOnce(okAsync(["(default)"]))
+    .mockReturnValue(errAsync({ status: 500, message: "offline" }));
+  const view = render(() => (
+    <DatabasePicker project="p" session="default" database="missing" onSelect={() => {}} />
+  ));
+  await waitFor(() => expect(view.getByText(/does not exist/)).toBeTruthy());
+  fireEvent.click(view.getByText("Refresh"));
+  await waitFor(() => expect(view.getByText(/Database list unavailable/)).toBeTruthy());
+  expect(view.queryByText(/does not exist/)).toBeNull();
+});

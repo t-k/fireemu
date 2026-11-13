@@ -20,7 +20,8 @@
 //!
 //! A `GET` 200 seven seconds before a 404 exempted it in both v5 runs; results at four and 13
 //! seconds were mixed. DELETE 404 arming and activation for never-created names remain open. The
-//! window edge varies between runs: run 4 missed from 10.25 s, run 3 hit at 10.50 s, and the v4
+//! window edge is not sharp: by the recorder's start-to-start ages run 4 missed every read from
+//! 10.25 s to 10.50 s, run 3 hit at 10.40 to 10.50 s next to misses at the same ages, and the v4
 //! runs hit up to 10.20 s. The deterministic window is a known difference, not a sharp production edge.
 //!
 //! The model is pure: it owns no clock, and every call takes the instant the request started on the
@@ -30,8 +31,9 @@ use std::collections::BTreeMap;
 
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
-/// The window from the arming request's start. The edge varies between runs: run 4 missed from
-/// 10.25 s, run 3 hit at 10.50 s, and the v4 runs hit up to 10.20 s. The model chooses 10.35 s;
+/// The window from the arming request's start. The edge is not sharp: by the recorder's ages run 4
+/// missed every read from 10.25 s to 10.50 s, run 3 hit at 10.40 to 10.50 s next to misses, and the
+/// v4 runs hit up to 10.20 s. The model chooses 10.35 s;
 /// production is nondeterministic in the observed band.
 pub const RECORDED_TTL: LogicalDuration = LogicalDuration::from_millis(10_350);
 

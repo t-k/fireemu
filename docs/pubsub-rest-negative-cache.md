@@ -27,7 +27,7 @@ The link (owner line 2482) waits for a follow-up observation that settles the op
 
 ## Known difference and open questions
 
-- The window edge varies between runs, from before 10.25 s (run 4: every read from 10.25 s missed) to after 10.50 s (run 3: a hit at 10.50 s); the v4 runs hit up to 10.20 s. Production is nondeterministic inside this band. The model uses a deterministic 10.35 s, a known difference.
+- The window edge is not sharp: the edge varies between runs and within a run. By the recorder's own start-to-start ages (the masked files' start times run a few tens of milliseconds later), run 4 missed every window read from 10.25 s to 10.50 s, while run 3 missed at 10.25 to 10.35 s and hit at 10.40, 10.45 and 10.50 s, each next to a miss at about the same age; the v4 runs hit up to 10.20 s. Production is nondeterministic around 10.2 to 10.5 s. The model uses a deterministic 10.35 s, a known difference.
 - DELETE 404 arming remains open: the DA cells were mixed. The model does not arm.
 - Recent-200 exemption at four and 13 seconds remains open: the results were mixed. The model exempts a `GET` 200 within its window.
 - Activation for a never-created name remains open: the N1 cells were mixed. The model arms on any 404.

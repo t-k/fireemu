@@ -244,7 +244,9 @@ fn window_band_contains_hits_and_misses_across_the_follow_up_runs() {
                 if name == "run-4.json" && age >= 10_250.0 {
                     assert!(!hit, "{name} {cell}: hit at {age} ms");
                 }
-                if (10_250.0..=10_510.0).contains(&age) {
+                // Ages here come from the masked start times, a few tens of ms after the recorder's own ages;
+                // the band reaches run 3's W50 hits (about 10.53 s and 10.59 s in these times).
+                if (10_250.0..=10_600.0).contains(&age) {
                     if hit {
                         hits += 1;
                     } else {

@@ -45,6 +45,7 @@ libc = "0.2"
 rustix = { version = "1", features = ["fs", "process"] }
 zeroize = "1"
 cap-std = "=4.0.3"
+cap-fs-ext = "=4.0.3"
 regex = "=1.13.1"
 md-5 = "=0.10.6"
 sha2.workspace = true

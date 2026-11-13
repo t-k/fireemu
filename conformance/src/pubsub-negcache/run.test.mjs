@@ -608,3 +608,81 @@ test("a2 of a run whose summary is missing says where to rebuild it from", async
     new RegExp(`summary-${id}.json is missing.*capture-${id}.jsonl`),
   );
 });
+
+test("program selection defaults to v4, selects v5 for plan/local, and refuses unsupported programs", async () => {
+  for (const [args, cells, requests] of [
+    [[], 33, 200],
+    [["--program", "v4"], 33, 200],
+    [["--program", "v5"], 44, 177],
+  ]) {
+    let output;
+    assert.equal(
+      await main(["plan", ...args], {
+        print: (v) => {
+          output = v;
+        },
+      }),
+      0,
+    );
+    assert.equal(output.cells, cells);
+    assert.equal(output.scheduledRequests, requests);
+  }
+  let output;
+  assert.equal(
+    await main(["local", "--run-id", id, "--program", "v5"], {
+      print: (v) => {
+        output = v;
+      },
+    }),
+    0,
+  );
+  assert.equal(output.closureReady, true);
+  assert.deepEqual(output.invalid, {});
+  assert.equal(output.answers.deleteArms, "no");
+  assert.ok(output.answers.windowEdge);
+  await assert.rejects(main(["plan", "--program", "v6"]), /unknown program/);
+  await assert.rejects(main(["plan", "--program"]), /incomplete option/);
+  await assert.rejects(main(["plan", "--program", "v5", "--program", "v4"]), /duplicate option/);
+});
+
+test("record selects v5 with the existing injected world, journal and cleanup", async (t) => {
+  const root = fixture(t);
+  const clock = virtualClock();
+  const transport = createWorld({ clock });
+  let output;
+  const code = await main(
+    [
+      "record",
+      "--run-id",
+      id,
+      "--out",
+      "v5",
+      "--lock",
+      "lock",
+      "--packet",
+      "packet",
+      "--program",
+      "v5",
+    ],
+    {
+      root,
+      env: {},
+      token: "fake",
+      sourceHead: "test",
+      clock,
+      transport,
+      print: (v) => {
+        output = v;
+      },
+    },
+  );
+  assert.equal(code, 0);
+  assert.equal(output.records.length, 44);
+  assert.equal(output.records[2].id, "DA1");
+  assert.equal(output.closureReady, true);
+  assert.ok(Object.values(transport.state).every((resources) => resources.size === 0));
+  const saved = JSON.parse(fs.readFileSync(path.join(root, "v5", `summary-${id}.json`), "utf8"));
+  assert.deepEqual(saved.answers, output.answers);
+  assert.deepEqual(saved.invalid, {});
+  assert.equal(saved.answers.calibration.latencyClassesHold, true);
+});

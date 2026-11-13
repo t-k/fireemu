@@ -1,12 +1,12 @@
 # Pub/Sub REST negative cache
 
-What production does, what two recordings settle, and what fireemu reproduces (`pubsub.restNegativeCache`).
+What production does, what four recordings settle, and what fireemu reproduces (`pubsub.restNegativeCache`).
 
 ## Source
 
-Two recordings of the observation packet `PUBSUB-NEGCACHE` on a disposable Pub/Sub project, 189 requests each, one request in flight at a time, cleaned up afterwards. The masked requests are `conformance/pubsub-negcache/recordings/run-1.json` and `run-2.json`; `combined-runs.json` is the recorder's judgement of the two runs. `crates/fireemu-adapter-pubsub/tests/negative_cache_recordings.rs` replays both through the model.
+Two recordings of the observation packet `PUBSUB-NEGCACHE` on a disposable Pub/Sub project, 189 requests each, one request in flight at a time, cleaned up afterwards. The masked requests are `conformance/pubsub-negcache/recordings/run-1.json` and `run-2.json`; `combined-runs.json` is the recorder's judgement of the two runs. The v5 follow-ups, runs `903d638614a1` and `70602e8b29e0`, are `run-3.json` and `run-4.json`. `crates/fireemu-adapter-pubsub/tests/negative_cache_recordings.rs` replays all four through the model.
 
-## Settled by both runs
+## Recorded rules
 
 | Rule | Cells |
 |---|---|
@@ -16,7 +16,8 @@ Two recordings of the observation packet `PUBSUB-NEGCACHE` on a disposable Pub/S
 | A hit does not re-arm. | V4 |
 | A query string and a snapshot of the same id are separate keys. | K1 |
 | A create whose body `name` equals the URL name does not clear the entry. | N4 |
-| The entry serves for at least 10.2 s from the start of the arming request. | N2a |
+| The entry serves for at least 10.2 s from the start of the arming request (v4 hits up to 10.20 s; the edge after that varies, see below). | N2a |
+| A `GET` 200 seven seconds before the 404 exempted it from arming in both v5 runs. | E200-7a, E200-7b |
 
 Expiry uses the daemon’s logical clock. If the clock is frozen, advance it past the 10.35-second window, use another connection, or disable the cache to recover from a cached 404.
 
@@ -24,11 +25,11 @@ Expiry uses the daemon’s logical clock. If the clock is frozen, advance it pas
 
 The link (owner line 2482) waits for a follow-up observation that settles the open questions below; until then `pubsub.restNegativeCache = "production"` is an explicit opt-in and `productionExact` leaves it off.
 
-## Documented choices (not recorded)
+## Known difference and open questions
 
-- The window edge lies in (10.20 s, 10.50 s]: 11 of 12 reads at 10.50 s or later were forwarded, one `DELETE`-armed entry still answered at 10.50 s. fireemu uses 10.35 s.
-- A `DELETE` that answers 404 does not arm (the recordings disagree on its second read).
-- A `GET` that answered 200 within the window keeps a later 404 from arming (no subscription cell recorded this).
-- A never-created name: production missed at 3.0 s in both runs and then hit at 6.0 s; fireemu arms on any 404, so it answers the 3.0 s read from the entry.
+- The window edge is not sharp: the edge varies between runs and within a run. By the recorder's own start-to-start ages (the masked files' start times run a few tens of milliseconds later), run 4 missed every window read from 10.25 s to 10.50 s, while run 3 missed at 10.25 to 10.35 s and hit at 10.40, 10.45 and 10.50 s, each next to a miss at about the same age; the v4 runs hit up to 10.20 s. Production is nondeterministic around 10.2 to 10.5 s. The model uses a deterministic 10.35 s, a known difference.
+- DELETE 404 arming remains open: the DA cells were mixed. The model does not arm.
+- Recent-200 exemption at four and 13 seconds remains open: the results were mixed. The model exempts a `GET` 200 within its window.
+- Activation for a never-created name remains open: the N1 cells were mixed. The model arms on any 404.
 - A create whose body `name` differs from its URL is not recorded; fireemu clears nothing.
 - The existing-name failed create answers 409 in production, which does not arm.

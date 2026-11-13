@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { CAPS, StopRun, journaledBody } from "./runner.mjs";
 import { CELLS } from "./program.mjs";
+import { CELLS_V5, requestCountV5 } from "./program-v5.mjs";
 import { Refusal } from "./requests.mjs";
 import { prng, record, RUN_ID } from "./support.mjs";
 
@@ -10,6 +11,71 @@ import { prng, record, RUN_ID } from "./support.mjs";
 const FIRST_PUT = 10;
 const empty = (world) => Object.values(world.state).every((m) => m.size === 0);
 const requestsOf = (rows) => rows.filter((r) => r.event === "request");
+
+test("v5 completes within the unchanged caps and cleans up through LISTs, including cached tail deletes", async () => {
+  for (const cachedDeletes of [false, true]) {
+    let peakSubscriptions = 0;
+    let peakTopics = 0;
+    const observation = record({
+      cells: CELLS_V5,
+      params: cachedDeletes ? { served: ["getSub", "getSnap", "deleteSub"] } : {},
+      wrap: async (send, req, meta) => {
+        const answer = await send(req, meta);
+        peakSubscriptions = Math.max(peakSubscriptions, observation.world.state.subscription.size);
+        peakTopics = Math.max(peakTopics, observation.world.state.topic.size);
+        assert.equal(observation.world.state.snapshot.size, 0);
+        return answer;
+      },
+    });
+    const result = await observation.run();
+    assert.equal(result.stopped, null);
+    assert.equal(result.records.length, CELLS_V5.length);
+    assert.ok(result.records.every((r) => r.aborted === null));
+    assert.equal(
+      result.records.reduce((n, r) => n + r.steps.length, 0),
+      requestCountV5(),
+    );
+    assert.ok(result.sent <= CAPS.requests);
+    assert.ok(observation.clock.now() - 1000000 <= CAPS.wallMs);
+    assert.ok(peakSubscriptions <= 26);
+    assert.equal(peakTopics, 1);
+    assert.ok(result.closureReady);
+    assert.deepEqual(result.open, []);
+    assert.ok(empty(observation.world));
+    const cleanup = requestsOf(observation.rows).filter((r) => r.cell === "cleanup");
+    assert.ok(cleanup.some((r) => r.op === "list-subscription"));
+    assert.ok(cleanup.some((r) => r.op === "list-topic"));
+    for (const cell of CELLS_V5.slice(2)) {
+      const rows = requestsOf(observation.rows).filter((r) => r.cell === cell.id);
+      assert.ok(rows.every((r) => r.connPolicy === "dedicated"));
+      if (cell.steps.some((s) => s.op === "putSub")) assert.equal(rows.at(-1).op, "deleteSub");
+      assert.equal(rows.filter((r) => r.op === "getSub" && r.step > cell.arm).length, 1);
+    }
+  }
+});
+
+test("v5 records the delayed probe age when a 9 s create passes the scheduled read", async () => {
+  const cell = CELLS_V5.find((c) => c.id === "DA1");
+  const observation = record({
+    cells: [cell],
+    wrap: async (send, req, meta, clock) => {
+      const answer = await send(req, meta);
+      if (req.create && req.path.includes("/subscriptions/")) {
+        await clock.sleep(4000);
+        answer.headersAt += 4000;
+        answer.completedAt += 4000;
+      }
+      return answer;
+    },
+  });
+  const result = await observation.run();
+  assert.equal(result.stopped, null);
+  assert.ok(result.closureReady);
+  const probe = result.records[0].steps[4];
+  assert.ok(probe.ageMs > 9000);
+  assert.notEqual(probe.ageMs, cell.steps[4].since[1]);
+  assert.equal(result.records[0].steps.filter((s) => s.op === "getSub").length, 1);
+});
 
 test("a clean recording runs every cell, deletes everything and closes", async () => {
   const { run, world, rows } = record();

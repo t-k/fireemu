@@ -1664,7 +1664,7 @@
     },
     "crates/fireemu-core-pubsub/src/rest_negative_cache.rs": {
       "kind": "sha256",
-      "value": "5d33122708678c01c6c41cd3e6e7a493051cdfea1e1be077b633ba12d9aa56ab"
+      "value": "7cd25506ded006be95171558ed3b8a37eca76d2e0f82b40092b865ba9d15b38a"
     },
     "crates/fireemu-core-pubsub/src/state.rs": {
       "kind": "sha256",

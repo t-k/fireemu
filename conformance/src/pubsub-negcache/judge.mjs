@@ -4,8 +4,9 @@
 // `mixed` and no rule is written. A cell whose prerequisite failed (the "absent" name answered 200,
 // the create did not answer 200) contributes nothing.
 
-import { SLOW_MS } from "./answer.mjs";
+import { SLOW_MS, latencyClass } from "./answer.mjs";
 import { CELLS } from "./program.mjs";
+import { CELLS_V5 } from "./program-v5.mjs";
 
 export const WINDOW_EDGE_MS = 9400; // a read earlier than this after the arming start is inside any recorded window
 
@@ -64,6 +65,16 @@ export const EXPECT = {
 
 export function prerequisite(record) {
   if (record.skipped) return { ok: false, reason: `skipped: ${record.skipped}` };
+  const unknown = record.steps.find(
+    (s) =>
+      s.kind === "unknown" ||
+      s.failure ||
+      !Number.isInteger(s.status) ||
+      s.status < 200 ||
+      (s.status >= 300 && s.status < 400) ||
+      s.status >= 500,
+  );
+  if (unknown) return { ok: false, reason: `unknown answer at step ${unknown.i}` };
   const expected = EXPECT[record.id];
   if (!expected) return { ok: false, reason: "no expectation for the cell" };
   if (record.steps.length < expected.length)
@@ -142,14 +153,18 @@ export function judgeRun(records) {
 
   // Q-TTL
   {
-    const rows = need("E1", "E2", "E3", "E4", "N2a", "N2b").map((r) => ({
-      id: r.id,
-      ...window(r, r.arm + 1),
-    }));
+    const candidates = need("E1", "E2", "E3", "E4", "N2a", "N2b");
+    const rows = candidates
+      .filter((r) => r.conn === "dedicated")
+      .map((r) => ({
+        id: r.id,
+        ...window(r, r.arm + 1),
+      }));
     const lastHit = Math.max(-1, ...rows.map((r) => r.lastHit ?? -1));
     const firstMiss = Math.min(Infinity, ...rows.map((r) => r.firstMiss ?? Infinity));
     answers.ttl = {
       cells: rows.map((r) => r.id),
+      excludedCells: candidates.filter((r) => r.conn !== "dedicated").map((r) => r.id),
       lastHitMs: lastHit < 0 ? null : lastHit,
       firstMissMs: Number.isFinite(firstMiss) ? firstMiss : null,
       verdict:
@@ -371,6 +386,14 @@ export function judgeRun(records) {
  * the calibration of the two runs is reported side by side.
  */
 export function combineRuns(first, second) {
+  const runs = [first, second].map((run) => {
+    if (!run.records) return run;
+    const v5 =
+      run.answers?.windowEdge !== undefined ||
+      run.records.some((r) => CELLS_V5.slice(2).some((c) => c.id === r.id));
+    return v5 ? judgeRunV5(run.records) : judgeRun(run.records);
+  });
+  [first, second] = runs;
   const merge = (a, b) => {
     if (
       a !== null &&
@@ -394,6 +417,7 @@ export function combineRuns(first, second) {
     const agree = x.ttl.verdict === y.ttl.verdict;
     out.ttl = {
       cells: [...new Set([...x.ttl.cells, ...y.ttl.cells])],
+      excludedCells: [...new Set([...(x.ttl.excludedCells ?? []), ...(y.ttl.excludedCells ?? [])])],
       lastHitMs,
       firstMissMs,
       verdict: !agree
@@ -414,6 +438,23 @@ export function combineRuns(first, second) {
         : { mixed: [x.rearm.afterSeek, y.rearm.afterSeek] },
     };
   }
+  if (first.records && second.records && x.windowEdge && y.windowEdge) {
+    const combined = judgeRunV5([...first.records, ...second.records]);
+    Object.assign(out, combined.answers);
+    // Pool measured bounds, but never upgrade a question that either run could not answer.
+    if (x.deleteArms === "mixed" || x.deleteArms !== y.deleteArms) out.deleteArms = "mixed";
+    if (!Array.isArray(x.neverCreatedActivationMs) || !Array.isArray(y.neverCreatedActivationMs))
+      out.neverCreatedActivationMs = "mixed";
+    for (const age of [4000, 7000, 13000])
+      if (
+        x.recent200Exempts[age] === "mixed" ||
+        x.recent200Exempts[age] !== y.recent200Exempts[age]
+      )
+        out.recent200Exempts[age] = "mixed";
+    for (const key of ["ttl", "windowEdge"])
+      if (out[key].verdict !== "inconsistent" && x[key].verdict !== y[key].verdict)
+        out[key].verdict = { mixed: [x[key].verdict, y[key].verdict] };
+  }
   if (x?.calibration && y?.calibration) out.calibration = { runs: [x.calibration, y.calibration] };
   // No rule is written unless forwarded GETs classified as slow on both kinds of connection in BOTH
   // runs: otherwise the latency classes (and every hit and miss) do not hold on this network.
@@ -424,6 +465,156 @@ export function combineRuns(first, second) {
     withheld: `latencyClassesHold is ${JSON.stringify(holds)}, not true in both runs: no rule is written`,
     answers: out,
   };
+}
+
+/** Single-read follow-up questions. Recorded status/timing rows need no response bodies. */
+export function judgeRunV5(records) {
+  const invalid = {};
+  const valid = [];
+  const samples = { delete: [], never: [], recent: [], edge: [] };
+  const calibrationRecords = records.filter((r) => ["C0d", "C0f"].includes(r.id));
+  const calibration = judgeRun(calibrationRecords);
+  Object.assign(invalid, calibration.invalid);
+  valid.push(...calibration.valid);
+  for (const record of records) {
+    if (["C0d", "C0f"].includes(record.id)) continue;
+    const cell = CELLS_V5.find((c) => c.id === record.id);
+    if (!cell) {
+      invalid[record.id] = "not a v5 cell";
+      continue;
+    }
+    const group = cell.id.startsWith("DA")
+      ? "delete"
+      : cell.id.startsWith("N1")
+        ? "never"
+        : cell.id.startsWith("E200")
+          ? "recent"
+          : "edge";
+    const expected = {
+      delete: [200, 200, 404, 200],
+      never: [404],
+      recent: [200, 200, 200, 404, 200],
+      edge: [404, 200],
+    }[group];
+    const probeIndex = expected.length;
+    let reason = record.skipped || record.aborted;
+    if (!reason && (record.arm !== cell.arm || record.steps.length !== cell.steps.length))
+      reason = "cell incomplete or wrong arm";
+    for (const [i, s] of record.steps.entries()) {
+      if (
+        s.kind === "unknown" ||
+        s.failure ||
+        !Number.isInteger(s.status) ||
+        s.status < 200 ||
+        (s.status >= 300 && s.status < 400) ||
+        s.status >= 500
+      ) {
+        reason = `unknown answer at step ${i}`;
+        break;
+      }
+      if (s.i !== i || s.op !== cell.steps[i]?.op) reason ??= `unexpected step ${i}`;
+      if (i < expected.length && s.status !== expected[i])
+        reason ??= `step ${i} answered ${s.status}, expected ${expected[i]}`;
+    }
+    const probe = record.steps[probeIndex];
+    if (!Number.isFinite(probe?.ageMs) || probe.ageMs < 0) reason ??= "missing measured age";
+    if (reason) {
+      invalid[record.id] = reason;
+      continue;
+    }
+    valid.push(record.id);
+    const outcome = readOutcome({ ...probe, latency: latencyClass(probe.headersMs) });
+    const requestedMs =
+      group === "recent" ? cell.steps[cell.arm].since[1] : cell.steps[probeIndex].since[1];
+    samples[group].push({
+      id: record.id,
+      conn: record.conn,
+      requestedMs,
+      ageMs: probe.ageMs,
+      outcome: outcome === "ok" ? "miss" : outcome,
+      status: probe.status,
+      ...(group === "recent"
+        ? {
+            since200Ms:
+              record.steps[cell.arm].startedMs +
+              (record.steps[cell.arm].connectMs ?? 0) -
+              record.steps[1].startedMs -
+              (record.steps[1].connectMs ?? 0),
+          }
+        : {}),
+    });
+  }
+  const answers = { calibration: calibration.answers.calibration };
+  const repeats = Math.max(1, calibrationRecords.filter((r) => r.id === "C0d").length);
+  // Buckets retain measured ages, including ambiguous reads, but never invalid cells.
+  for (const [group, rows] of Object.entries(samples)) {
+    const buckets = {};
+    for (const row of rows) (buckets[row.requestedMs] ??= []).push(row);
+    if (group === "delete") {
+      answers.deleteArming = buckets;
+      const inside = rows.filter((r) => r.ageMs <= 10200);
+      answers.deleteArms =
+        rows.length !== 8 * repeats
+          ? "mixed"
+          : rows.every((r) => r.outcome === "miss")
+            ? "no"
+            : inside.length > 0 &&
+                inside.every((r) => r.outcome === "hit") &&
+                rows.every((r) => ["hit", "miss"].includes(r.outcome))
+              ? "yes"
+              : "mixed";
+    } else if (group === "never") {
+      answers.neverCreated = buckets;
+      const hits = rows.filter((r) => r.outcome === "hit").map((r) => r.ageMs);
+      const misses = rows.filter((r) => r.outcome === "miss").map((r) => r.ageMs);
+      const firstHit = Math.min(...hits);
+      const lastMiss = Math.max(...misses);
+      answers.neverCreatedActivationMs =
+        rows.length === 16 * repeats &&
+        rows.every((r) => r.status === 404 && ["hit", "miss"].includes(r.outcome)) &&
+        hits.length > 0 &&
+        misses.length > 0 &&
+        lastMiss < firstHit
+          ? [lastMiss, firstHit]
+          : "mixed";
+    } else if (group === "recent") {
+      answers.recent200Readings = buckets;
+      answers.recent200Exempts = {};
+      for (const age of [4000, 7000, 13000]) {
+        const pair = buckets[age] ?? [];
+        answers.recent200Exempts[age] =
+          pair.length !== 2 * repeats
+            ? "mixed"
+            : pair.every((r) => r.status === 200 && r.outcome === "miss")
+              ? "exempt"
+              : pair.every((r) => r.outcome === "hit")
+                ? "not-exempt"
+                : "mixed";
+      }
+    } else {
+      const sameConnection = rows.filter((r) => r.conn === "dedicated");
+      const hits = sameConnection.filter((r) => r.outcome === "hit").map((r) => r.ageMs);
+      const misses = sameConnection.filter((r) => r.outcome === "miss").map((r) => r.ageMs);
+      const lastHitMs = hits.length ? Math.max(...hits) : null;
+      const firstMissMs = misses.length ? Math.min(...misses) : null;
+      answers.ttl = {
+        cells: [...new Set(sameConnection.map((r) => r.id))],
+        excludedCells: [...new Set(rows.filter((r) => r.conn !== "dedicated").map((r) => r.id))],
+        lastHitMs,
+        firstMissMs,
+        verdict: !sameConnection.length
+          ? "no-data"
+          : sameConnection.some((r) => !["hit", "miss"].includes(r.outcome)) ||
+              (lastHitMs !== null && firstMissMs !== null && lastHitMs >= firstMissMs)
+            ? "inconsistent"
+            : firstMissMs === null
+              ? "open"
+              : "window",
+      };
+      answers.windowEdge = { ...answers.ttl, buckets };
+    }
+  }
+  return { answers, invalid, valid, records };
 }
 
 export const cellIds = () => CELLS.map((c) => c.id);

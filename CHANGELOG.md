@@ -18,6 +18,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Fixed
 
+- Pub/Sub: two v5 REST negative-cache recordings refine the variable window edge and record the recent-200 exemption at seven seconds; the deterministic model remains unchanged and the remaining open cases are documented.
+
 - Functions: a callable nested in an HTTP function refuses App Check tokens the daemon did not verify when App Check is enabled.
 
 ## [0.50.0] - 2026-11-12

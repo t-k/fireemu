@@ -889,7 +889,7 @@ async fn selector_query_polled_announcement_transfers_ownership() {
                 .unwrap()
                 .into_inner();
             let first = stream.next().await.unwrap().unwrap();
-            assert_ne!(first.transaction, []);
+            assert_ne!(first.transaction, [] as [u8; 0]);
             drop(stream);
             assert_eq!(transaction_stats(&backend).active, 1);
             assert!(read_token(&backend, &first.transaction).is_ok());
@@ -1231,7 +1231,7 @@ async fn selector_query_new_token_is_only_on_the_first_result_batch() {
     let rows = responses(&service, req).await.unwrap();
     assert!(rows.len() > 1);
     assert_eq!(rows.iter().map(|r| r.results.len()).sum::<usize>(), 3);
-    assert_ne!(rows[0].transaction, []);
+    assert_ne!(rows[0].transaction, [] as [u8; 0]);
     assert!(rows[1..].iter().all(|r| r.transaction.is_empty()));
     rollback(&backend, rows[0].transaction.clone()).unwrap();
 }

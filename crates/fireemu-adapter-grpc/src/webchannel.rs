@@ -4198,7 +4198,7 @@ mod tests {
         assert_eq!(first.await.unwrap(), "receiver gone");
         assert!(!session.is_terminated());
         assert!(!session.terminal_acknowledged());
-        assert!(session.delivery.lock().unwrap().outbound.len() == 1);
+        assert_eq!(session.delivery.lock().unwrap().outbound.len(), 1);
 
         let (cancel, mut cancelled) = oneshot::channel();
         let generation = session.replace_backchannel(cancel).unwrap();

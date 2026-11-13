@@ -7367,7 +7367,6 @@ impl FunctionsRuntime {
         self.wake.notify_one();
     }
 
-    #[allow(clippy::too_many_arguments)]
     /// Applies the outbox's retirement decision to the causality window, the payload and the
     /// dead-letter log.
     #[allow(clippy::too_many_arguments)]

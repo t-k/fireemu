@@ -262,10 +262,7 @@ impl Reassembler {
             self.waiting.insert(segment.number, segment);
         }
         let mut messages = Vec::new();
-        loop {
-            let Some(first) = self.waiting.get(&self.next) else {
-                break;
-            };
+        while let Some(first) = self.waiting.get(&self.next) {
             let total = first.total.max(1);
             let Some(end) = self.next.checked_add(total) else {
                 return Err(BadSegments);

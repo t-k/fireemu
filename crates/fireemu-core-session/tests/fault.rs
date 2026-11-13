@@ -98,6 +98,10 @@ fn rules_match_the_nth_occurrence_or_every_one_and_are_counted_per_operation() {
     assert_eq!(fired.len(), 4);
     assert_eq!(fired[0].occurrence, 2);
     assert_eq!(fired[1].function.as_deref(), Some("flaky"));
+    check_clearing_and_reinstalling(&mut state);
+}
+
+fn check_clearing_and_reinstalling(state: &mut FaultState) {
     // Clearing forgets the plan, the counters and the history.
     state.clear();
     assert!(state.plan().is_none());

@@ -9018,7 +9018,7 @@ mod lock_tests {
                 ..Default::default()
             })
             .unwrap();
-        assert!(backend.release_count() != seen);
+        assert_ne!(backend.release_count(), seen);
         assert!(backend.await_any_release_until(seen, &deadline).await);
     }
 

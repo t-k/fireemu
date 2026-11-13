@@ -252,7 +252,6 @@ impl StorageGenerationDriver {
             issued: self.issued.clone(),
         };
         match self.projection_fault {
-            None => {}
             Some(ProjectionFault::Exists) => projected.exists = !projected.exists,
             Some(ProjectionFault::Generation) => {
                 projected.generation = projected.generation.saturating_add(1);
@@ -263,11 +262,10 @@ impl StorageGenerationDriver {
             Some(ProjectionFault::HighWater) => {
                 projected.high_water = projected.high_water.saturating_add(1);
             }
-            Some(ProjectionFault::Issued) => {
-                if !projected.issued.remove(&1) {
-                    projected.issued.insert(1);
-                }
+            Some(ProjectionFault::Issued) if !projected.issued.remove(&1) => {
+                projected.issued.insert(1);
             }
+            None | Some(ProjectionFault::Issued) => {}
         }
         Ok(projected)
     }

@@ -938,10 +938,14 @@ fn hashes_etag_tokens_and_bucket_scans() {
     assert!(events
         .iter()
         .all(|e| matches!(e, StorageEvent::MetadataUpdated(_))));
+    check_seeded_tokens_and_bucket_scans(s, &b, &other);
+}
+
+fn check_seeded_tokens_and_bucket_scans(mut s: StorageState, b: &BucketName, other: &BucketName) {
     // Tokens ride in and out through the firebaseStorageDownloadTokens custom key.
     let seeded = s
         .put(
-            &b,
+            b,
             &name("seeded"),
             b"s".to_vec(),
             NewMetadata {
@@ -961,15 +965,15 @@ fn hashes_etag_tokens_and_bucket_scans() {
         "the key never stays custom metadata"
     );
     assert_eq!(
-        s.add_download_token(&b, &name("missing"), t(7)),
+        s.add_download_token(b, &name("missing"), t(7)),
         Err(StorageError::NotFound)
     );
     assert_eq!(
-        s.remove_download_token(&b, &name("missing"), "x", t(7)),
+        s.remove_download_token(b, &name("missing"), "x", t(7)),
         Err(StorageError::NotFound)
     );
     s.put(
-        &other,
+        other,
         &name("o"),
         b"1".to_vec(),
         NewMetadata::default(),
@@ -977,14 +981,14 @@ fn hashes_etag_tokens_and_bucket_scans() {
         t(1),
     )
     .unwrap();
-    assert_eq!(s.objects(&b).len(), 2, "h and the token-seeded object");
-    assert_eq!(s.objects(&other)[0].name.as_str(), "o");
+    assert_eq!(s.objects(b).len(), 2, "h and the token-seeded object");
+    assert_eq!(s.objects(other)[0].name.as_str(), "o");
     assert!(
-        s.get(&other, &name("h")).is_none(),
+        s.get(other, &name("h")).is_none(),
         "buckets are separate namespaces"
     );
     s.clear();
-    assert!(s.objects(&b).is_empty() && s.objects(&other).is_empty());
+    assert!(s.objects(b).is_empty() && s.objects(other).is_empty());
     assert_eq!(
         s.drain_events(),
         [] as [fireemu_core_storage::store::StorageEvent; 0]

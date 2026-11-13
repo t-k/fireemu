@@ -578,7 +578,13 @@ fn java_int(text: &str) -> Option<i32> {
 
 /// Code points whose case Java 21 maps otherwise than Rust's newer Unicode tables, over every
 /// plane (the r11 JVM case-map comparison and review r11 M41). A case change of a string
-/// holding one is an error, so the rule is false.
+/// holding one is an error, so the rule is false. This is a declared difference from the
+/// official emulator, which maps them by Java 21. The list is computed from the Java 21 case maps
+/// in `tests/fixtures/java21-chars.txt` against the pinned toolchain's tables; the Rust 1.100
+/// bump added U+0277, U+027C, U+A7DD, U+A7E2, U+AB4B-AB4C, U+AB6C-AB6D and the U+1DF40-1DF95
+/// ranges, which newer Unicode versions case-map and Java 21 does not.
+/// `rules::java_chars_tests::every_code_point_changes_case_as_java_21_changes_it` fails
+/// when the list falls out of step with the toolchain.
 const CASE_DIFFERS: [(char, char); 22] = [
     ('\u{019B}', '\u{019B}'),
     ('\u{0264}', '\u{0264}'),

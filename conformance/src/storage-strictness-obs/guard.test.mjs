@@ -9,6 +9,7 @@ import {
   classifyRequest,
   GuardError,
   isUnknownStatus,
+  isSuccess,
   RequestBudget,
   requests,
   SEND_FLAG,
@@ -190,4 +191,67 @@ test("the credential-isolated guard process has an empty HOME and no credential 
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+test("status predicates distinguish every adjacent boundary", () => {
+  for (const [status, unknown, success] of [
+    [199, true, false],
+    [200, false, true],
+    [299, false, true],
+    [300, true, false],
+    [399, true, false],
+    [400, false, false],
+    [499, false, false],
+    [500, true, false],
+    [200.5, true, false],
+    [null, true, false],
+  ]) {
+    assert.equal(isUnknownStatus(status), unknown, String(status));
+    assert.equal(isSuccess(status), success, String(status));
+  }
+});
+
+test("request classification rejects independently changed scope and request fields", () => {
+  const plan = requests(target);
+  const request = authenticated(plan.W1);
+  for (const key of ["tempBucket", "missingBucket", "prefix", "local"])
+    assert.throws(
+      () =>
+        classifyRequest(
+          { ...target, [key]: key === "local" ? "http://localhost:80" : "different" },
+          request,
+        ),
+      GuardError,
+      key,
+    );
+  for (const changed of [
+    { case: "not-planned" },
+    { url: request.url + "&extra=1" },
+    { method: "GET" },
+    { body: "different" },
+    { headers: {} },
+    { headers: { ...request.headers, authorization: "Bearer two words" } },
+    { headers: { ...request.headers, authorization: "Basic synthetic" } },
+  ])
+    assert.throws(() => classifyRequest(target, { ...request, ...changed }), GuardError);
+  const malformed = authenticated(plan.F1);
+  assert.throws(
+    () => classifyRequest(target, { ...malformed, headers: { authorization: "Bearer synthetic" } }),
+    GuardError,
+  );
+  assert.throws(() => requests(target, "x".repeat(65)), GuardError);
+  assert.doesNotThrow(() => requests(target, "x".repeat(64)));
+  assert.deepEqual(JSON.parse(plan.W1.body).cors[1], {
+    origin: ["http://localhost:3000"],
+    method: ["PUT", "GET"],
+    responseHeader: ["Content-Type"],
+    maxAgeSeconds: 600,
+  });
+  for (const local of [
+    "ftp://localhost",
+    "http://localhost/?x=1",
+    "http://localhost/#x",
+    "http://localhost:123/a",
+  ])
+    assert.throws(() => targetOf({ ...target, local }), GuardError);
 });

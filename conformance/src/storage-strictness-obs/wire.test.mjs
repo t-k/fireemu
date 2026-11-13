@@ -6,9 +6,9 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { requests, targetOf } from "./guard.mjs";
+import { requests, targetOf, SEND_FLAG } from "./guard.mjs";
 import { fetchNet, installEgressGuard } from "./egress.mjs";
-import { createWire, openJournal } from "./wire.mjs";
+import { createWire, openJournal, redactHeaders, createProductionClient } from "./wire.mjs";
 
 const target = targetOf({
   project: "fireemu-oracle-query",
@@ -192,4 +192,90 @@ test("alternate HTTP paths are blocked and restored without leaving a global gua
     restore();
   }
   assert.deepEqual([http.request, https.get, globalThis.fetch], saved);
+});
+
+test("redaction handles both authorization headers and embedded secrets", () => {
+  assert.deepEqual(
+    redactHeaders(
+      {
+        Authorization: "value",
+        "Proxy-Authorization": "other",
+        "X-Echo": "prefix synthetic suffix",
+      },
+      ["synthetic"],
+    ),
+    {
+      authorization: "<redacted>",
+      "proxy-authorization": "<redacted>",
+      "x-echo": "prefix <redacted> suffix",
+    },
+  );
+});
+
+test("production client checks each launch condition and bearer independently", async () => {
+  const env = { [SEND_FLAG]: "launch-script" };
+  for (const options of [
+    { send: false, token: "synthetic", env },
+    { send: true, token: "synthetic", env: {} },
+    { send: true, token: "", env },
+    { send: true, token: "two words", env },
+    { send: true, token: 42, env },
+  ])
+    assert.throws(() => createProductionClient(target, options));
+  assert.throws(() =>
+    createProductionClient(
+      { ...target, local: "http://localhost" },
+      { send: true, token: "synthetic", env },
+    ),
+  );
+  const net = createProductionClient(target, {
+    send: true,
+    token: "synthetic",
+    env,
+    fetchImpl: async () => {
+      throw new Error("unexpected fetch");
+    },
+  });
+  delete env[SEND_FLAG];
+  await assert.rejects(net(requests(target).P1), /flag/);
+});
+
+test("journal captures request and response fields and the remaining deadline", async () => {
+  const { client, entries } = wire(
+    async () => ({ status: 200, headers: { "x-test": "ok" }, body: Buffer.from("ok") }),
+    {
+      now: () => 1000,
+      deadline: 21000,
+    },
+  );
+  const result = await client.wire(requests(target).W3);
+  assert.equal(result.unknown, false);
+  assert.equal(entries[0].timeoutMs, 20000);
+  assert.equal(entries[0].requestBodyBytes, 4);
+  assert.equal(entries[0].requestBodyBase64, Buffer.from("fire").toString("base64"));
+  assert.equal(entries[1].bodyBytes, 2);
+  assert.equal(entries[1].bodyBase64, Buffer.from("ok").toString("base64"));
+  assert.equal(entries[1].startedAt, 1000);
+  assert.equal(entries[1].endedAt, 1000);
+  assert.equal(entries[1].durationMs, 0);
+  assert.equal(entries[1].headers["x-test"], "ok");
+  const expired = wire(async () => response, { now: () => 1000, deadline: 1000 });
+  await assert.rejects(expired.client.wire(requests(target).P1), /deadline/);
+  assert.deepEqual(expired.entries, []);
+});
+
+test("resource evidence requires successful matching identity or planned media", async () => {
+  const object = requests(target)["K-read-t-cors"];
+  for (const [status, body, expected] of [
+    [200, JSON.stringify({ bucket: target.tempBucket, name: "cors/o.txt" }), true],
+    [200, JSON.stringify({ bucket: "wrong", name: "cors/o.txt" }), false],
+    [200, JSON.stringify({ bucket: target.tempBucket, name: "wrong" }), false],
+    [300, JSON.stringify({ bucket: target.tempBucket, name: "cors/o.txt" }), undefined],
+    [200, "fire", false],
+  ]) {
+    const { client } = wire(async () => ({ status, headers: {}, body: Buffer.from(body) }));
+    assert.equal((await client.wire(object)).showsResource, expected);
+  }
+  const { client } = wire(async () => ({ status: 200, headers: {}, body: Buffer.from("fire") }));
+  assert.equal((await client.wire(requests(target).A2)).showsResource, true);
 });

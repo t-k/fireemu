@@ -2,7 +2,7 @@ import "../storage-signed-put/test-preload.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
-import { judgeAnswer, judgeJournal, parseXmlError } from "./judge.mjs";
+import { judgeAnswer, judgeJournal, parseXmlError, settlement } from "./judge.mjs";
 import { compare } from "./compare.mjs";
 
 const answer = (body, extra = {}) => {
@@ -145,4 +145,105 @@ test("204 comparisons distinguish an absent Content-Length from an explicit zero
     answer("", { case: "F2", method: "DELETE", status: 204, headers: { "Content-Length": "0" } }),
   );
   assert.equal(compare([a], [b])[0].verdict, "DIFFERS(headerNames,headers)");
+});
+
+test("JSON error recognition requires each recorded layout constraint", () => {
+  const valid = { error: { code: 400, message: "bad", errors: [{ reason: "invalid" }] } };
+  const row = (value, status = 400) => judgeAnswer(answer(JSON.stringify(value), { status }));
+  assert.equal(row(valid).shape, "json-error");
+  for (const [value, status] of [
+    [{ ...valid, extra: true }, 400],
+    [{ error: { ...valid.error, extra: true } }, 400],
+    [{ error: { ...valid.error, code: 399 } }, 399],
+    [{ error: { ...valid.error, code: 500 } }, 500],
+    [{ error: { ...valid.error, code: 400.5 } }, 400],
+    [valid, 401],
+    [{ error: { ...valid.error, message: 1 } }, 400],
+    [{ error: { ...valid.error, errors: [] } }, 400],
+    [{ error: { ...valid.error, errors: {} } }, 400],
+    [{ error: { ...valid.error, errors: [null] } }, 400],
+    [{ error: { ...valid.error, errors: [{}] } }, 400],
+    [{ error: { ...valid.error, errors: [{ reason: "x", extra: true }] } }, 400],
+  ])
+    assert.equal(row(value, status).shape, "unrecorded", JSON.stringify(value));
+  assert.deepEqual(row({ error: {} }).json, { code: null, message: null, reason: null });
+  assert.equal(row({ error: { code: 499, message: "x" } }, 499).shape, "json-error");
+});
+
+test("recorded shapes and byte metadata require exact boundaries", () => {
+  const xml = "<Error><Code>X</Code><Message>m</Message></Error>";
+  for (const status of [399, 500])
+    assert.equal(judgeAnswer(answer(xml, { status })).shape, "unrecorded");
+  for (const status of [400, 499])
+    assert.equal(judgeAnswer(answer(xml, { status })).shape, "xml-error");
+  for (const [method, status, shape] of [
+    ["OPTIONS", 200, "empty"],
+    ["OPTIONS", 201, "unrecorded"],
+    ["DELETE", 204, "empty"],
+    ["GET", 204, "unrecorded"],
+  ])
+    assert.equal(judgeAnswer(answer("", { method, status })).shape, shape);
+  for (const [id, status, shape] of [
+    ["C5", 200, "media"],
+    ["C6", 200, "media"],
+    ["C5", 201, "unrecorded"],
+    ["P2", 200, "unrecorded"],
+  ])
+    assert.equal(judgeAnswer(answer("fire", { case: id, status })).shape, shape);
+  for (const extra of [
+    { headersRedacted: true },
+    { bodyBytes: null },
+    { bodyBytes: 4.5 },
+    { bodyBase64: "ZmlyZQ" },
+  ])
+    assert.equal(judgeAnswer(answer("fire", { case: "C5", status: 200, ...extra })).known, false);
+});
+
+test("settlement retains exact ownership and uncertainty state across reads", () => {
+  const e = (action, status, extra = {}) => ({
+    phase: "after",
+    resource: "r",
+    action,
+    status,
+    ...extra,
+  });
+  const state = (...entries) => settlement(entries).unresolved[0];
+  assert.deepEqual(settlement([e("read", 200, { showsResource: true })]), {
+    closureReady: true,
+    unresolved: [],
+  });
+  assert.equal(state(e("create", 200), e("delete", 503), e("read", 404)).unknownDelete, true);
+  assert.equal(
+    state(e("create", 503), e("read", 200, { showsResource: true })).unknownCreate,
+    false,
+  );
+  assert.equal(state(e("create", 200), e("delete", 204), e("create", 503)).deleted, false);
+  assert.equal(
+    state(e("create", 200), e("delete", 204), e("read", 200, { showsResource: true })).deleted,
+    false,
+  );
+  assert.equal(
+    state(e("create", 200), e("delete", 503), e("read", 404, { session: "a2" })),
+    undefined,
+  );
+  assert.equal(
+    settlement([
+      { phase: "before", n: 1, resource: "r", action: "create" },
+      { ...e("create", 409), n: 1 },
+    ]).closureReady,
+    true,
+  );
+  assert.equal(
+    settlement([{ phase: "other", resource: "r", action: "create" }]).closureReady,
+    true,
+  );
+  assert.equal(settlement([e("create", 200, { resource: "" }), e("", 200)]).closureReady, true);
+});
+
+test("comparison rejects a single unknown row on either side", () => {
+  const row = judgeAnswer(answer(missing));
+  const unknown = { ...row, known: false };
+  assert.equal(compare([row], [unknown])[0].verdict, "NEEDS-REVIEW");
+  assert.equal(compare([unknown], [row])[0].verdict, "NEEDS-REVIEW");
+  assert.equal(compare([row], [row, row])[0].verdict, "NEEDS-REVIEW");
 });

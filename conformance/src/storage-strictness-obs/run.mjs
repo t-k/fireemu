@@ -270,11 +270,10 @@ export async function main(argv = process.argv.slice(2)) {
     runId: values["run-id"],
     local: values.local,
   });
-  const mode = values.local
-    ? "local"
-    : values.send && process.env[SEND_FLAG] === "launch-script"
-      ? "production"
-      : "fake";
+  // --send without the launch-script flag is refused, never quietly replaced by the fake world.
+  if (values.send && process.env[SEND_FLAG] !== "launch-script")
+    throw new GuardError("production send flag required");
+  const mode = values.local ? "local" : values.send ? "production" : "fake";
   let previous;
   if (a2) {
     previous = readJournal(join(values.out, "journal.jsonl"));

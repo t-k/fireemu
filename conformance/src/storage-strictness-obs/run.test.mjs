@@ -1,8 +1,11 @@
 import "../storage-signed-put/test-preload.mjs";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { CORS, requests, targetOf } from "./guard.mjs";
-import { observe, readback } from "./run.mjs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { CORS, requests, targetOf, SEND_FLAG } from "./guard.mjs";
+import { main, observe, readback } from "./run.mjs";
 import { createWire } from "./wire.mjs";
 import { createFakeWorld } from "./world.fake.mjs";
 import { settlement } from "./judge.mjs";
@@ -401,4 +404,163 @@ test("settlement near misses keep unknown creates and deletes open", () => {
   assert.equal(ready(event("create", 409)), true);
   assert.equal(ready(event("read", 200, { showsResource: true })), true);
   assert.equal(ready({ phase: "before", n: 1, resource, action: "create" }), false);
+});
+
+test("readback refuses each mismatched journal identity before sending", async () => {
+  const endedAt = 1_000_000;
+  const header = {
+    phase: "header",
+    runId: target.runId,
+    project: target.project,
+    defaultBucket: target.defaultBucket,
+  };
+  const summary = { phase: "summary", endedAt };
+  const world = createFakeWorld(target);
+  const client = createWire({ target, net: world.net, journal: { append() {} } });
+  for (const previous of [
+    [{ ...header, phase: "other" }, summary],
+    [{ ...header, runId: "other" }, summary],
+    [{ ...header, project: "other" }, summary],
+    [{ ...header, defaultBucket: "other" }, summary],
+    [header, { ...summary, phase: "other" }],
+    [header, { ...summary, endedAt: null }],
+  ])
+    await assert.rejects(
+      readback({ target, client, previous, now: () => endedAt + 600_000 }),
+      /matching completed journal/,
+    );
+  assert.equal(client.budget.count, 0);
+});
+
+test("preflight list rejects each incomplete or unexpected layout", async () => {
+  for (const body of [
+    "null",
+    "[]",
+    "invalid",
+    JSON.stringify({ kind: "other" }),
+    JSON.stringify({ items: [{}] }),
+    JSON.stringify({ items: {} }),
+    JSON.stringify({ prefixes: ["x"] }),
+    JSON.stringify({ prefixes: {} }),
+    JSON.stringify({ nextPageToken: "more" }),
+    JSON.stringify({ unexpected: true }),
+  ]) {
+    const { report, world } = await run({
+      faults: { P4: { status: 200, body: Buffer.from(body) } },
+    });
+    assert.equal(report.completed, false, body);
+    assert.equal(report.cleanupVerified, false, body);
+    assert.ok(
+      world.log.every((request) => request.method === "GET"),
+      body,
+    );
+  }
+});
+
+test("cleanup verification fails for each missing or unknown final read", async () => {
+  for (const id of ["K2", "K4", "K5", "K6"]) {
+    for (const fault of [{ status: 503 }, { status: 403 }]) {
+      const { report } = await run({ faults: { [id]: fault } });
+      assert.equal(report.cleanupVerified, false, id);
+      assert.equal(report.closureReady, false, id);
+    }
+  }
+});
+
+test("main selects fake mode and rejects invalid mode arguments and credential overrides", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "strictness-main-"));
+  const args = [
+    "--project",
+    target.project,
+    "--default-bucket",
+    target.defaultBucket,
+    "--out",
+    join(directory, "fake"),
+  ];
+  const oldFlag = process.env[SEND_FLAG];
+  const oldCredentials = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  const originalLog = console.log;
+  try {
+    delete process.env[SEND_FLAG];
+    console.log = () => {};
+    assert.equal(await main(args), 0);
+    const header = JSON.parse(
+      readFileSync(join(directory, "fake", "journal.jsonl"), "utf8").split("\n")[0],
+    );
+    assert.equal(header.mode, "fake");
+    await assert.rejects(
+      main([...args, "--local", "http://localhost:9199", "--send"]),
+      /invalid arguments/,
+    );
+    await assert.rejects(main([...args, "--run-id", target.runId]), /invalid arguments/);
+    await assert.rejects(main(["readback", ...args]), /invalid arguments/);
+    await assert.rejects(main(["unexpected", ...args]), /invalid arguments/);
+    process.env[SEND_FLAG] = "launch-script";
+    process.env.GOOGLE_APPLICATION_CREDENTIALS = "synthetic";
+    const productionArgs = [
+      "--project",
+      target.project,
+      "--default-bucket",
+      target.defaultBucket,
+      "--out",
+      join(directory, "refused"),
+      "--send",
+    ];
+    await assert.rejects(main(productionArgs), /credential overrides refused/);
+  } finally {
+    console.log = originalLog;
+    if (oldFlag === undefined) delete process.env[SEND_FLAG];
+    else process.env[SEND_FLAG] = oldFlag;
+    if (oldCredentials === undefined) delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+    else process.env.GOOGLE_APPLICATION_CREDENTIALS = oldCredentials;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("bucket cleanup refuses incomplete and unplanned listings", async () => {
+  for (const [body, failure] of [
+    [JSON.stringify({ nextPageToken: "more", items: [] }), "temporary bucket list not complete"],
+    [JSON.stringify({ items: {} }), "temporary bucket list not complete"],
+    [JSON.stringify({ items: [{ name: "outside" }] }), "unplanned object in temporary bucket"],
+  ]) {
+    const { report, world } = await run({
+      faults: { K3: { status: 409 }, "K-list": { status: 200, body: Buffer.from(body) } },
+    });
+    assert.ok(report.failures.includes(failure), body);
+    assert.equal(
+      world.log.some(
+        (request) => request.method === "DELETE" && request.resource?.endsWith("/o/outside"),
+      ),
+      false,
+    );
+  }
+});
+
+test("--send without the launch-script flag is refused before any file or request, never run against the fake world", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ss-send-flag-"));
+  const saved = process.env[SEND_FLAG];
+  try {
+    for (const value of [undefined, "", "launch", "LAUNCH-SCRIPT"]) {
+      if (value === undefined) delete process.env[SEND_FLAG];
+      else process.env[SEND_FLAG] = value;
+      const out = join(dir, `out-${String(value)}`);
+      await assert.rejects(
+        main([
+          "--send",
+          "--project",
+          "fireemu-oracle-query",
+          "--default-bucket",
+          "fireemu-oracle-query.firebasestorage.app",
+          "--out",
+          out,
+        ]),
+        /production send flag required/,
+      );
+      assert.throws(() => readFileSync(join(out, "journal.jsonl")), /ENOENT/);
+    }
+  } finally {
+    if (saved === undefined) delete process.env[SEND_FLAG];
+    else process.env[SEND_FLAG] = saved;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

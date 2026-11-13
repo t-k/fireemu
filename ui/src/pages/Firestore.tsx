@@ -884,25 +884,30 @@ const CollectionView: Component<{
           if (rowReadGuard.isCurrent(id, ticket)) {
             const displayed = list.items().find((item) => item.name === document.name);
             if (!displayed) return;
-            if (displayed.updateTime) {
-              if (!document.updateTime) return;
-              // Compare whole seconds and nanoseconds separately, including differing precision.
-              const readSeconds = Date.parse(document.updateTime.replace(/\.\d+/, ""));
-              const displayedSeconds = Date.parse(displayed.updateTime.replace(/\.\d+/, ""));
-              const readNanos = Number(
-                document.updateTime.match(/\.(\d+)/)?.[1]?.padEnd(9, "0") ?? 0,
-              );
-              const displayedNanos = Number(
-                displayed.updateTime.match(/\.(\d+)/)?.[1]?.padEnd(9, "0") ?? 0,
-              );
-              if (
-                !(
-                  readSeconds > displayedSeconds ||
-                  (readSeconds === displayedSeconds && readNanos >= displayedNanos)
-                )
-              )
-                return;
+            if (!displayed.updateTime || !document.updateTime) {
+              void refresh();
+              return;
             }
+            // Compare whole seconds and nanoseconds separately, including differing precision.
+            const readSeconds = Date.parse(document.updateTime.replace(/\.\d+/, ""));
+            const displayedSeconds = Date.parse(displayed.updateTime.replace(/\.\d+/, ""));
+            if (!Number.isFinite(readSeconds) || !Number.isFinite(displayedSeconds)) {
+              void refresh();
+              return;
+            }
+            const readNanos = Number(
+              document.updateTime.match(/\.(\d+)/)?.[1]?.padEnd(9, "0") ?? 0,
+            );
+            const displayedNanos = Number(
+              displayed.updateTime.match(/\.(\d+)/)?.[1]?.padEnd(9, "0") ?? 0,
+            );
+            if (
+              !(
+                readSeconds > displayedSeconds ||
+                (readSeconds === displayedSeconds && readNanos >= displayedNanos)
+              )
+            )
+              return;
             list.updateItem(document);
             rowReadGuard.markApplied(id, ticket);
           }

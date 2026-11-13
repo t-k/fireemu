@@ -46,7 +46,11 @@ describe("Firestore live updates with delayed responses", () => {
     appState.setSessions([{ name: "default", project: "p" }]);
     appState.setSession("default");
     const root = "projects/p/databases/(default)/documents";
-    const alice = { name: `${root}/users/alice`, fields: { value: { stringValue: "value1" } } };
+    const alice = {
+      name: `${root}/users/alice`,
+      fields: { value: { stringValue: "value1" } },
+      updateTime: "2026-11-13T12:00:00Z",
+    };
     let emit!: (event: SseEvent) => void;
     vi.mocked(subscribe).mockImplementation((_path, onEvent) => {
       emit = onEvent;
@@ -66,6 +70,7 @@ describe("Firestore live updates with delayed responses", () => {
       okAsync({
         ...alice,
         fields: { value: { stringValue: "value2" } },
+        updateTime: "2026-11-13T12:00:01Z",
       }),
     );
     const history = createMemoryHistory();
@@ -260,6 +265,101 @@ describe("Firestore live updates with delayed responses", () => {
     },
   );
 
+  it.each([
+    ["missing displayed", undefined, "2026-11-13T12:00:01Z"],
+    ["invalid displayed", "bad", "2026-11-13T12:00:01Z"],
+    ["missing GET", "2026-11-13T12:00:00Z", undefined],
+    ["invalid GET", "2026-11-13T12:00:00Z", "bad"],
+  ] as const)(
+    "reconciles the newest value through a membership refresh for a %s timestamp",
+    async (_label, displayedTime, readTime) => {
+      vi.useFakeTimers();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() => {
+          throw new Error("Unexpected network request");
+        }),
+      );
+      appState.setSessions([{ name: "default", project: "p" }]);
+      appState.setSession("default");
+      const root = "projects/p/databases/(default)/documents";
+      const alice = {
+        name: `${root}/users/alice`,
+        fields: { value: { stringValue: "value0" } },
+      };
+      let emit!: (event: SseEvent) => void;
+      vi.mocked(subscribe).mockImplementation((_path, onEvent) => {
+        emit = onEvent;
+        return vi.fn();
+      });
+      let releaseMembership!: (page: DocumentPage) => void;
+      vi.mocked(listDocuments)
+        .mockReturnValueOnce(
+          okAsync({
+            documents: [
+              { ...alice, ...(displayedTime === undefined ? {} : { updateTime: displayedTime }) },
+            ],
+          }),
+        )
+        .mockImplementation(() =>
+          ResultAsync.fromSafePromise(
+            new Promise<DocumentPage>((resolve) => {
+              releaseMembership = resolve;
+            }),
+          ),
+        );
+      let releaseRow!: (document: FsDocument) => void;
+      vi.mocked(getDocument).mockImplementation(() =>
+        ResultAsync.fromSafePromise(
+          new Promise<FsDocument>((resolve) => {
+            releaseRow = resolve;
+          }),
+        ),
+      );
+      const history = createMemoryHistory();
+      history.set({ value: "/users" });
+      const view = render(() =>
+        createComponent(MemoryRouter, {
+          history,
+          get children() {
+            return createComponent(Route, { path: "/:path", component: Firestore });
+          },
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      emit({
+        event: "commit",
+        data: JSON.stringify({ changes: [{ path: alice.name, kind: "updated" }] }),
+      });
+      expect(getDocument).toHaveBeenCalledExactlyOnceWith(root, "users/alice");
+      expect(listDocuments).toHaveBeenCalledTimes(1);
+      releaseRow({
+        ...alice,
+        fields: { value: { stringValue: "value1" } },
+        ...(readTime === undefined ? {} : { updateTime: readTime }),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(listDocuments).toHaveBeenCalledTimes(2);
+      expect(view.getByTestId("document-list").textContent).toContain("value0");
+      expect(view.getByTestId("document-list").textContent).not.toContain("value1");
+      releaseMembership({
+        documents: [
+          {
+            ...alice,
+            fields: { value: { stringValue: "value2" } },
+            updateTime: "2026-11-13T12:00:02Z",
+          },
+        ],
+      });
+      await vi.runAllTimersAsync();
+      expect(view.getByTestId("document-list").textContent).toContain("value2");
+      expect(view.getByTestId("document-list").textContent).not.toContain("value0");
+      expect(view.getByTestId("document-list").textContent).not.toContain("value1");
+      expect(listDocuments).toHaveBeenCalledTimes(2);
+      expect(getDocument).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it.each(["created", "updated"] as const)(
     "applies every completed response while %s events continue every 151 ms",
     async (kind) => {
@@ -274,7 +374,11 @@ describe("Firestore live updates with delayed responses", () => {
       appState.setSession("default");
       const root = "projects/p/databases/(default)/documents";
       let value = 0;
-      const alice = { name: `${root}/users/alice`, fields: { value: { stringValue: "value0" } } };
+      const alice = {
+        name: `${root}/users/alice`,
+        fields: { value: { stringValue: "value0" } },
+        updateTime: "2026-11-13T12:00:00Z",
+      };
       const bob = { name: `${root}/users/bob`, fields: { value: { stringValue: "unchanged" } } };
       let emit!: (event: SseEvent) => void;
       vi.mocked(subscribe).mockImplementation((_path, onEvent) => {
@@ -320,11 +424,12 @@ describe("Firestore live updates with delayed responses", () => {
       } else {
         vi.mocked(getDocument).mockImplementation(() => {
           const snapshot = `value${value}`;
+          const updateTime = `2026-11-13T12:00:00.${String(value).padStart(9, "0")}Z`;
           return ResultAsync.fromSafePromise(
             new Promise<FsDocument>((resolve) => {
               setTimeout(() => {
                 completed.push(snapshot);
-                resolve({ ...alice, fields: { value: { stringValue: snapshot } } });
+                resolve({ ...alice, fields: { value: { stringValue: snapshot } }, updateTime });
               }, 300);
             }),
           );

@@ -941,7 +941,7 @@
     },
     "verification/quint/src/evidence.rs": {
       "kind": "sha256",
-      "value": "2ea58660433a79546c295abe0706740fca091a5a258501a4d656068ddc40b5ac"
+      "value": "7649b8feaff5405968765b8b538b895df3e2a6dcb884dd1eb666914d24084a20"
     },
     "verification/quint/src/evidence/source_closure.rs": {
       "kind": "sha256",

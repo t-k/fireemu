@@ -697,58 +697,75 @@ async fn emulator_delete_removes_a_pending_task_before_dispatch() {
 
 #[tokio::test]
 async fn emulator_delete_cancels_pending_tasks_with_various_name_forms() {
-    let h = start_full(
-        "emulator-delete-name-forms",
-        FunctionsHttpProfile::Emulator,
-        NameReuse::Retained,
-        60,
-        retry(1, 500),
-        true,
-        false,
-    )
-    .await;
-    let (addr, server) = tasks_listener(&h).await;
-    let due = LogicalInstant::from_unix_seconds(1_788_004_920)
-        .to_rfc3339()
-        .unwrap();
-    let mut paths = Vec::new();
-    for name in [
-        Some("bare-id"),
-        Some("projects/demo-app/locations/us-central1/queues/taskB/tasks/cross-queue"),
-        None,
+    let canonical = format!("{BASE}/tasks/x");
+    for (names, status, remaining) in [
+        (vec![Some(canonical.as_str())], 200, 0),
+        (vec![Some("x")], 404, 1),
+        (vec![Some("x"), Some(canonical.as_str())], 200, 1),
+        (vec![Some(canonical.as_str()), Some("x")], 200, 1),
+        (vec![None], 200, 0),
     ] {
-        let mut extra = json!({"scheduleTime": due});
-        if let Some(name) = name {
-            extra["name"] = json!(name);
-        }
-        let queued = body_of(&extra);
-        let (status, _, body) = wire(addr, "POST", TASKS, queued.to_string().as_bytes()).await;
-        assert_eq!(status, 200);
-        let response: Value = serde_json::from_str(&body).unwrap();
-        let id = response["task"]["name"]
-            .as_str()
-            .unwrap()
-            .rsplit('/')
-            .next()
+        let h = start_full(
+            "emulator-delete-name-forms",
+            FunctionsHttpProfile::Emulator,
+            NameReuse::Retained,
+            60,
+            retry(1, 500),
+            true,
+            false,
+        )
+        .await;
+        let (addr, server) = tasks_listener(&h).await;
+        let due = LogicalInstant::from_unix_seconds(1_788_004_920)
+            .to_rfc3339()
             .unwrap();
-        let path = format!("{TASKS}/{id}");
-        assert_eq!(wire(addr, "DELETE", &path, b"").await.0, 200);
-        paths.push(path);
-    }
-    assert!(h.runtime.pending_tasks().is_empty());
-    h.clock
-        .lock()
-        .unwrap()
-        .advance(fireemu_core_types::time::LogicalDuration::from_seconds(61))
-        .unwrap();
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    h.idle().await;
-    assert!(!h.probe.exists() || std::fs::read_to_string(&h.probe).unwrap().is_empty());
-    for path in paths {
+        let mut path = format!("{TASKS}/x");
+        for name in names {
+            let mut extra = json!({"scheduleTime": due});
+            if let Some(name) = name {
+                extra["name"] = json!(name);
+            }
+            let queued = body_of(&extra);
+            let (status, _, body) = wire(addr, "POST", TASKS, queued.to_string().as_bytes()).await;
+            assert_eq!(status, 200);
+            if name.is_none() {
+                let response: Value = serde_json::from_str(&body).unwrap();
+                path = format!("/{}", response["task"]["name"].as_str().unwrap());
+            }
+        }
+        let (actual, _, body) = wire(addr, "DELETE", &path, b"").await;
+        assert_eq!(actual, status);
+        assert_eq!(
+            body,
+            if status == 200 {
+                "{\"res\":\"OK\"}"
+            } else {
+                "Tried to remove a task that doesn't exist"
+            }
+        );
+        let pending = h.runtime.pending_tasks();
+        assert_eq!(pending.len(), remaining);
+        assert!(pending.iter().all(|task| task.name == "x"));
+        let (status, _, body) = wire(addr, "DELETE", &path, b"").await;
+        assert_eq!(
+            (status, body.as_str()),
+            (404, "Tried to remove a task that doesn't exist")
+        );
+        h.clock
+            .lock()
+            .unwrap()
+            .advance(fireemu_core_types::time::LogicalDuration::from_seconds(61))
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        h.idle().await;
+        assert_eq!(
+            std::fs::read_to_string(&h.probe).unwrap_or_default(),
+            "taskA\n".repeat(remaining)
+        );
         assert_eq!(wire(addr, "DELETE", &path, b"").await.0, 404);
+        server.abort();
+        h.stop().await;
     }
-    server.abort();
-    h.stop().await;
 }
 
 #[tokio::test]
@@ -789,29 +806,52 @@ async fn emulator_delete_answers_ok_once_for_a_dispatched_task() {
 
 #[tokio::test]
 async fn emulator_delete_keeps_task_records_in_the_enqueued_queue() {
-    let h = start(
+    let h = start_full(
         "emulator-delete-queue-boundary",
         FunctionsHttpProfile::Emulator,
         NameReuse::Retained,
         60,
+        retry(1, 500),
+        true,
+        false,
     )
     .await;
     let (addr, server) = tasks_listener(&h).await;
-    let queued = body_of(
-        &json!({"name": "projects/demo-app/locations/us-central1/queues/taskB/tasks/cross-queue"}),
-    );
+    let due = LogicalInstant::from_unix_seconds(1_788_004_920)
+        .to_rfc3339()
+        .unwrap();
+    let name = "projects/demo-app/locations/us-central1/queues/taskB/tasks/cross-queue";
+    let queued = body_of(&json!({"name": name, "scheduleTime": due}));
     assert_eq!(
         wire(addr, "POST", TASKS, queued.to_string().as_bytes())
             .await
             .0,
         200
     );
-    h.idle().await;
-    let other = "/projects/demo-app/locations/us-central1/queues/taskB/tasks/cross-queue";
-    assert_eq!(wire(addr, "DELETE", other, b"").await.0, 404);
+    let other = format!("/{name}");
     let path = format!("{TASKS}/cross-queue");
-    assert_eq!(wire(addr, "DELETE", &path, b"").await.0, 200);
-    assert_eq!(wire(addr, "DELETE", &path, b"").await.0, 404);
+    for path in [&other, &path] {
+        let (status, _, body) = wire(addr, "DELETE", path, b"").await;
+        assert_eq!(
+            (status, body.as_str()),
+            (404, "Tried to remove a task that doesn't exist")
+        );
+    }
+    let pending = h.runtime.pending_tasks();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].function, "taskA");
+    assert_eq!(pending[0].name, name);
+    assert_eq!(h.runtime.run_tasks_now("taskA", None), 1);
+    h.clock
+        .lock()
+        .unwrap()
+        .advance(fireemu_core_types::time::LogicalDuration::from_seconds(1))
+        .unwrap();
+    h.idle().await;
+    assert_eq!(std::fs::read_to_string(&h.probe).unwrap(), "taskA\n");
+    for path in [&other, &path] {
+        assert_eq!(wire(addr, "DELETE", path, b"").await.0, 404);
+    }
     server.abort();
     h.stop().await;
 }

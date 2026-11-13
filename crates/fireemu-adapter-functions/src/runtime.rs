@@ -3789,10 +3789,9 @@ impl FunctionsRuntime {
         );
         match admission {
             Ok(()) => {
-                inner.emulator_task_names.insert((
-                    queue.to_owned(),
-                    task.name.rsplit('/').next().unwrap_or_default().to_owned(),
-                ));
+                inner
+                    .emulator_task_names
+                    .insert((queue.to_owned(), task.name.clone()));
             }
             Err(AdmissionError::Duplicate | AdmissionError::QueueFull) => {
                 return Err(refuse(409, "A task with the same name already exists"));
@@ -4010,21 +4009,12 @@ impl FunctionsRuntime {
             status: 500,
             body: "runtime poisoned".to_owned(),
         })?;
-        let mut removed = inner.task_scheduler.delete_pending(
-            queue,
-            |stored| {
-                if self.is_strict() {
-                    stored == name
-                } else {
-                    stored.rsplit('/').next() == Some(id)
-                }
-            },
-            now_task,
-        );
+        let mut removed =
+            inner
+                .task_scheduler
+                .delete_pending(queue, |stored| stored == name, now_task);
         if !self.is_strict() {
-            removed |= inner
-                .emulator_task_names
-                .remove(&(queue.to_owned(), id.to_owned()));
+            removed |= inner.emulator_task_names.remove(&(queue.to_owned(), name));
         }
         drop(inner);
         if removed {

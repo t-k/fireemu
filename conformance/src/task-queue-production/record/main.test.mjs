@@ -17,7 +17,11 @@ import {
   resultOf,
   writeAll,
 } from "./main.mjs";
-import { NUMBER, createWorld } from "./world.mjs";
+import { NUMBER, createWorld, reply } from "./world.mjs";
+import { record } from "./run.mjs";
+import { readbackRun } from "./readback.mjs";
+import { RUN, go } from "./harness.mjs";
+import { functionOfRole, queueName } from "../plan.mjs";
 import { tempDir } from "./testtmp.mjs";
 
 const COMMIT = "a".repeat(40);
@@ -600,4 +604,229 @@ test("the first signal asks for a stop at the next request and the second only r
   handler("SIGTERM");
   assert.match(io.lines.err[0], /SIGINT: stopping at the next request/);
   assert.match(io.lines.err[1], /SIGTERM: a stop is already under way/);
+});
+
+test("record writes the size-1100k request and answer through the real durable journal path", async () => {
+  const dir = tempDir("tq-large-journal-");
+  let recorded;
+  const deps = {
+    ...okDeps(),
+    record: async (options) => {
+      const world = createWorld({
+        runId: options.runId,
+        hooks: {
+          [`POST cloudtasks.googleapis.com/v2/${queueName(functionOfRole(options.runId, "tqdef"))}/tasks`]:
+            ({ body }) => {
+              if (body?.task?.name?.endsWith("-size-1100k"))
+                return reply(400, { error: { status: "INVALID_ARGUMENT" }, echoedTask: body.task });
+            },
+        },
+      });
+      recorded = await record({
+        ...options,
+        send: world.send,
+        runCli: world.runCli,
+        clock: () => world.now,
+        sleep: async (ms) => world.advance(ms),
+      });
+      return recorded;
+    },
+  };
+  const code = await main(argv("record", dir, ["--send", "--expect-digest", "d"]), {
+    env: { HOME: "/h" },
+    deps,
+    digest: "d",
+    out: () => {},
+    err: () => {},
+  });
+  assert.equal(code, 0);
+  assert.equal(recorded.program["size-1100k"].status, 400);
+  const path = join(
+    dir,
+    readdirSync(dir).find((name) => name.startsWith("journal-")),
+  );
+  const text = readFileSync(path, "utf8");
+  assert.ok(text.endsWith("\n"));
+  const lines = text.trimEnd().split("\n");
+  const rows = lines.map((line) => JSON.parse(line));
+  for (const state of ["before-send", "response-persisted"]) {
+    const index = rows.findIndex((row) => row.id === "step-size-1100k" && row.state === state);
+    assert.ok(index >= 0);
+    assert.ok(Buffer.byteLength(lines[index]) > 1_400_000, state);
+  }
+  const answer = rows.find(
+    (row) => row.id === "step-size-1100k" && row.state === "response-persisted",
+  );
+  assert.equal(
+    JSON.parse(Buffer.from(answer.bodyBase64, "base64").toString()).error.status,
+    "INVALID_ARGUMENT",
+  );
+});
+
+test("unknown createTask and deleteTask survive A2 with every name absent and exit 3", async () => {
+  for (const kind of ["create", "delete"]) {
+    const name = queueName(functionOfRole(RUN, "tqdef"));
+    const route =
+      kind === "create"
+        ? `POST cloudtasks.googleapis.com/v2/${name}/tasks`
+        : `DELETE cloudtasks.googleapis.com/v2/${name}/tasks/tqrun-${RUN}-never-created`;
+    const { world, result } = await go({
+      hooks: {
+        [route]: ({ body }) => {
+          if (kind === "delete" || body?.task?.name?.endsWith("-env-named"))
+            return reply(503, { error: { status: "UNAVAILABLE" } });
+        },
+      },
+    });
+    const dir = tempDir("tq-a2-unknown-");
+    const path = join(dir, `result-${RUN}.json`);
+    writeFileSync(path, JSON.stringify(result));
+    writeFileSync(
+      join(dir, `journal-${RUN}.jsonl`),
+      JSON.stringify({ responseAt: new Date(world.now).toISOString() }) + "\n",
+    );
+    const carried = resultOf(path);
+    assert.ok(carried.carried.some((s) => s.startsWith("unknown-task-mutation:")));
+    if (kind === "create") assert.ok(carried.creates.some((c) => c.id === "step-env-named"));
+    let a2;
+    const code = await main(
+      [
+        "readback",
+        "--run-dir",
+        dir,
+        "--project-number",
+        NUMBER,
+        "--run-id",
+        RUN,
+        "--send",
+        "--expect-digest",
+        "d",
+      ],
+      {
+        env: { HOME: "/h" },
+        digest: "d",
+        out: () => {},
+        err: () => {},
+        deps: {
+          ...okDeps(world),
+          now: () => world.now + 660_000,
+          readback: async (options) => (a2 = await readbackRun(options)),
+        },
+      },
+    );
+    assert.equal(code, 3, kind);
+    assert.ok(
+      Object.values(a2.names).every((n) => n.absent),
+      kind,
+    );
+    assert.equal(a2.allAbsent, false);
+  }
+});
+
+test("the program is covered by the digest, is validated, and reaches source and recorder", async () => {
+  assert.notEqual(packetDigest(undefined, "default"), packetDigest(undefined, "burst"));
+  assert.equal(packetDigest(), packetDigest(undefined, "default"));
+  const dir = tempDir("tq-program-");
+  const calls = [];
+  const deps = {
+    ...okDeps(null, calls),
+    record: async (options) => {
+      calls.push(["program", options.program]);
+      return { closureReady: true };
+    },
+  };
+  assert.equal(
+    await main(
+      argv("record", dir, ["--program", "burst", "--send", "--expect-digest", packetDigest()]),
+      {
+        env: { HOME: "/h" },
+        deps,
+        out: () => {},
+        err: () => {},
+      },
+    ),
+    2,
+  );
+  assert.ok(!calls.some(([kind]) => kind === "program"));
+  assert.equal(
+    await main(
+      argv("record", dir, [
+        "--program",
+        "burst",
+        "--send",
+        "--expect-digest",
+        packetDigest(undefined, "burst"),
+      ]),
+      {
+        env: { HOME: "/h" },
+        deps,
+        out: () => {},
+        err: () => {},
+      },
+    ),
+    0,
+  );
+  assert.ok(
+    calls
+      .filter(([kind]) => ["prepareSource", "sourceProblems"].includes(kind))
+      .every(([, options]) => options.program === "burst"),
+  );
+  assert.deepEqual(calls.at(-1), ["program", "burst"]);
+  assert.equal(
+    await main(
+      argv("record", dir, ["--program", "unknown", "--send", "--expect-digest", packetDigest()]),
+      {
+        env: { HOME: "/h" },
+        deps,
+        out: () => {},
+        err: () => {},
+      },
+    ),
+    2,
+  );
+});
+
+test("A2 rejects a program that differs from the recorded program before sending", async () => {
+  const dir = tempDir("tq-program-a2-");
+  writeFileSync(
+    join(dir, `result-${RUN}.json`),
+    JSON.stringify({ programName: "burst", unconfirmedCreates: [] }),
+  );
+  writeFileSync(
+    join(dir, `journal-${RUN}.jsonl`),
+    JSON.stringify({ responseAt: "2026-11-12T00:00:00Z" }) + "\n",
+  );
+  let called = false;
+  const code = await main(
+    [
+      "readback",
+      "--run-dir",
+      dir,
+      "--project-number",
+      NUMBER,
+      "--run-id",
+      RUN,
+      "--program",
+      "default",
+      "--send",
+      "--expect-digest",
+      "d",
+    ],
+    {
+      env: { HOME: "/h" },
+      digest: "d",
+      out: () => {},
+      err: () => {},
+      deps: {
+        ...okDeps(),
+        now: () => Date.parse("2026-11-12T01:00:00Z"),
+        readback: async () => {
+          called = true;
+          throw new Error("must not send");
+        },
+      },
+    },
+  );
+  assert.equal(code, 2);
+  assert.equal(called, false);
 });

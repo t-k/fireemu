@@ -232,3 +232,16 @@ test("a sleep is honoured only as a positive integer, and the end frame follows 
     assert.equal(out.frames[0].step.sleepMs, 0, String(bad));
   }
 });
+
+test("the optional roles filter exports only tqrate and absent roles exports all eight", () => {
+  assert.deepEqual(Object.keys(fixture).sort(), ROLE_IDS.map((role) => role + SUFFIX).sort());
+  const filtered = tempDir("tq-fixture-burst-");
+  cpSync(join(conformance, "task-queue-functions/functions/index.js"), join(filtered, "index.js"));
+  writeFileSync(
+    join(filtered, "suffix.json"),
+    JSON.stringify({ suffix: SUFFIX, roles: ["tqrate"] }),
+  );
+  symlinkSync(join(conformance, "node_modules"), join(filtered, "node_modules"));
+  const onlyRate = createRequire(join(filtered, "index.js"))("./index.js");
+  assert.deepEqual(Object.keys(onlyRate), ["tqrate" + SUFFIX]);
+});

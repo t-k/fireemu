@@ -26,10 +26,10 @@ export const uploadObjectEntries = (list) =>
   );
 
 /** Every name of the run with the URL that reads it directly. */
-export const readbackNames = (runId, uploadObjects = []) => [
-  ...functionsOf(runId).map((fn) => ["function-" + fn, GCF + functionName(fn)]),
-  ...queueIdsOf(runId).map((id) => ["queue-" + id, TASKS + "/" + id]),
-  ...functionsOf(runId)
+export const readbackNames = (runId, uploadObjects = [], program = "default") => [
+  ...functionsOf(runId, program).map((fn) => ["function-" + fn, GCF + functionName(fn)]),
+  ...queueIdsOf(runId, program).map((id) => ["queue-" + id, TASKS + "/" + id]),
+  ...functionsOf(runId, program)
     .flatMap(packageIds)
     .map((id) => ["package-" + id, REGISTRY + "/" + id]),
   ...uploadObjectEntries(uploadObjects).map((item, index) => [
@@ -44,8 +44,8 @@ const IAM_READ = `https://cloudresourcemanager.googleapis.com/v1/projects/${PROJ
  * The read-back's allowlist: the recording's, narrowed to GETs that are not mutations, and the one project IAM policy read
  * (a POST that changes nothing).
  */
-export function readbackAllow(runId, projectNumber, uploadObjects = []) {
-  const guard = createGuard(runId, projectNumber);
+export function readbackAllow(runId, projectNumber, uploadObjects = [], program = "default") {
+  const guard = createGuard(runId, projectNumber, program);
   for (const item of uploadObjectEntries(uploadObjects)) guard.adoptObject(item.bucket, item.name);
   return (spec) =>
     (spec.method === "GET" || (spec.method === "POST" && spec.url === IAM_READ)) &&
@@ -55,6 +55,7 @@ export function readbackAllow(runId, projectNumber, uploadObjects = []) {
 
 export async function readbackRun({
   runId,
+  program = "default",
   projectNumber,
   uploadObjects = [],
   baseline = null,
@@ -71,7 +72,7 @@ export async function readbackRun({
     clock,
     maxRequests: READBACK_MAX_REQUESTS,
     maxRequestCap: READBACK_MAX_REQUESTS,
-    allow: readbackAllow(runId, projectNumber, uploadObjects),
+    allow: readbackAllow(runId, projectNumber, uploadObjects, program),
     quotaProject: PROJECT,
     timeoutFor: () => 15_000,
   });
@@ -100,7 +101,7 @@ export async function readbackRun({
   };
   const last = (item) => String(item.name).split("/").at(-1);
   try {
-    for (const [label, url] of readbackNames(runId, uploadObjects)) {
+    for (const [label, url] of readbackNames(runId, uploadObjects, program)) {
       const answer = await capture({ id: "readback-" + label, method: "GET", url });
       out.names[label] = { status: answer?.status ?? null, absent: absent(answer) };
     }
@@ -117,7 +118,7 @@ export async function readbackRun({
       ),
     };
     out.lists.functionsAndServices =
-      Boolean(found.v2 && found.run) && nonePresent(summarize(found, runId));
+      Boolean(found.v2 && found.run) && nonePresent(summarize(found, runId, program));
     const queues = await list("list-queues", TASKS + "?pageSize=500", "queues");
     const topics = await list(
       "list-topics",
@@ -131,15 +132,15 @@ export async function readbackRun({
       "triggers",
     );
     out.lists.queues = queues
-      ? queues.queues.map(last).filter((id) => queueIdsOf(runId).includes(id))
+      ? queues.queues.map(last).filter((id) => queueIdsOf(runId, program).includes(id))
       : null;
     out.lists.packages = packages
-      ? packages.packages.map(last).filter((id) => ownPackages(runId).includes(id))
+      ? packages.packages.map(last).filter((id) => ownPackages(runId, program).includes(id))
       : null;
     out.lists.triggers = triggers
       ? triggers.triggers
           .map(last)
-          .filter((id) => functionsOf(runId).some((fn) => id.startsWith(fn + "-")))
+          .filter((id) => functionsOf(runId, program).some((fn) => id.startsWith(fn + "-")))
       : null;
     // The inventory the run started from, compared by identity with a fresh one (the closure rule of the recording).
     const subs = await list(
@@ -181,7 +182,14 @@ export async function readbackRun({
       sourceObjects: bucketNames,
     };
     if (baseline) {
-      const compared = inventoryDifferences({ before: baseline, after, enabled: [], kinds: KINDS });
+      const compared = inventoryDifferences({
+        runId,
+        program,
+        before: baseline,
+        after,
+        enabled: [],
+        kinds: KINDS,
+      });
       // Project IAM may only have gained service-account members since the preflight.
       const iam = iamPolicyDifferences(baseline.iam, iamPolicyOf(iamNow));
       out.inventory = {
@@ -204,7 +212,7 @@ export async function readbackRun({
   out.unknown = known.unknown;
   if (stop) out.authStop = stop;
   const namesGone =
-    Object.keys(out.names).length === readbackNames(runId, uploadObjects).length &&
+    Object.keys(out.names).length === readbackNames(runId, uploadObjects, program).length &&
     Object.values(out.names).every((n) => n.absent === true);
   const listsGone =
     out.lists.functionsAndServices === true &&

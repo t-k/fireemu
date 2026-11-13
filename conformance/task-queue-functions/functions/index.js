@@ -16,7 +16,7 @@ const { createHash } = require("node:crypto");
 const { setGlobalOptions } = require("firebase-functions/v2");
 const { HttpsError } = require("firebase-functions/v2/https");
 const { onTaskDispatched } = require("firebase-functions/v2/tasks");
-const { suffix } = require("./suffix.json");
+const { suffix, roles } = require("./suffix.json");
 
 const MARK = "TQ_FRAME";
 const REGION = "us-central1";
@@ -146,4 +146,5 @@ const ROLES = {
 };
 
 for (const [role, options] of Object.entries(ROLES))
-  exports[role + suffix] = observed(onTaskDispatched(options, handler(role)));
+  if (roles === undefined || roles.includes(role))
+    exports[role + suffix] = observed(onTaskDispatched(options, handler(role)));

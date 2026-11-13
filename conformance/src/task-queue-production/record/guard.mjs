@@ -29,21 +29,30 @@ const alt = (names) => (names.length === 0 ? "(?!)" : "(?:" + names.map(esc).joi
 const OPERATION_ID = "[A-Za-z0-9._-]+";
 const BUILD_ID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 
-export const ownPackages = (runId) => functionsOf(runId).flatMap(packageIds);
+export const ownPackages = (runId, program = "default") =>
+  functionsOf(runId, program).flatMap(packageIds);
 
 /** The queue ids of a run: its functions' and the one that is never deployed. */
-export const queueIdsOf = (runId) => [...functionsOf(runId), ABSENT_QUEUE + suffixOf(runId)];
+export const queueIdsOf = (runId, program = "default") => [
+  ...functionsOf(runId, program),
+  ...(program === "burst" ? [] : [ABSENT_QUEUE + suffixOf(runId)]),
+];
 
 /**
  * Rules for one run. `projectNumber` is for the Service Usage and Cloud Build reads. A rule is
  * `[method, host, path regex, query keys allowed, body check, mutation]`.
  */
-export function rules(runId, projectNumber, state = { objects: new Set(), targets: null }) {
+export function rules(
+  runId,
+  projectNumber,
+  state = { objects: new Set(), targets: null },
+  program = "default",
+) {
   const P = esc(PROJECT);
   const R = esc(REGION);
-  const fns = alt(functionsOf(runId));
-  const queues = alt(queueIdsOf(runId));
-  const packages = alt(ownPackages(runId));
+  const fns = alt(functionsOf(runId, program));
+  const queues = alt(queueIdsOf(runId, program));
+  const packages = alt(ownPackages(runId, program));
   const num = (n) => (v) => v === String(n);
   const token = (v) => /^[A-Za-z0-9_=.%+/-]{1,2048}$/.test(v);
   const q = (spec) => spec;
@@ -51,14 +60,14 @@ export function rules(runId, projectNumber, state = { objects: new Set(), target
   const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
   const empty = (json) => json === undefined || (isObject(json) && Object.keys(json).length === 0);
   const read = (host, path, query = q({})) => ["GET", host, path, query, nothing, false];
-  const taskNames = plannedTaskNames(runId);
+  const taskNames = plannedTaskNames(runId, program);
   // The shapes the program may send, once the targets are known: before the readbacks no createTask is allowed.
   let shapes = null;
   let shapesFor = null;
   const allowedShape = (json, pathname) => {
     if (state.targets === null) return false;
     if (shapesFor !== state.targets) {
-      shapes = plannedShapes(runId, state.targets);
+      shapes = plannedShapes(runId, state.targets, program);
       shapesFor = state.targets;
     }
     const queue = /\/queues\/([^/]+)\/tasks$/.exec(pathname)?.[1];
@@ -293,9 +302,9 @@ export function matchRule(spec, ruleList) {
   return null;
 }
 
-export function createGuard(runId, projectNumber) {
+export function createGuard(runId, projectNumber, program = "default") {
   const state = { objects: new Set(), targets: null };
-  const ruleList = rules(runId, projectNumber, state);
+  const ruleList = rules(runId, projectNumber, state, program);
   return {
     allow: (spec) => matchRule(spec, ruleList) !== null,
     isMutation: (spec) => matchRule(spec, ruleList)?.mutation === true,

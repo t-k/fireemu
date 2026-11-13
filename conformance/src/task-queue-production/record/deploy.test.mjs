@@ -12,6 +12,7 @@ import { PROJECT, REGION, ROLES, ROLE_IDS, functionName, functionsOf } from "../
 import {
   allActive,
   cliPlan,
+  cliWritesFromOutput,
   declarationProblems,
   inventoryDifferences,
   nonePresent,
@@ -21,6 +22,7 @@ import {
   sourceProblems,
   summarize,
 } from "./deploy.mjs";
+import { go } from "./harness.mjs";
 import { tempDir } from "./testtmp.mjs";
 
 const RUN = "0123456789abcdef";
@@ -151,6 +153,17 @@ test("the source copy is the committed fixture with the run's suffix and nothing
   assert.deepEqual(JSON.parse(readFileSync(join(prepared.fixtureDir, "suffix.json"), "utf8")), {
     suffix: RUN.slice(0, 6),
   });
+  const burst = prepareSource({
+    repoRoot: repo,
+    commit,
+    target: tempDir("tq-burst-target-"),
+    runId: RUN,
+    program: "burst",
+  });
+  assert.deepEqual(JSON.parse(readFileSync(join(burst.fixtureDir, "suffix.json"), "utf8")), {
+    suffix: RUN.slice(0, 6),
+    roles: ["tqrate"],
+  });
   assert.equal(
     readFileSync(join(prepared.fixtureDir, "index.js"), "utf8"),
     readFileSync(join(conformance, "task-queue-functions/functions/index.js"), "utf8"),
@@ -269,8 +282,12 @@ test("the inventory compares the queues too: a queue that appears or disappears 
   // The build's copy of each of the run's functions may appear in the sources bucket; another object may not.
   const copy = (name) => ({ ...before, sourceObjects: { uploads: [], sources: [name] } });
   assert.deepEqual(
-    inventoryDifferences({ before, after: copy("tqretry0123ab/function-source.zip"), kinds })
-      .differences,
+    inventoryDifferences({
+      runId: RUN,
+      before,
+      after: copy("tqretry012345/function-source.zip"),
+      kinds,
+    }).differences,
     [],
   );
   assert.equal(
@@ -340,20 +357,25 @@ test("a function is active only with its Cloud Run service, and only a build of 
   const copy = (name) => ({ ...before, sourceObjects: { uploads: [], sources: [name] } });
   for (const name of [
     "tqretryXYZ/function-source.zip",
+    "tqretryabcdef/function-source.zip",
     "tqretry0123abc/function-source.zip",
     "tqnone012345/function-source.zip",
     "tqretry0123ab/function-source.zip.bak",
     "tqretry0123ab/other.zip",
   ])
     assert.equal(
-      inventoryDifferences({ before, after: copy(name), kinds }).differences.length,
+      inventoryDifferences({ runId: RUN, before, after: copy(name), kinds }).differences.length,
       1,
       name,
     );
   for (const role of ROLE_IDS)
     assert.deepEqual(
-      inventoryDifferences({ before, after: copy(role + "0123ab/function-source.zip"), kinds })
-        .differences,
+      inventoryDifferences({
+        runId: RUN,
+        before,
+        after: copy(role + RUN.slice(0, 6) + "/function-source.zip"),
+        kinds,
+      }).differences,
       [],
       role,
     );
@@ -373,4 +395,84 @@ test("the repository policy is compared as read: a change, an unread side and no
   assert.equal(repositoryDifferences(policy, null).complete, false);
   assert.equal(repositoryDifferences(undefined, policy).complete, false);
   assert.equal(repositoryDifferences(null, null).complete, false);
+});
+
+test("CLI writes distinguish functionId and queue name but retain real resends", async () => {
+  for (const kind of ["function", "queue"]) {
+    const url =
+      kind === "function"
+        ? "https://cloudfunctions.googleapis.com/v2/projects/p/locations/r/functions"
+        : "https://cloudtasks.googleapis.com/v2/projects/p/locations/r/queues";
+    const lines = (id) =>
+      [
+        `>>> [apiv2][query] POST ${url} ${kind === "function" ? JSON.stringify({ functionId: id }) : "[none]"}`,
+        `>>> [apiv2][body] POST ${url} ${JSON.stringify({ name: `projects/p/locations/r/${kind === "function" ? "functions" : "queues"}/${id}` })}`,
+        `<<< [apiv2][status] POST ${url} 200`,
+      ].join("\n");
+    const once = functionsOf(RUN).map(lines).join("\n");
+    assert.equal(cliWritesFromOutput(once).length, 8, kind);
+    assert.ok(
+      cliWritesFromOutput(once).every((w) => w.class === "ok"),
+      kind,
+    );
+    const twice = cliWritesFromOutput(once + "\n" + lines(functionsOf(RUN)[0]));
+    assert.equal(twice.filter((w) => w.class === "retried").length, 1, kind);
+    assert.equal(twice.find((w) => w.class === "retried").requests, 2);
+    for (const [cliWrites, expected] of [
+      [cliWritesFromOutput(once), 0],
+      [twice, 1],
+    ]) {
+      const { result } = await go({}, {}, undefined, (runCli) => async (options) => {
+        const result = await runCli(options);
+        return options.action === "deploy" ? { ...result, cliWrites } : result;
+      });
+      assert.equal(
+        result.unknownMutationList.filter((m) => m.class === "cli-write-retried").length,
+        expected,
+      );
+    }
+    const queryIds = functionsOf(RUN)
+      .map(
+        (id) =>
+          `>>> [apiv2][query] POST ${url}?functionId=${id} [none]\n<<< [apiv2][status] POST ${url}?functionId=${id} 200`,
+      )
+      .join("\n");
+    assert.ok(cliWritesFromOutput(queryIds).every((w) => w.class === "ok"));
+  }
+});
+
+test("CLI query identities keep different function writes separate", () => {
+  const url = "https://cloudfunctions.googleapis.com/v2/projects/p/locations/r/functions";
+  const output = functionsOf(RUN)
+    .slice(0, 2)
+    .map(
+      (id) =>
+        `>>> [apiv2][query] POST ${url} ${JSON.stringify({ functionId: id })}\n` +
+        `<<< [apiv2][status] POST ${url} 200`,
+    )
+    .join("\n");
+  const writes = cliWritesFromOutput(output);
+  assert.equal(writes.length, 2);
+  assert.deepEqual(
+    writes.map((write) => write.identity),
+    functionsOf(RUN).slice(0, 2),
+  );
+  assert.ok(writes.every((write) => write.class === "ok"));
+});
+
+test("burst discovery and CLI deletion require only the selected role", () => {
+  const name = fn("tqrate");
+  const endpoints = endpointsOf();
+  assert.deepEqual(declarationProblems({ [name]: endpoints[name] }, RUN, "burst"), []);
+  assert.match(declarationProblems(endpoints, RUN, "burst")[0], /fixture exports/);
+  const plan = cliPlan("delete", {
+    configHome: "/c",
+    configPath: "/s/firebase.json",
+    workDir: "/s",
+    home: "/h",
+    path: "/n/bin:/usr/bin",
+    runId: RUN,
+    program: "burst",
+  });
+  assert.deepEqual(plan.args.slice(1, plan.args.indexOf("--config")), [name]);
 });

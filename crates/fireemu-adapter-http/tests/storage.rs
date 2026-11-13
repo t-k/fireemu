@@ -7085,14 +7085,7 @@ service firebase.storage {
                 let stale = upload(&expired);
                 assert_eq!((stale.status, r.status), (401, 401));
                 assert_eq!(r.headers, stale.headers);
-                // The strict Firebase dialect writes its JSON bodies in the two-space layout without a
-                // final line feed (`storage_production.rs`, taken from the lean-v5 rows of the other
-                // Firebase-dialect answers). NO recorded production row covers a future-dated, or any
-                // invalid, ID token on a `/v0` Storage route: this body, its layout and its message
-                // ("invalid ID token: malformed token", the fail-closed text of the clock-rewind
-                // issue) are UNRECORDED. They are asserted as the strict profile writes them, not as
-                // production's. Follow-up:
-                // docs.local/issues/open/storage-strict-firebase-401-body-for-an-invalid-token-is-unrecorded.md.
+                // Future-dated tokens remain UNRECORDED and fail closed with 401. RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case F1): Firebase not-a-jwt is anonymous and denying Rules answer the 73-byte 403 Permission denied. envelope; it does not establish the answer for a well-formed token with invalid claims or signature.
                 assert_eq!(
                     String::from_utf8_lossy(&r.body),
                     "{\n  \"error\": {\n    \"code\": 401,\n    \"message\": \"invalid ID token: malformed token\",\n    \"status\": \"UNAUTHENTICATED\"\n  }\n}"
@@ -7865,10 +7858,7 @@ fn resumable_uploads_verify_declared_checksums_only_under_strict() {
     }
 }
 
-/// A browser sends an `Origin`, and every recording was made without one. Under strict an answer to
-/// such a request keeps production's headers and adds what a browser needs to read it: the origin
-/// reflected and the official emulator's list of exposed headers (which names the `X-Goog-Upload-*`
-/// headers the Firebase SDK reads). Without an `Origin` the recorded sets stay exactly as recorded.
+/// RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case C7): JSON metadata uses its own exposed headers and allows credentials. Firebase and upload protocols retain their existing browser header exposure; without Origin the recorded sets stay unchanged.
 #[test]
 #[allow(clippy::too_many_lines)]
 fn strict_answers_to_a_browser_origin_carry_the_reflection_and_the_exposed_headers() {
@@ -7891,13 +7881,37 @@ fn strict_answers_to_a_browser_origin_carry_the_reflection_and_the_exposed_heade
         let exposed = header(response, "access-control-expose-headers")
             .unwrap_or_default()
             .to_ascii_lowercase();
-        for name in [
-            "x-goog-upload-status",
-            "x-goog-upload-url",
-            "x-goog-upload-size-received",
-            "x-goog-upload-chunk-granularity",
-        ] {
-            assert!(exposed.contains(name), "{what}: {name} in {exposed}");
+        if what == "JSON API metadata" {
+            let recording: Value = serde_json::from_str(include_str!(
+                "../../../conformance/storage-strictness-obs/recordings/run-1.json"
+            ))
+            .unwrap();
+            let row = recording["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["case"] == "C7")
+                .unwrap();
+            assert_eq!(
+                exposed,
+                row["headers"]["access-control-expose-headers"]
+                    .as_str()
+                    .unwrap()
+                    .to_ascii_lowercase()
+            );
+            assert_eq!(
+                header(response, "access-control-allow-credentials"),
+                Some("true")
+            );
+        } else {
+            for name in [
+                "x-goog-upload-status",
+                "x-goog-upload-url",
+                "x-goog-upload-size-received",
+                "x-goog-upload-chunk-granularity",
+            ] {
+                assert!(exposed.contains(name), "{what}: {name} in {exposed}");
+            }
         }
         let vary: Vec<_> = response
             .headers
@@ -8232,11 +8246,9 @@ async fn the_strict_server_sends_production_headers_on_framed_answers() {
         "{json_api}"
     );
     assert!(!json_api.contains("x-content-type-options"), "{json_api}");
-    // A browser's request is answered with what it needs to read the answer (the origin reflected,
-    // the official emulator's exposed headers), on both dialects; the recorded wildcard of the
-    // v0 JSON answers is for requests without an `Origin`.
+    // JSON API uses its recorded exposed headers; Firebase keeps the upload headers its browser SDK needs.
     assert!(
-        json_api.contains("access-control-expose-headers: content-type,x-firebase-storage-version"),
+        json_api.contains("access-control-expose-headers: cache-control, content-length, content-type, date, etag, expires, server, transfer-encoding, vary, x-guploader-uploadid, x-goog-gcs-base-ts, x-google-trace"),
         "{json_api}"
     );
     let firebase = get("/v0/b/demo-app.appspot.com/o/absent.bin").await;
@@ -8268,11 +8280,16 @@ async fn the_strict_server_sends_production_headers_on_framed_answers() {
         !recorded_json.contains("access-control-"),
         "{recorded_json}"
     );
-    // A shape the recordings do not cover keeps the official emulator's stamps.
-    let unframed = get("/b").await;
+    // JSON API bucket routes use the same CORS policy even without storage.cors.
+    let buckets = get("/b").await;
     assert!(
-        unframed.contains("access-control-expose-headers: content-type,x-firebase-storage-version"),
-        "{unframed}"
+        buckets.contains("access-control-allow-credentials: true"),
+        "{buckets}"
+    );
+    assert!(
+        buckets
+            .contains("access-control-expose-headers: cache-control, content-length, content-type"),
+        "{buckets}"
     );
     server.abort();
 }
@@ -9050,14 +9067,10 @@ async fn an_abandoned_glob_scan_gives_its_slot_back_when_its_client_has_gone() {
     server.abort();
 }
 
-/// Production answers a JSON API object delete with `204` and `Content-Length: 0` (recorded in both
-/// stage 3 v9 recordings, recipes c and d, and compared byte for byte by the management comparison).
-/// hyper drops a content length from a `204` unless the body reports a known length, so this is
-/// judged on the bytes of the wire. Both profiles send it (it is a header that production sends and
-/// refuses nothing). The official emulator's `res.sendStatus(204)` sends none. Every other `204` is
-/// not recorded and stays as it was: the Firebase dialect's object delete has no content length.
+/// Production answers a JSON API object delete with `204` and `Content-Length: 0` (recorded in both stage 3 v9 recordings, recipes c and d, and compared byte for byte by the management comparison). Both profiles send it. hyper drops a content length from a `204` unless the body reports a known length, so this is judged on the bytes of the wire.
+/// RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case F2): strict Firebase object DELETE also sends `Content-Length: 0`. The emulator profile keeps the official emulator's `res.sendStatus(204)` behavior without a content length.
 #[tokio::test]
-async fn a_json_api_object_delete_sends_content_length_zero_on_the_wire_and_other_204s_do_not() {
+async fn object_deletes_send_recorded_content_lengths_on_the_wire() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     static BUDGET: BodyBudget = BodyBudget::new(1_572_864);
     for acceptance in BOTH_PROFILES {
@@ -9122,15 +9135,26 @@ async fn a_json_api_object_delete_sends_content_length_zero_on_the_wire_and_othe
                 "{acceptance:?} {path}: a body followed: {raw}"
             );
         }
-        // Near misses: the Firebase dialect's delete of an object is a 204 without a length; a delete
-        // of an object that is not there is the ordinary 404 with its own length and body.
+        // Firebase DELETE sends a zero length only under strict; a missing object remains the ordinary 404 with its own length and body.
         let firebase = delete(format!("/v0/b/{BUCKET}/o/kept.txt")).await;
         let head = head_of(&firebase);
         assert!(
             head.starts_with("http/1.1 204"),
             "{acceptance:?} {firebase}"
         );
-        assert_eq!(length_of(&head), None, "{acceptance:?} {firebase}");
+        assert_eq!(
+            length_of(&head).as_deref(),
+            if acceptance == TokenAcceptance::Verified {
+                Some("0")
+            } else {
+                None
+            },
+            "{acceptance:?} {firebase}"
+        );
+        assert!(
+            firebase.ends_with("\r\n\r\n"),
+            "{acceptance:?}: a body followed: {firebase}"
+        );
         let missing = delete(format!("/storage/v1/b/{BUCKET}/o/not-there.txt")).await;
         let head = head_of(&missing);
         assert!(head.starts_with("http/1.1 404"), "{acceptance:?} {missing}");

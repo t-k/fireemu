@@ -2059,10 +2059,12 @@ fn refuse_answers_a_missing_bucket_on_every_object_route_without_creating_it() {
         assert_eq!(response.status, 404, "{label}: {}", text(&response));
         if label.starts_with("firebase") {
             assert!(
-                text(&response).contains("typo-bucket"),
+                json_error_message(&response) == "Not Found.",
                 "{label}: {}",
                 text(&response)
             );
+        } else if label == "json media get" {
+            assert_eq!(text(&response), "The specified bucket does not exist.");
         } else if label == "xml-style get" {
             assert!(
                 text(&response).contains("<Code>NoSuchBucket</Code>"),

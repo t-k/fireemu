@@ -1,7 +1,7 @@
 //! The strict profile's framing of Storage answers as production sends them: which headers an
 //! answer carries and how its JSON body is laid out and ordered.
 //!
-//! Everything here comes from the two lean-v5 production recordings of STORAGE-OBJECT (and the
+//! CORS also follows STORAGE-STRICTNESS-OBS run ss-48adbd8e, cases C6-C8. Other framing comes from the two lean-v5 production recordings of STORAGE-OBJECT (and the
 //! lean-v4 and probe-v4 recordings behind them), read through the normalized fixture of the
 //! comparison tool: the header names and constant values of 2,446 exchanges per recording, the
 //! `bodyBytes` of each JSON body (the recorder stores a compact re-serialization, so the layout is
@@ -245,13 +245,7 @@ pub fn frame(shape: &Shape, mut response: StorageResponse) -> (StorageResponse, 
     (response, true)
 }
 
-/// What a browser needs to read an answer: the request's `Origin` reflected and the official
-/// emulator's list of exposed headers (which names the `X-Goog-Upload-*` headers the Firebase SDK
-/// reads), on every answer, both dialects, every status. Every recording was made without an
-/// `Origin`, so what production sends to one is not recorded; this follows the official emulator
-/// and replaces the recorded CORS headers of the plan (the wildcard of the v0 JSON answers and
-/// its two exposed headers would hide the upload headers from a browser). A request without an
-/// `Origin` keeps the recorded set untouched.
+/// RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case C6): JSON media reads reflect Origin, allow credentials and expose the media header list; C7 records the metadata list. Firebase keeps its existing browser upload header exposure.
 fn reflect_origin(shape: &Shape, response: &mut StorageResponse) {
     let Some(origin) = &shape.origin else {
         return;
@@ -264,8 +258,18 @@ fn reflect_origin(shape: &Shape, response: &mut StorageResponse) {
         .push(("access-control-allow-origin".to_owned(), origin.clone()));
     response.headers.push((
         "access-control-expose-headers".to_owned(),
-        crate::storage_server::EXPOSED_HEADERS.to_owned(),
+        match shape.wire {
+            Wire::Gcs if shape.media => "Cache-Control, Content-Disposition, Content-Length, Content-Type, Date, ETag, Expires, Last-Modified, Pragma, Server, Transfer-Encoding, Vary, X-GUploader-UploadID, X-Goog-Gcs-Base-Ts, X-Goog-Generation, X-Goog-Hash, X-Goog-Metageneration, X-Google-Trace",
+            Wire::Gcs if shape.method == "GET" => "Cache-Control, Content-Length, Content-Type, Date, ETag, Expires, Server, Transfer-Encoding, Vary, X-GUploader-UploadID, X-Goog-Gcs-Base-Ts, X-Google-Trace",
+            _ => crate::storage_server::EXPOSED_HEADERS,
+        }.to_owned(),
     ));
+    if shape.wire == Wire::Gcs {
+        response.headers.push((
+            "access-control-allow-credentials".to_owned(),
+            "true".to_owned(),
+        ));
+    }
     if !response
         .headers
         .iter()

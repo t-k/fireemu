@@ -1387,7 +1387,7 @@
       "recipeIds": [
         "task-queue/max-dispatches-per-second"
       ],
-      "status": "VERIFIED",
+      "status": "NOT_COMPARED",
       "corpusSteps": [
         "rate-a",
         "rate-b",
@@ -1407,7 +1407,8 @@
           "path": "conformance/task-queue-production-burst-strict-vs-pass-1.json",
           "sha256": "b56e1962070a576339cd20abfdab642bc53e489b0d24beb6e442767ebc1e70de"
         }
-      ]
+      ],
+      "reason": "One pass: the strict replay matches the 2026-11-13 burst recording (burst, cadence, count); the second recording is pending."
     },
     {
       "conditionId": "TASK-QUEUE-FUNCTIONS/delete-task",

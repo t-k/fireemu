@@ -228,7 +228,8 @@ test("burst evidence verifies only a matching comparison rebuilt from the projec
   const target = condition({ conditionId: "TASK-QUEUE-FUNCTIONS/max-dispatches-per-second" });
   const derive = () =>
     conditionEvidence(target, ok(), evidence, { burst: () => burstEvidence(read) });
-  assert.equal(derive().status, "VERIFIED");
+  assert.equal(derive().status, "NOT_COMPARED");
+  assert.match(derive().reason, /^One pass: .*second recording is pending/);
   assert.deepEqual(
     derive().productionEvidence.map((item) => item.path),
     [FILES.burstProduction, FILES.burstComparison],

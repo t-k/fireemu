@@ -164,7 +164,14 @@ export function burstEvidence(readFile = read) {
       comparison.verdict !== "MATCH"
     )
       throw new Error("burst comparison differs from its projections or does not match");
-    return { status: "VERIFIED", productionEvidence: evidence };
+    // Every verified condition needs two production recordings (recordingPolicy); the burst
+    // program has one so far, so a matching comparison still leaves the condition open.
+    return {
+      status: "NOT_COMPARED",
+      productionEvidence: evidence,
+      reason:
+        "One pass: the strict replay matches the 2026-11-13 burst recording (burst, cadence, count); the second recording is pending.",
+    };
   } catch {
     return {
       status: "NOT_COMPARED",

@@ -842,6 +842,7 @@ mod tests {
                     | "mask_secret"
                     | "resolve_project_alias"
                     | "resolve_storage_rules_targets"
+                    | "resolve_hosting_targets"
                     | "database_rules_by_instance"
             ) {
                 continue;

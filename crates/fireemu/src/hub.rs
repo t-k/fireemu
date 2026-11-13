@@ -61,13 +61,15 @@ pub struct EmulatorInfo {
     /// The process serving it. Upstream reports one only for the emulators that run in their
     /// own process; every fireemu surface is served by this process, so every entry carries it.
     pub pid: u32,
+    /// Additional ports reserved by this emulator, when the upstream Hub contract exposes them.
+    pub reserved_ports: Option<Vec<u16>>,
 }
 
 impl EmulatorInfo {
     /// The upstream JSON shape: `name`, `host`, `port`, `pid` and the `listen` specs.
     fn to_json(&self) -> Value {
         let host = self.addr.ip().to_string();
-        json!({
+        let mut value = json!({
             "name": self.name,
             "host": host,
             "port": self.addr.port(),
@@ -77,7 +79,11 @@ impl EmulatorInfo {
                 "family": if self.addr.is_ipv6() { "IPv6" } else { "IPv4" },
                 "port": self.addr.port(),
             }],
-        })
+        });
+        if let Some(ports) = &self.reserved_ports {
+            value["reservedPorts"] = json!(ports);
+        }
+        value
     }
 }
 
@@ -840,11 +846,13 @@ mod tests {
                     name: "firestore",
                     addr: "127.0.0.1:8080".parse().unwrap(),
                     pid: 7,
+                    reserved_ports: None,
                 },
                 EmulatorInfo {
                     name: "hub",
                     addr: "127.0.0.1:4400".parse().unwrap(),
                     pid: 7,
+                    reserved_ports: Some(vec![5007]),
                 },
             ],
             functions: None,

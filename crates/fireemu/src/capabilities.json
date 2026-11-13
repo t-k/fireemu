@@ -1040,16 +1040,16 @@
     "status": "partial",
     "precision": "finite-official-emulator-corpus",
     "implemented": [
-      "One firebase.json public site with static/index files, custom/default 404, ordered redirects and rewrites, custom headers, cleanUrls, trailingSlash and i18n.",
+      "One or multiple firebase.json public sites, with explicit site IDs or .firebaserc deploy targets, separate local listeners, static/index files, custom/default 404, ordered redirects and rewrites, custom headers, cleanUrls, trailingSlash and i18n.",
       "Local initialization paths and registered local Functions/Run rewrites; --only hosting, Hosting port configuration, Hub discovery, readiness and supervised shutdown.",
       "Capability-confined file access, incremental ETag calculation and bounded streaming from the same opened handle."
     ],
     "unimplemented": [
-      "Production parity: HOSTING remains IMPLEMENTING with unverified conditions.",
-      "Multiple Hosting sites, external SDK downloads, live upstream fallback, and routing shapes beyond the finite offline fixture corpus."
+      "External SDK downloads, live upstream fallback, and routing shapes beyond the finite offline fixture corpus."
     ],
     "notes": [
       "No production request is made by the offline conformance suite.",
+      "Production verification covers the recorded HOSTING corpus; additional multisite configuration and local port behavior are tested locally, not newly observed in production.",
       "Absolute or escaping symlinks, Windows path syntax in request paths, and nonregular files are refused. This local containment policy is not a production-equivalence claim.",
       "Request bodies for local upstream rewrites have a 32 MiB local memory bound. Static response bodies are streamed rather than buffered."
     ]

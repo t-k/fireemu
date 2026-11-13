@@ -665,6 +665,8 @@ fn resolve_project_dependent_config(
         let project = cfg.auth_project.clone();
         cfg.resolve_storage_rules_targets(rc, &project)?;
     }
+    let hosting_project = cfg.auth_project.clone();
+    cfg.resolve_hosting_targets(rc.as_ref(), &hosting_project)?;
     // firebase-tools resolves the rules targets only for a database it starts.
     if cfg.database_enabled {
         cfg.database_rules_resolved =
@@ -1975,6 +1977,8 @@ fn parse_options(
         let project = cfg.auth_project.clone();
         cfg.resolve_storage_rules_targets(rc, &project)?;
     }
+    let hosting_project = cfg.auth_project.clone();
+    cfg.resolve_hosting_targets(rc.as_ref(), &hosting_project)?;
     // firebase-tools resolves the rules targets only for a database it starts.
     if only.database && (cfg.database_enabled || only.explicit) {
         cfg.database_rules_resolved =
@@ -2333,7 +2337,7 @@ fn network_exposure_warnings(listeners: &[(&str, Option<std::net::SocketAddr>)])
 
 /// The addresses the daemon actually bound, per service. `None` means the service was not
 /// selected and nothing listens for it.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct BoundAddrs {
     /// Firestore gRPC + REST + `WebChannel`.
     firestore: Option<std::net::SocketAddr>,
@@ -2346,6 +2350,8 @@ struct BoundAddrs {
     functions: Option<std::net::SocketAddr>,
     /// Hosting HTTP.
     hosting: Option<std::net::SocketAddr>,
+    /// Every Hosting site endpoint, in `firebase.json` order.
+    hosting_sites: Vec<std::net::SocketAddr>,
     /// Eventarc HTTP, present only as a dependency of a loaded Functions runtime.
     eventarc: Option<std::net::SocketAddr>,
     /// Cloud Tasks HTTP, present only as a dependency of a loaded Functions runtime.
@@ -3398,7 +3404,7 @@ struct Listeners {
     auth_selected: bool,
     storage: Option<tokio::net::TcpListener>,
     functions: Option<tokio::net::TcpListener>,
-    hosting: Option<tokio::net::TcpListener>,
+    hosting: Vec<tokio::net::TcpListener>,
     eventarc: Option<tokio::net::TcpListener>,
     tasks: Option<tokio::net::TcpListener>,
     pubsub: Option<tokio::net::TcpListener>,
@@ -3514,18 +3520,87 @@ async fn bind_relocatable_listener(
 async fn bind_hosting(
     cfg: &RuntimeConfig,
     only: &Selection,
-) -> Result<Option<tokio::net::TcpListener>, String> {
+) -> Result<Vec<tokio::net::TcpListener>, String> {
+    bind_hosting_with(cfg, only, kernel_pick).await
+}
+
+async fn bind_hosting_with(
+    cfg: &RuntimeConfig,
+    only: &Selection,
+    pick: EphemeralPick,
+) -> Result<Vec<tokio::net::TcpListener>, String> {
     if !plan::hosting_starts(cfg, only)? {
-        return Ok(None);
+        return Ok(Vec::new());
     }
-    bind_relocatable_listener(
+    let configs = cfg.hosting.as_deref().unwrap_or_default();
+    let first = bind_relocatable_listener(
         &cfg.hosting_addr,
         cfg.hosting_addr_explicit,
         "Hosting emulator",
         &[5001],
     )
-    .await
-    .map(Some)
+    .await?;
+    let primary_port = first
+        .local_addr()
+        .map_err(|error| error.to_string())?
+        .port();
+    let mut listeners = vec![first];
+    let (host, configured_port) = cfg
+        .hosting_addr
+        .rsplit_once(':')
+        .and_then(|(host, port)| port.parse::<u16>().ok().map(|port| (host, port)))
+        .ok_or_else(|| format!("bind {}: invalid address", cfg.hosting_addr))?;
+    for index in 1..configs.len() {
+        let first_candidate = if configured_port == 0 {
+            0
+        } else {
+            u16::try_from(usize::from(primary_port) + 4 + index)
+                .map_err(|_| "no available Hosting site port after configured port".to_owned())?
+        };
+        let mut bound = None;
+        let mut avoided = configured_ports(cfg);
+        avoided.extend(
+            listeners
+                .iter()
+                .filter_map(|listener| listener.local_addr().ok().map(|addr| addr.port())),
+        );
+        for candidate in first_candidate..=u16::MAX {
+            if candidate == 5001
+                || candidate != 0 && avoided.contains(&candidate)
+                || listeners.iter().any(|listener| {
+                    listener
+                        .local_addr()
+                        .is_ok_and(|addr| addr.port() == candidate)
+                })
+            {
+                continue;
+            }
+            if candidate == 0 {
+                match bind_ephemeral_avoiding(&format!("{host}:0"), &avoided, pick) {
+                    Ok(listener) => {
+                        bound = Some(listener);
+                        break;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            let address = format!("{host}:{candidate}");
+            if candidate == 0 {
+                continue;
+            }
+            match tokio::net::TcpListener::bind(&address).await {
+                Ok(listener) => {
+                    bound = Some(listener);
+                    break;
+                }
+                Err(error)
+                    if candidate < u16::MAX && error.kind() == std::io::ErrorKind::AddrInUse => {}
+                Err(error) => return Err(format!("bind {address}: {error}")),
+            }
+        }
+        listeners.push(bound.ok_or_else(|| "could not find an open Hosting site port".to_owned())?);
+    }
+    Ok(listeners)
 }
 
 async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listeners, String> {
@@ -3690,7 +3765,21 @@ fn hub_emulators(addrs: &BoundAddrs) -> Vec<hub::EmulatorInfo> {
         ("logging", addrs.logging),
     ]
     .into_iter()
-    .filter_map(|(name, addr)| addr.map(|addr| hub::EmulatorInfo { name, addr, pid }))
+    .filter_map(|(name, addr)| {
+        addr.map(|addr| hub::EmulatorInfo {
+            name,
+            addr,
+            pid,
+            reserved_ports: (name == "hosting" && addrs.hosting_sites.len() > 1).then(|| {
+                addrs
+                    .hosting_sites
+                    .iter()
+                    .skip(1)
+                    .map(std::net::SocketAddr::port)
+                    .collect()
+            }),
+        })
+    })
     .collect()
 }
 
@@ -3797,6 +3886,16 @@ fn print_banner(
 ) {
     println!("fireemu {verb}");
     println!("  config:           {config_origin}");
+    if let Some(sites) = &cfg.hosting {
+        for (site, addr) in sites.iter().zip(&addrs.hosting_sites) {
+            let name = site
+                .site()
+                .map_or_else(|| "hosting".to_owned(), |site| format!("hosting[{site}]"));
+            println!("  {name} (HTTP):     http://{addr}/");
+        }
+    } else {
+        println!("  hosting:          not selected by --only (nothing is bound)");
+    }
     match addrs.firestore {
         Some(a) => println!("  firestore (gRPC + REST): {a}   FIRESTORE_EMULATOR_HOST={a}"),
         None => println!("  firestore:        not selected by --only (nothing is bound)"),
@@ -6363,6 +6462,7 @@ mod storage_endpoint_tests {
             storage: loopback(9199),
             functions: None,
             hosting: None,
+            hosting_sites: Vec::new(),
             eventarc: None,
             tasks: None,
             pubsub: None,
@@ -6693,75 +6793,5 @@ mod ephemeral_bind_tests {
 }
 
 #[cfg(test)]
-mod hosting_bind_tests {
-    use super::*;
-
-    fn hosting_only(addr: String, explicit: bool) -> RuntimeConfig {
-        RuntimeConfig {
-            hosting_addr: addr,
-            hosting_addr_explicit: explicit,
-            hosting: Some(
-                crate::hosting::Config::parse(
-                    &serde_json::json!({"public": "public"}),
-                    std::path::Path::new("/project"),
-                )
-                .unwrap(),
-            ),
-            hub_addr: "127.0.0.1:0".to_owned(),
-            hub_addr_explicit: true,
-            logging_enabled: false,
-            ..RuntimeConfig::default()
-        }
-    }
-
-    // firebase-tools 15.28.2 searches upward from the default Hosting port (5000 is often
-    // taken on macOS) and never lands on 5001, the Functions default.
-    #[tokio::test]
-    async fn a_busy_default_hosting_port_moves_up_and_skips_the_functions_port() {
-        let busy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = busy.local_addr().unwrap().port();
-        let cfg = hosting_only(format!("127.0.0.1:{port}"), false);
-        let only = Selection::parse("hosting").unwrap();
-        let listeners = bind_listeners(&cfg, &only).await.unwrap();
-        let bound = listeners.hosting.unwrap().local_addr().unwrap().port();
-        assert_ne!(bound, port);
-        assert!(bound > port);
-        let avoided = bind_relocatable_listener(
-            &format!("127.0.0.1:{}", 5000),
-            false,
-            "Hosting emulator",
-            &[5000, 5001],
-        )
-        .await
-        .unwrap();
-        assert!(avoided.local_addr().unwrap().port() > 5001);
-    }
-
-    // Holding 5000 (or finding it already held, as macOS AirPlay does) forces the search.
-    #[tokio::test]
-    async fn the_default_hosting_search_never_takes_5001() {
-        let _held = std::net::TcpListener::bind("127.0.0.1:5000");
-        let cfg = hosting_only("127.0.0.1:5000".to_owned(), false);
-        let only = Selection::parse("hosting").unwrap();
-        let listener = bind_hosting(&cfg, &only).await.unwrap().unwrap();
-        assert_ne!(listener.local_addr().unwrap().port(), 5000);
-        assert_ne!(listener.local_addr().unwrap().port(), 5001);
-    }
-
-    #[tokio::test]
-    async fn hosting_left_out_of_only_binds_nothing_even_when_configured() {
-        let cfg = hosting_only("127.0.0.1:0".to_owned(), false);
-        let only = Selection::parse("auth").unwrap();
-        assert!(bind_hosting(&cfg, &only).await.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn a_configured_hosting_port_is_never_moved() {
-        let busy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = busy.local_addr().unwrap().port();
-        let cfg = hosting_only(format!("127.0.0.1:{port}"), true);
-        let only = Selection::parse("hosting").unwrap();
-        let error = bind_listeners(&cfg, &only).await.err().unwrap();
-        assert!(error.contains("bind"), "{error}");
-    }
-}
+#[path = "main_hosting_multisite_tests.rs"]
+mod hosting_bind_tests;

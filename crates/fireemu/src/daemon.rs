@@ -1550,29 +1550,53 @@ async fn serve_suite(
         spawn_server!("Emulator Hub", hub::serve(listener, hub_state.clone()));
     }
     let mut hosting_info = None;
-    if let (Some(listener), Some(config)) = (hosting_listener, cfg.hosting.clone()) {
-        let site_config = config.data().clone();
+    if !hosting_listener.is_empty() {
+        let configs = cfg.hosting.clone().unwrap_or_default();
         let emulators = serde_json::Value::Object(hub_emulators(&addrs).into_iter().filter(|entry| matches!(entry.name, "auth"|"firestore"|"functions"|"storage"|"database")).map(|entry| (entry.name.to_owned(), serde_json::json!({"host":entry.addr.ip().to_string(),"port":entry.addr.port(),"hostAndPort":entry.addr.to_string()}))).collect());
-        let prepared = crate::hosting::prepare(
-            config,
-            cfg.auth_project.clone(),
-            addrs.functions,
-            emulators,
-            crate::hosting::Mode {
-                strict: matches!(cfg.profile, crate::config::CompatibilityProfile::Strict),
-                default_cache_control: cfg.hosting_cache_control
-                    == crate::config::HostingCacheControl::Production,
-                client_country: cfg.hosting_client_country
-                    == crate::config::HostingClientCountry::Honoured,
-            },
-        )?;
-        hosting_info = addrs.hosting.map(|addr| fireemu_adapter_ui::HostingInfo {
-            addr: addr.to_string(),
-            public_root: prepared.public_root().to_owned(),
-            public_exists: prepared.public_exists(),
-            config: site_config,
-        });
-        spawn_server!("Hosting", crate::hosting::serve(listener, prepared));
+        let mode = crate::hosting::Mode {
+            strict: matches!(cfg.profile, crate::config::CompatibilityProfile::Strict),
+            default_cache_control: cfg.hosting_cache_control
+                == crate::config::HostingCacheControl::Production,
+            client_country: cfg.hosting_client_country
+                == crate::config::HostingClientCountry::Honoured,
+        };
+        if configs.len() != hosting_listener.len() {
+            return Err("Hosting site configuration/listener count mismatch".to_owned());
+        }
+        let mut prepared_sites = Vec::with_capacity(configs.len());
+        for (config, listener) in configs.into_iter().zip(hosting_listener) {
+            let prepared = crate::hosting::prepare(
+                config.clone(),
+                cfg.auth_project.clone(),
+                addrs.functions,
+                emulators.clone(),
+                mode,
+            )?;
+            if hosting_info.is_none() {
+                hosting_info = Some(fireemu_adapter_ui::HostingInfo {
+                    addr: listener
+                        .local_addr()
+                        .map_err(|error| error.to_string())?
+                        .to_string(),
+                    public_root: prepared.public_root().to_owned(),
+                    public_exists: prepared.public_exists(),
+                    config: config.data().clone(),
+                });
+            }
+            prepared_sites.push((config.site().map(str::to_owned), listener, prepared));
+        }
+        for (site, listener, prepared) in prepared_sites {
+            let name = site.map_or_else(|| "Hosting".to_owned(), |site| format!("Hosting[{site}]"));
+            servers.spawn(async move {
+                (
+                    "Hosting",
+                    format!(
+                        "{name}: {:?}",
+                        crate::hosting::serve(listener, prepared).await
+                    ),
+                )
+            });
+        }
     }
     let functions_http_admission = fireemu_adapter_functions::http::HttpAdmission::new();
     let functions_http_profile = match cfg.profile {
@@ -1778,8 +1802,17 @@ async fn serve_suite(
         &control_token,
         &storage_admin_capability,
     );
+    let hosting_sites = cfg
+        .hosting
+        .as_ref()
+        .into_iter()
+        .flatten()
+        .zip(addrs.hosting_sites.iter())
+        .map(|(site, addr)| serde_json::json!({"site":site.site(),"url":format!("http://{addr}/")}))
+        .collect::<Vec<_>>();
     let descriptor = serde_json::json!({"schemaVersion":1,"pid":std::process::id(),"projectId":cfg.auth_project,
         "hostingUrl":addrs.hosting.map(|addr| format!("http://{addr}/")),
+        "hostingSites":hosting_sites,
         "uiUrl":addrs.ui.map(|addr| format!("http://{addr}/ui/")),
         "controlUrl":format!("http://{}",addrs.control),"controlToken":control_token,
         "environment":environment.iter().cloned().collect::<std::collections::BTreeMap<_,_>>()});
@@ -2384,7 +2417,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 ("auth", auth_selected.then_some(http_addr)),
                 ("storage", storage_addr),
                 ("functions", functions_addr),
-                ("hosting", hosting_listener.as_ref().and_then(|l| l.local_addr().ok())),
+                ("hosting", hosting_listener.first().and_then(|l| l.local_addr().ok())),
                 ("eventarc", eventarc_addr),
                 ("tasks", tasks_addr),
                 ("pubsub", pubsub_addr),
@@ -2406,7 +2439,11 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             auth: auth_selected.then_some(http_addr),
             storage: storage_addr,
             functions: connectable(functions_addr),
-            hosting: connectable(hosting_listener.as_ref().and_then(|l| l.local_addr().ok())),
+            hosting: connectable(hosting_listener.first().and_then(|l| l.local_addr().ok())),
+            hosting_sites: hosting_listener
+                .iter()
+                .filter_map(|listener| listener.local_addr().ok().map(super::connectable))
+                .collect(),
             eventarc: connectable(eventarc_addr),
             tasks: connectable(tasks_addr),
             pubsub: connectable(pubsub_addr),

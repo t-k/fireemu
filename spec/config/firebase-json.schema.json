@@ -43,18 +43,15 @@
       ]
     },
     "hosting": {
-      "description": "One local public site. Multi-site arrays are not implemented. Functions and Run rewrites resolve only to registered local Functions targets, without live fallback.",
-      "type": "object",
-      "required": ["public"],
-      "properties": {
-        "public": { "type": "string" },
-        "cleanUrls": { "type": "boolean" },
-        "trailingSlash": { "type": "boolean" },
-        "redirects": { "type": "array", "items": { "$ref": "#/$defs/hostingRule" } },
-        "rewrites": { "type": "array", "items": { "$ref": "#/$defs/hostingRule" } },
-        "headers": { "type": "array", "items": { "$ref": "#/$defs/hostingRule" } },
-        "i18n": {}
-      }
+      "description": "One local Hosting site, or an array of sites served on separate local ports. A site target resolves through .firebaserc for the selected project. Functions and Run rewrites resolve only to registered local Functions targets, without live fallback.",
+      "oneOf": [
+        { "$ref": "#/$defs/hostingConfig" },
+        {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/hostingSiteConfig" }
+        }
+      ]
     },
     "emulators": {
       "type": "object",
@@ -125,6 +122,44 @@
         "target": { "type": "string" },
         "predeploy": {},
         "postdeploy": {}
+      }
+    },
+    "hostingConfig": {
+      "allOf": [
+        { "$ref": "#/$defs/hostingEntry" },
+        {
+          "oneOf": [
+            { "not": { "anyOf": [{ "required": ["site"] }, { "required": ["target"] }] } },
+            { "required": ["site"], "not": { "required": ["target"] } },
+            { "required": ["target"], "not": { "required": ["site"] } }
+          ]
+        }
+      ]
+    },
+    "hostingSiteConfig": {
+      "allOf": [
+        { "$ref": "#/$defs/hostingEntry" },
+        {
+          "oneOf": [
+            { "required": ["site"], "not": { "required": ["target"] } },
+            { "required": ["target"], "not": { "required": ["site"] } }
+          ]
+        }
+      ]
+    },
+    "hostingEntry": {
+      "type": "object",
+      "required": ["public"],
+      "properties": {
+        "public": { "type": "string" },
+        "site": { "type": "string", "minLength": 1 },
+        "target": { "type": "string", "minLength": 1 },
+        "cleanUrls": { "type": "boolean" },
+        "trailingSlash": { "type": "boolean" },
+        "redirects": { "type": "array", "items": { "$ref": "#/$defs/hostingRule" } },
+        "rewrites": { "type": "array", "items": { "$ref": "#/$defs/hostingRule" } },
+        "headers": { "type": "array", "items": { "$ref": "#/$defs/hostingRule" } },
+        "i18n": {}
       }
     },
     "functionsEntry": {

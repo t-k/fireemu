@@ -169,116 +169,158 @@ pub(super) fn command(args: &[String]) -> Result<(), CliError> {
         }
     }
     #[cfg(not(unix))]
-    {
-        for ancestor in dir.ancestors() {
-            match std::fs::symlink_metadata(ancestor) {
-                Ok(metadata) if metadata.file_type().is_symlink() => {
-                    return Err(CliError::refused(format!(
-                        "cannot use {}: symbolic link",
-                        crate::diagnostic_path(ancestor)
-                    )));
-                }
-                Ok(_) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => {
-                    return Err(CliError::refused(format!(
-                        "cannot inspect {}: {e}",
-                        crate::diagnostic_path(ancestor)
-                    )))
-                }
-            }
-        }
-        for (path, is_dir) in [
-            (dir, true),
-            (json_path.as_path(), false),
-            (html_path.as_path(), false),
-        ] {
-            match std::fs::symlink_metadata(path) {
-                Ok(metadata) => {
-                    if metadata.file_type().is_symlink()
-                        || (is_dir && !metadata.is_dir())
-                        || (!is_dir && (!metadata.is_file() || !force))
-                    {
-                        return Err(CliError::refused(format!(
-                            "cannot use {}: already exists or is a symbolic link",
-                            crate::diagnostic_path(path)
-                        )));
-                    }
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => {
-                    return Err(CliError::refused(format!(
-                        "cannot inspect {}: {e}",
-                        crate::diagnostic_path(path)
-                    )))
-                }
-            }
-        }
-        let mut builder = std::fs::DirBuilder::new();
-        builder.recursive(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o700);
-        }
-        // On non-Unix targets, directory and file creation use the platform defaults.
-        builder.create(dir).map_err(|e| {
-            CliError::refused(format!(
-                "cannot create {}: {e}",
-                crate::diagnostic_path(dir)
-            ))
-        })?;
-        for (path, content) in [
-            (&json_path, diagnostics::to_json(&bundle)),
-            (&html_path, diagnostics::to_html(&bundle)),
-        ] {
-            if force {
-                match std::fs::symlink_metadata(path) {
-                    Ok(metadata) if metadata.is_file() => {
-                        std::fs::remove_file(path).map_err(|e| {
-                            CliError::refused(format!(
-                                "cannot remove {}: {e}",
-                                crate::diagnostic_path(path)
-                            ))
-                        })?
-                    }
-                    Ok(_) => {
-                        return Err(CliError::refused(format!(
-                            "cannot replace {}",
-                            crate::diagnostic_path(path)
-                        )))
-                    }
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(e) => {
-                        return Err(CliError::refused(format!(
-                            "cannot inspect {}: {e}",
-                            crate::diagnostic_path(path)
-                        )))
-                    }
-                }
-            }
-            let mut options = std::fs::OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(0o600);
-            }
-            let mut file = options.open(path).map_err(|e| {
-                CliError::refused(format!(
-                    "cannot create {}: {e}",
-                    crate::diagnostic_path(path)
-                ))
-            })?;
-            file.write_all(content.as_bytes()).map_err(|e| {
-                CliError::refused(format!(
-                    "cannot write {}: {e}",
-                    crate::diagnostic_path(path)
-                ))
-            })?;
-        }
-    }
+    write_output(
+        dir,
+        force,
+        &diagnostics::to_json(&bundle),
+        &diagnostics::to_html(&bundle),
+    )?;
     println!("{}", crate::diagnostic_path(&json_path));
     println!("{}", crate::diagnostic_path(&html_path));
     Ok(())
+}
+
+#[cfg(all(test, not(unix)))]
+thread_local! {
+    static BEFORE_OPEN: std::cell::RefCell<Option<Box<dyn FnMut(&Path)>>> = std::cell::RefCell::new(None);
+}
+
+#[cfg(not(unix))]
+fn write_output(dir: &Path, force: bool, json: &str, html: &str) -> Result<(), CliError> {
+    use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
+    use cap_std::fs::{Dir, OpenOptions};
+    use std::path::{Component, PathBuf};
+
+    let absolute = if dir.is_absolute() {
+        dir.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|e| CliError::refused(format!("cannot open output root: {e}")))?
+            .join(dir)
+    };
+    let mut components = absolute.components();
+    let mut root = PathBuf::new();
+    if let Some(Component::Prefix(prefix)) = components.next() {
+        root.push(prefix.as_os_str());
+    } else {
+        return Err(CliError::refused("invalid output path"));
+    }
+    if matches!(components.next(), Some(Component::RootDir)) {
+        root.push(std::path::MAIN_SEPARATOR.to_string());
+    } else {
+        return Err(CliError::refused("invalid output path"));
+    }
+    let mut directory = Dir::open_ambient_dir(&root, cap_std::ambient_authority())
+        .map_err(|e| CliError::refused(format!("cannot open output root: {e}")))?;
+    let mut traversed = root;
+    for component in components {
+        let name = match component {
+            Component::Normal(name) => name,
+            Component::CurDir => continue,
+            _ => {
+                return Err(CliError::refused(
+                    "invalid output path: parent components are not supported",
+                ))
+            }
+        };
+        traversed.push(name);
+        match directory.create_dir(name) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => {
+                return Err(CliError::refused(format!(
+                    "cannot create {}: {e}",
+                    crate::diagnostic_path(&traversed)
+                )))
+            }
+        }
+        #[cfg(test)]
+        BEFORE_OPEN.with(|hook| {
+            if let Some(hook) = hook.borrow_mut().as_mut() {
+                hook(&traversed);
+            }
+        });
+        directory = directory.open_dir_nofollow(name).map_err(|e| {
+            CliError::refused(format!(
+                "cannot open {} without following links: {e}",
+                crate::diagnostic_path(&traversed)
+            ))
+        })?;
+    }
+    for name in ["bundle.json", "bundle.html"] {
+        match directory.symlink_metadata(name) {
+            Ok(metadata) if force && metadata.is_file() => {}
+            Ok(_) => {
+                return Err(CliError::refused(format!(
+                    "cannot use {name}: already exists or is a symbolic link"
+                )))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(CliError::refused(format!("cannot inspect {name}: {e}"))),
+        }
+    }
+    for (name, content) in [("bundle.json", json), ("bundle.html", html)] {
+        if force {
+            match directory.remove_file(name) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(CliError::refused(format!("cannot remove {name}: {e}"))),
+            }
+        }
+        let mut options = OpenOptions::new();
+        options
+            .write(true)
+            .create_new(true)
+            .follow(FollowSymlinks::No);
+        let mut file = directory.open_with(name, &options).map_err(|e| {
+            CliError::refused(format!("cannot create {name} without following links: {e}"))
+        })?;
+        file.write_all(content.as_bytes())
+            .map_err(|e| CliError::refused(format!("cannot write {name}: {e}")))?;
+    }
+    Ok(())
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refuses_ancestor_replaced_by_junction_before_open() {
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-dump-race-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let ancestor = root.join("ancestor");
+        let destination = root.join("destination");
+        std::fs::create_dir_all(&ancestor).unwrap();
+        std::fs::create_dir(&destination).unwrap();
+        let target = ancestor.clone();
+        let redirect = destination.clone();
+        BEFORE_OPEN.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move |path| {
+                if path == target {
+                    std::fs::rename(&target, target.with_extension("original")).unwrap();
+                    let status = std::process::Command::new("cmd")
+                        .args(["/C", "mklink", "/J"])
+                        .arg(&target)
+                        .arg(&redirect)
+                        .status()
+                        .unwrap();
+                    assert!(status.success());
+                }
+            }))
+        });
+        let result = write_output(&ancestor.join("output"), false, "json", "html");
+        BEFORE_OPEN.with(|hook| *hook.borrow_mut() = None);
+        let error = result.err().expect("the swapped ancestor must be refused");
+        assert!(error.message.contains("without following links"));
+        assert!(!destination.join("output").exists());
+        std::fs::remove_dir(&ancestor).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

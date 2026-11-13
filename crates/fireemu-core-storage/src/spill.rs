@@ -52,17 +52,18 @@ impl SpillDir {
     pub fn create_file(&self) -> io::Result<SpillFile> {
         #[cfg(unix)]
         let uid = {
-            let missing = match fs::symlink_metadata(&self.dir) {
-                Ok(metadata) if metadata.file_type().is_dir() => false,
-                Ok(_) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::PermissionDenied,
-                        "spill path is not a real directory",
-                    ))
-                }
-                Err(error) if error.kind() == io::ErrorKind::NotFound => true,
-                Err(error) => return Err(error),
-            };
+            let missing =
+                match spill_io!("spill_metadata", &self.dir, fs::symlink_metadata(&self.dir)) {
+                    Ok(metadata) if metadata.file_type().is_dir() => false,
+                    Ok(_) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            "spill path is not a real directory",
+                        ))
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => true,
+                    Err(error) => return Err(error),
+                };
             if missing {
                 let mut builder = fs::DirBuilder::new();
                 builder.recursive(true).mode(0o700);
@@ -410,22 +411,22 @@ pub fn process_state(pid: u32) -> ProcessState {
         .env("TZ", "UTC")
         .output()
     {
-        Ok(output) => match std::str::from_utf8(&output.stdout) {
-            Ok(value) if !value.trim().is_empty() && output.status.success() => {
-                ProcessState::Running {
-                    start: value.trim().to_owned(),
-                }
-            }
-            Ok(value)
-                if value.trim().is_empty()
-                    && !output.status.success()
-                    && output.stderr.is_empty() =>
-            {
-                ProcessState::Absent
-            }
-            _ => ProcessState::Unknown,
-        },
+        Ok(output) => {
+            classify_process_output(&output.stdout, output.status.success(), &output.stderr)
+        }
         Err(_) => ProcessState::Unknown,
+    }
+}
+
+fn classify_process_output(stdout: &[u8], success: bool, stderr: &[u8]) -> ProcessState {
+    match std::str::from_utf8(stdout) {
+        Ok(value) if !value.trim().is_empty() && success => ProcessState::Running {
+            start: value.trim().to_owned(),
+        },
+        Ok(value) if value.trim().is_empty() && !success && stderr.is_empty() => {
+            ProcessState::Absent
+        }
+        _ => ProcessState::Unknown,
     }
 }
 
@@ -449,12 +450,15 @@ fn probe_uid(root: &Path) -> io::Result<u32> {
     loop {
         let n = NEXT_FILE.fetch_add(1, Ordering::Relaxed);
         let path = root.join(format!(".fireemu-probe-{}-{n}", std::process::id()));
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&path)
-        {
+        match spill_io!(
+            "probe_open",
+            &path,
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&path)
+        ) {
             Ok(file) => {
                 let result = file
                     .set_permissions(fs::Permissions::from_mode(0o600))
@@ -695,6 +699,190 @@ mod tests {
             io::ErrorKind::PermissionDenied
         );
         drop(file);
+        fs::remove_dir(&root).unwrap();
+    }
+
+    #[test]
+    fn digests_cover_multiple_chunks() {
+        let dir = temp_path("large-digest");
+        let mut file = SpillDir::new(&dir).create_file().unwrap();
+        let contents: Vec<u8> = (0..(64 * 1024 + 67))
+            .map(|n| u8::try_from(n % 251).unwrap())
+            .collect();
+        file.append(&contents).unwrap();
+        fault_injection::inject("read", io::ErrorKind::Interrupted);
+        assert_eq!(file.digests().unwrap(), ObjectDigests::new(&contents));
+        assert_eq!(fault_injection::paths().len(), 3);
+        drop(file);
+        fs::remove_dir(&dir).unwrap();
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn process_output_classification(
+            stdout in proptest::collection::vec(proptest::num::u8::ANY, 0..32),
+            success in proptest::bool::ANY,
+            stderr in proptest::collection::vec(proptest::num::u8::ANY, 0..8),
+        ) {
+            let expected = match std::str::from_utf8(&stdout) {
+                Ok(value) if !value.trim().is_empty() && success => ProcessState::Running { start: value.trim().to_owned() },
+                Ok(value) if value.trim().is_empty() && !success && stderr.is_empty() => ProcessState::Absent,
+                _ => ProcessState::Unknown,
+            };
+            proptest::prop_assert_eq!(classify_process_output(&stdout, success, &stderr), expected);
+        }
+    }
+
+    #[test]
+    fn process_output_boundary_cases() {
+        for stdout in [b"".as_slice(), b" ", b"start", b"\xff"] {
+            for success in [false, true] {
+                for stderr in [b"".as_slice(), b"error"] {
+                    let expected = match std::str::from_utf8(stdout) {
+                        Ok(value) if !value.trim().is_empty() && success => ProcessState::Running {
+                            start: value.trim().to_owned(),
+                        },
+                        Ok(value) if value.trim().is_empty() && !success && stderr.is_empty() => {
+                            ProcessState::Absent
+                        }
+                        _ => ProcessState::Unknown,
+                    };
+                    assert_eq!(classify_process_output(stdout, success, stderr), expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn probe_retries_collision_and_propagates_other_errors() {
+        let root = temp_path("probe");
+        fs::create_dir(&root).unwrap();
+        fault_injection::inject("probe_open", io::ErrorKind::AlreadyExists);
+        probe_uid(&root).unwrap();
+        let paths = fault_injection::paths();
+        assert_eq!(paths.len(), 2);
+        assert_ne!(paths[0], paths[1]);
+        fault_injection::inject("probe_open", io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            probe_uid(&root).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(fault_injection::paths().len(), 1);
+        fs::remove_dir(&root).unwrap();
+    }
+
+    #[test]
+    fn spill_file_rejects_non_directories_and_metadata_errors() {
+        let root = temp_path("non-directory");
+        fs::create_dir(&root).unwrap();
+        let regular = root.join("file");
+        fs::write(&regular, b"").unwrap();
+        let link = root.join("link");
+        std::os::unix::fs::symlink(&root, &link).unwrap();
+        for path in [&regular, &link] {
+            assert_eq!(
+                SpillDir::new(path).create_file().unwrap_err().kind(),
+                io::ErrorKind::PermissionDenied
+            );
+        }
+        fault_injection::inject("spill_metadata", io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            SpillDir::new(root.join("missing"))
+                .create_file()
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn marker_requires_both_header_and_pid() {
+        let root = temp_path("marker");
+        fs::create_dir(&root).unwrap();
+        for text in [
+            "wrong\npid 42\nstart time\n",
+            "fireemu-spill-owner v1\npid 43\nstart time\n",
+        ] {
+            fs::write(root.join("fireemu-owner"), text).unwrap();
+            assert_eq!(read_marker(&root, 42), None);
+        }
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn sweep_refuses_unsafe_roots_and_counts_only_stale_directories() {
+        let root = temp_path("sweep");
+        fs::create_dir(&root).unwrap();
+        let link = root.with_extension("link");
+        std::os::unix::fs::symlink(&root, &link).unwrap();
+        assert_eq!(
+            sweep_stale(&link, |_| ProcessState::Absent)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        fs::remove_file(link).unwrap();
+        for mode in [0o720, 0o702] {
+            fs::set_permissions(&root, fs::Permissions::from_mode(mode)).unwrap();
+            assert_eq!(
+                sweep_stale(&root, |_| ProcessState::Absent)
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::PermissionDenied
+            );
+        }
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        for pid in 1..=4 {
+            let dir = root.join(format!("{PREFIX}{pid}"));
+            fs::create_dir(&dir).unwrap();
+            fs::write(
+                dir.join("fireemu-owner"),
+                format!("fireemu-spill-owner v1\npid {pid}\nstart known\n"),
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            sweep_stale(&root, |pid| match pid {
+                1 | 2 => ProcessState::Absent,
+                3 => ProcessState::Running {
+                    start: "known".to_owned()
+                },
+                _ => ProcessState::Unknown,
+            })
+            .unwrap(),
+            2
+        );
+        for pid in 1..=4 {
+            assert_eq!(root.join(format!("{PREFIX}{pid}")).exists(), pid >= 3);
+        }
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn process_create_rejects_unverified_existing_directory() {
+        let root = temp_path("existing-process");
+        let process = ProcessSpill::create(&root).unwrap();
+        let path = process.path().to_owned();
+        assert!(path.is_dir());
+        assert!(matches!(
+            process_state(std::process::id()),
+            ProcessState::Running { .. }
+        ));
+        fs::write(
+            path.join("fireemu-owner"),
+            format!(
+                "fireemu-spill-owner v1\npid {}\nstart different\n",
+                std::process::id()
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            ProcessSpill::create(&root).err().unwrap().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert!(path.is_dir());
+        drop(process);
         fs::remove_dir(&root).unwrap();
     }
 }

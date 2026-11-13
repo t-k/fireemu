@@ -12546,6 +12546,33 @@ exports.add = onCall({{}}, observe("add"));
         }
     }
 
+    #[tokio::test]
+    async fn started_runner_inspector_checks_dynamic_and_fixed_ports_for_node_only() {
+        let runner = Arc::new(fireemu_adapter_functions::runner::Runner::unstarted("test"));
+        for fixed in [false, true] {
+            let cfg = crate::config::RuntimeConfig {
+                functions_inspect_dynamic: !fixed,
+                functions_inspect_port: fixed.then_some(9229),
+                ..Default::default()
+            };
+            let clock = fireemu_core_session::clock::ClockSnapshot {
+                instant: cfg.clock_start,
+                elapsed_nanos: 0,
+                revision: 0,
+            };
+            assert!(
+                super::check_started_runner(&cfg, "test", false, &runner, clock)
+                    .await
+                    .is_err()
+            );
+            assert!(
+                super::check_started_runner(&cfg, "test", true, &runner, clock)
+                    .await
+                    .is_ok()
+            );
+        }
+    }
+
     #[test]
     fn the_inspector_flags_go_to_a_node_runner_in_order_and_never_to_a_python_one() {
         let flags = |python, dynamic, port| {

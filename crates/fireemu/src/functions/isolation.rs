@@ -270,6 +270,69 @@ mod tests {
             .collect()
     }
 
+    #[tokio::test]
+    async fn isolation_accepts_64_functions_and_refuses_65() {
+        let hosts = EmulatorHosts {
+            blocking_jwks: None,
+            app_check: None,
+            firestore: None,
+            auth: None,
+            storage: None,
+            functions: None,
+            eventarc: None,
+            tasks: None,
+            logging: None,
+            pubsub: None,
+            hub: None,
+            admin_app_check: None,
+        };
+        let mut cfg = RuntimeConfig::default();
+        let clock = fireemu_core_session::clock::ClockSnapshot {
+            instant: cfg.clock_start,
+            elapsed_nanos: 0,
+            revision: 0,
+        };
+        for count in [64, 65] {
+            let entries: Vec<_> = (0..count)
+                .map(|index| json!({"name": format!("f{index}"), "generation": 2, "trigger": {"type": "http"}}))
+                .collect();
+            let discovery = CodebaseSpec {
+                name: "default".to_owned(),
+                function: None,
+                manifest: parse_manifest(&json!({"functions": entries})).unwrap(),
+                runner: Arc::new(Runner::unstarted("discovery")),
+                spawn: Some(base(&json!({}))),
+                cleanup_dir: None,
+            };
+            let result = isolate_functions(&cfg, &hosts, false, discovery, clock).await;
+            if count == 64 {
+                assert_eq!(result.unwrap().len(), 64);
+            } else {
+                assert!(result.err().unwrap().contains("the limit is 64"));
+            }
+        }
+        for fixed in [false, true] {
+            cfg.functions_inspect_dynamic = !fixed;
+            cfg.functions_inspect_port = fixed.then_some(9229);
+            let mut spawn = base(&json!({}));
+            spawn.command = vec!["fireemu-nonexistent-isolation-test-runner".to_owned()];
+            let discovery = CodebaseSpec {
+                name: "default".to_owned(),
+                function: None,
+                manifest: parse_manifest(&json!({"functions": [
+                    {"name": "f", "generation": 2, "trigger": {"type": "http"}}
+                ]}))
+                .unwrap(),
+                runner: Arc::new(Runner::unstarted("discovery")),
+                spawn: Some(spawn),
+                cleanup_dir: None,
+            };
+            assert!(isolate_functions(&cfg, &hosts, false, discovery, clock)
+                .await
+                .is_err());
+        }
+    }
+
     #[test]
     fn the_signature_type_follows_the_trigger_and_the_generation() {
         let all = functions(&json!({"functions": [

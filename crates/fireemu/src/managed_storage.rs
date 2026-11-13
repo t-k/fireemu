@@ -384,6 +384,14 @@ mod tests {
     }
 
     #[test]
+    fn read_returns_the_stored_object_body() {
+        let bridge = bridge();
+        put(&bridge, "test-bucket", "object");
+        assert_eq!(bridge.read("test-bucket", "object"), Some(b"x".to_vec()));
+        assert_eq!(bridge.read("test-bucket", "missing"), None);
+    }
+
+    #[test]
     fn a_failed_import_does_not_take_a_bucket_nobody_uses_yet() {
         // Review 2026-09-25: proj-b's import from a bucket that did not exist yet made it
         // proj-b's, so proj-a's export into it, once it existed, was refused as missing.

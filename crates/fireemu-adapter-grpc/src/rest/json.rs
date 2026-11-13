@@ -1358,7 +1358,7 @@ fn find_nearest_from_json(raw: &Value) -> Result<pb::structured_query::FindNeare
     Ok(pb::structured_query::FindNearest {
         vector_field,
         query_vector,
-        distance_measure: distance_measure as i32,
+        distance_measure,
         limit,
         distance_result_field,
         distance_threshold,

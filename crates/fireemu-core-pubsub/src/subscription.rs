@@ -1178,7 +1178,7 @@ mod tests {
                 false
             },
         );
-        assert!(denied.received.is_empty());
+        assert_eq!(denied.received.len(), 0);
         assert_eq!(sub.outstanding_count(), 0);
         let allowed = sub.pull(10, now, &mut ids);
         assert_eq!(allowed.received[0].ack_id, "ack-1");
@@ -1251,7 +1251,7 @@ mod tests {
         assert_eq!(out.received[0].delivery_attempt, 1);
         let ack = out.received[0].ack_id.clone();
         // A second pull sees nothing outstanding.
-        assert!(s.pull(10, now, &mut ids).received.is_empty());
+        assert_eq!(s.pull(10, now, &mut ids).received.len(), 0);
         assert_eq!(s.acknowledge(&[ack]), 1);
         assert!(!s.has_pending(now));
     }
@@ -1370,7 +1370,7 @@ mod tests {
         // Before the deadline, nothing redelivers.
         let t_before = LogicalInstant::from_unix_seconds(105);
         s.expire_deadlines(t_before);
-        assert!(s.pull(10, t_before, &mut ids).received.is_empty());
+        assert_eq!(s.pull(10, t_before, &mut ids).received.len(), 0);
         // After the 10s deadline, it comes back with an incremented attempt.
         let t_after = LogicalInstant::from_unix_seconds(111);
         s.expire_deadlines(t_after);
@@ -1411,7 +1411,7 @@ mod tests {
             s.next_available_at(),
             Some(t0.checked_add(LogicalDuration::from_seconds(2)).unwrap())
         );
-        assert!(s.pull(1, t0, &mut ids).received.is_empty());
+        assert_eq!(s.pull(1, t0, &mut ids).received.len(), 0);
         let t_first_retry = t0.checked_add(LogicalDuration::from_seconds(2)).unwrap();
         let second = s.pull(1, t_first_retry, &mut ids);
         assert_eq!(second.received[0].delivery_attempt, 2);
@@ -1421,7 +1421,7 @@ mod tests {
         let before_second_retry = t_first_retry
             .checked_add(LogicalDuration::from_seconds(3))
             .unwrap();
-        assert!(s.pull(1, before_second_retry, &mut ids).received.is_empty());
+        assert_eq!(s.pull(1, before_second_retry, &mut ids).received.len(), 0);
         let t_second_retry = t_first_retry
             .checked_add(LogicalDuration::from_seconds(4))
             .unwrap();
@@ -1432,7 +1432,7 @@ mod tests {
         let before_clamp = t_second_retry
             .checked_add(LogicalDuration::from_seconds(4))
             .unwrap();
-        assert!(s.pull(1, before_clamp, &mut ids).received.is_empty());
+        assert_eq!(s.pull(1, before_clamp, &mut ids).received.len(), 0);
         let at_clamp = t_second_retry
             .checked_add(LogicalDuration::from_seconds(5))
             .unwrap();
@@ -1454,7 +1454,7 @@ mod tests {
         let _first = s.pull(1, t0, &mut ids);
         let t_deadline = t0.checked_add(LogicalDuration::from_seconds(10)).unwrap();
         s.expire_deadlines(t_deadline);
-        assert!(s.pull(1, t_deadline, &mut ids).received.is_empty());
+        assert_eq!(s.pull(1, t_deadline, &mut ids).received.len(), 0);
         let t_first_retry = t_deadline
             .checked_add(LogicalDuration::from_seconds(2))
             .unwrap();
@@ -1468,7 +1468,7 @@ mod tests {
         let before_second_retry = t_second_deadline
             .checked_add(LogicalDuration::from_seconds(3))
             .unwrap();
-        assert!(s.pull(1, before_second_retry, &mut ids).received.is_empty());
+        assert_eq!(s.pull(1, before_second_retry, &mut ids).received.len(), 0);
         let t_second_retry = t_second_deadline
             .checked_add(LogicalDuration::from_seconds(4))
             .unwrap();
@@ -1479,7 +1479,7 @@ mod tests {
         let before_clamp = t_second_retry
             .checked_add(LogicalDuration::from_seconds(4))
             .unwrap();
-        assert!(s.pull(1, before_clamp, &mut ids).received.is_empty());
+        assert_eq!(s.pull(1, before_clamp, &mut ids).received.len(), 0);
         let at_clamp = t_second_retry
             .checked_add(LogicalDuration::from_seconds(5))
             .unwrap();
@@ -1506,7 +1506,7 @@ mod tests {
         }
         // The sixth pull dead-letters instead of delivering.
         let out = s.pull(10, now, &mut ids);
-        assert!(out.received.is_empty());
+        assert_eq!(out.received.len(), 0);
         assert_eq!(out.dead_lettered.len(), 1);
     }
 
@@ -1537,12 +1537,12 @@ mod tests {
         // The seek skips the message: the reservation is released rather than retained forever.
         s.seek_to_time(LogicalInstant::from_unix_seconds(200), now)
             .unwrap();
-        assert!(s.pending_forwards().is_empty());
+        assert_eq!(s.pending_forwards().len(), 0);
         assert!(
             !s.complete_forward("1"),
             "a transfer superseded by a seek must not complete a replayed entry"
         );
-        assert!(s.pull(10, now, &mut counter()).received.is_empty());
+        assert_eq!(s.pull(10, now, &mut counter()).received.len(), 0);
     }
 
     #[test]
@@ -1552,7 +1552,7 @@ mod tests {
         // retry of the superseded transfer cannot acknowledge the replayed entry.
         s.seek_to_time(LogicalInstant::from_unix_seconds(50), now)
             .unwrap();
-        assert!(s.pending_forwards().is_empty());
+        assert_eq!(s.pending_forwards().len(), 0);
         assert!(!s.complete_forward("1"));
         let replayed = s.pull(10, now, &mut counter());
         assert_eq!(replayed.received.len(), 1);
@@ -1586,10 +1586,10 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["1", "3"]
         );
-        assert!(first.dead_lettered.is_empty());
+        assert_eq!(first.dead_lettered.len(), 0);
         sub.acknowledge(&[first.received[0].ack_id.clone()]);
         let second = sub.pull(3, now, &mut ids);
-        assert!(second.received.is_empty());
+        assert_eq!(second.received.len(), 0);
         assert_eq!(
             second
                 .dead_lettered
@@ -1665,9 +1665,9 @@ mod tests {
         assert_eq!(first.len(), 2);
         assert_eq!(first[0].message.message_id, "1");
         assert_eq!(first[1].message.message_id, "2");
-        assert!(sub.pull(2, now, &mut ids).received.is_empty());
+        assert_eq!(sub.pull(2, now, &mut ids).received.len(), 0);
         sub.acknowledge(&[first[0].ack_id.clone()]);
-        assert!(sub.pull(2, now, &mut ids).received.is_empty());
+        assert_eq!(sub.pull(2, now, &mut ids).received.len(), 0);
         sub.acknowledge(&[first[1].ack_id.clone()]);
         assert_eq!(
             sub.pull(2, now, &mut ids).received[0].message.message_id,
@@ -1909,7 +1909,7 @@ mod tests {
         sub.entries[0].delivery_attempt = MIN_DEAD_LETTER_ATTEMPTS - 1;
         let out = separate_pull(&mut sub, 10, now, counter());
         assert_eq!(message_ids(&out.received), vec!["u"]);
-        assert!(out.dead_lettered.is_empty());
+        assert_eq!(out.dead_lettered.len(), 0);
         // Without forwarding authority the budget does not apply, so the unkeyed message wins.
         let mut sub = ordered_log(&[("u", ""), ("k", "k1")], true);
         sub.config.dead_letter_policy = Some(dead_letter.clone());
@@ -1928,7 +1928,7 @@ mod tests {
         sub.entries[0].state = Delivery::ForwardPending;
         let out = separate_pull(&mut sub, 10, now, counter());
         assert_eq!(message_ids(&out.received), vec!["k"]);
-        assert!(out.dead_lettered.is_empty());
+        assert_eq!(out.dead_lettered.len(), 0);
 
         // Acked and outstanding unkeyed messages do not hold keyed ones either.
         let mut sub = ordered_log(&[("u", ""), ("v", ""), ("k", "k1")], true);
@@ -1975,12 +1975,12 @@ mod tests {
         let mut ids = counter();
         let first = separate_pull(&mut sub, 10, now, &mut ids);
         assert_eq!(message_ids(&first.received), vec!["u"]);
-        assert!(first.dead_lettered.is_empty());
+        assert_eq!(first.dead_lettered.len(), 0);
         assert_eq!(sub.entries[0].delivery_attempt, MIN_DEAD_LETTER_ATTEMPTS);
         assert!(matches!(sub.entries[0].state, Delivery::Available { .. }));
         ack_all(&mut sub, &first.received);
         let second = separate_pull(&mut sub, 10, now, &mut ids);
-        assert!(second.received.is_empty());
+        assert_eq!(second.received.len(), 0);
         assert_eq!(second.dead_lettered.len(), 1);
         assert_eq!(second.dead_lettered[0].message_id, "k");
     }
@@ -2092,7 +2092,7 @@ mod tests {
         assert_eq!(out.received[0].message.message_id, "1");
         let ack = out.received[0].ack_id.clone();
         // The second is still blocked until the first is acked.
-        assert!(s.pull(10, now, &mut ids).received.is_empty());
+        assert_eq!(s.pull(10, now, &mut ids).received.len(), 0);
         s.acknowledge(&[ack]);
         let out2 = s.pull(10, now, &mut ids);
         assert_eq!(out2.received[0].message.message_id, "2");
@@ -2206,7 +2206,7 @@ mod tests {
 
         let eligible_at = now.checked_add(interval).unwrap();
         assert_eq!(s.next_available_at(), Some(eligible_at));
-        assert!(s.pull(1, now, &mut ids).received.is_empty());
+        assert_eq!(s.pull(1, now, &mut ids).received.len(), 0);
         assert_eq!(s.pull(1, eligible_at, &mut ids).received.len(), 1);
     }
 
@@ -2331,6 +2331,6 @@ mod tests {
         let first = s.pull(1, now, &mut ids);
         s.modify_ack_deadline(&first.received[0].ack_id, 0, now);
 
-        assert!(s.pull(1, now, &mut ids).received.is_empty());
+        assert_eq!(s.pull(1, now, &mut ids).received.len(), 0);
     }
 }

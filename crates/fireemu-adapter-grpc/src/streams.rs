@@ -1169,17 +1169,17 @@ fn handle_listen_request_with_events(
                 out,
             )?;
         }
-        Some(pb::listen_request::TargetChange::RemoveTarget(id)) => {
-            if targets.remove(id).is_some() {
-                out.push(target_change(
-                    pb::target_change::TargetChangeType::Remove,
-                    vec![*id],
-                    None,
-                    None,
-                ));
-            }
+        Some(pb::listen_request::TargetChange::RemoveTarget(id))
+            if targets.remove(id).is_some() =>
+        {
+            out.push(target_change(
+                pb::target_change::TargetChangeType::Remove,
+                vec![*id],
+                None,
+                None,
+            ));
         }
-        None => {}
+        Some(pb::listen_request::TargetChange::RemoveTarget(_)) | None => {}
     }
     Ok(())
 }

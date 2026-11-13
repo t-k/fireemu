@@ -1289,6 +1289,45 @@ mod tests {
     }
 
     #[test]
+    fn idle_projection_emulator_token_boundary() {
+        let start = Instant::now();
+        let mut scheduler = scheduler_with("pending", None, start);
+        scheduler.queues.get_mut("queue").unwrap().tokens = 1.0;
+        assert_eq!(
+            scheduler.idle_projection(start.into(), None)["waiting"][0]["reason"],
+            "ready"
+        );
+
+        scheduler.queues.get_mut("queue").unwrap().tokens = 0.0;
+        assert_eq!(
+            scheduler.idle_projection(start.into(), None)["waiting"][0]["reason"],
+            "rateLimit"
+        );
+    }
+
+    #[test]
+    fn idle_projection_production_budget_boundary() {
+        let start = Instant::now();
+        let mut scheduler = scheduler_with("pending", None, start);
+        scheduler.set_burst_rule(super::BurstRule::Production);
+        let queue = scheduler.queues.get_mut("queue").unwrap();
+        let period = queue.period_nanos.unwrap();
+        queue.budget_nanos = period;
+        assert_eq!(
+            scheduler.idle_projection(start.into(), None)["waiting"][0]["reason"],
+            "ready"
+        );
+
+        for budget in [period - 1, 0] {
+            scheduler.queues.get_mut("queue").unwrap().budget_nanos = budget;
+            assert_eq!(
+                scheduler.idle_projection(start.into(), None)["waiting"][0]["reason"],
+                "rateLimit"
+            );
+        }
+    }
+
+    #[test]
     fn idle_projection_tracks_schedule_retry_rate_and_generation_boundaries() {
         let start = Instant::now();
         let epoch = nanos("2026-02-01T00:00:05Z");

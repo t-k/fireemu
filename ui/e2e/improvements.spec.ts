@@ -40,7 +40,12 @@ const node = (source: string, host: string): string =>
   execFileSync(process.execPath, ["-e", source], {
     encoding: "utf8",
     timeout: 20000,
-    env: { PATH: process.env.PATH, NODE_PATH: modules, FIRESTORE_EMULATOR_HOST: host },
+    env: {
+      PATH: process.env.PATH,
+      NODE_PATH: modules,
+      FIRESTORE_EMULATOR_HOST: host,
+      METADATA_SERVER_DETECTION: "none",
+    },
   });
 
 test("copy reports success only for a written clipboard and exposes a selected fallback when denied", async ({
@@ -307,6 +312,7 @@ await admin.close(); })().catch(e => { console.error(e); process.exitCode = 1; }
   await filter.getByLabel("Typed value").fill("9007199254740993");
   await page.getByRole("button", { name: "Add order", exact: true }).click();
   await page.getByTestId("query-order-0").getByLabel("Field path").fill("double");
+  await page.getByTestId("query-order-0").getByLabel("Direction").selectOption("DESCENDING");
   const response = page.waitForResponse(
     (r) => r.url().includes(":runQuery") && r.request().method() === "POST",
   );
@@ -314,12 +320,21 @@ await admin.close(); })().catch(e => { console.error(e); process.exitCode = 1; }
   const body = await (await response).json();
   const error = (Array.isArray(body) ? body[0] : body).error;
   expect(error.status).toBe("FAILED_PRECONDITION");
+  await expect(page.getByTestId("query-error")).toContainText("The query requires an index.");
   await expect(page.getByTestId("query-error")).toContainText(error.message);
-  const errorSource = (await page.getByTestId("query-sdk").innerText()).replace(
-    "console.error(error); process.exitCode = 1;",
-    "console.log(JSON.stringify({ code: error.code, message: error.details }));",
+  await page.getByText("Node.js SDK reproduction", { exact: true }).click();
+  const errorSource = (await page.getByTestId("query-sdk").innerText())
+    .replace("async function main() {", "const responses = [];\nasync function main() {")
+    .replace("console.log(JSON.stringify(response));", "responses.push(response);")
+    .replace(
+      "  } finally { await client.close(); }",
+      "    console.log(JSON.stringify({ responses }));\n  } catch (error) {\n    console.log(JSON.stringify({ code: error.code, message: error.details }));\n  } finally { await client.close(); }",
+    );
+  expect(errorSource).toContain("console.log(JSON.stringify({ responses }))");
+  expect(errorSource).toContain(
+    "console.log(JSON.stringify({ code: error.code, message: error.details }))",
   );
   const sdkError = JSON.parse(node(errorSource, host).trim());
-  expect(sdkError.code).toBe(9);
+  expect(sdkError.code, JSON.stringify(sdkError)).toBe(9);
   expect(sdkError.message).toBe(error.message);
 });

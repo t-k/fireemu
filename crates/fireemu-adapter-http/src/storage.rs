@@ -5150,7 +5150,11 @@ fn fb_resumable_command(
         if let (Err(FinalizeError::Store(StorageError::StoredBytesLimit)), Some(checkpoint)) =
             (&finalized, checkpoint)
         {
-            store.rollback_upload(&id, checkpoint);
+            // The offset must not advance for a chunk that was refused: when the session
+            // cannot be taken back, say so instead of the bound.
+            if let Err(error) = store.rollback_upload(&id, checkpoint) {
+                return Ok(fb_core_err(error));
+            }
         }
         let m = finalized.map_err(|e| match e {
             FinalizeError::Denied(denial) => denial.with_header("x-goog-upload-status", "final"),
@@ -5205,7 +5209,7 @@ fn finalize_resumable(
             pending.bucket.clone(),
             pending.name.clone(),
             pending.metadata.clone(),
-            pending.bytes.len() as u64,
+            pending.len,
             pending.digests.values(),
             pending.authorization.map(str::to_owned),
         )
@@ -6816,7 +6820,9 @@ fn gcs_resumable_put(
         if let (Err(FinalizeError::Store(StorageError::StoredBytesLimit)), Some(checkpoint)) =
             (&finalized, checkpoint)
         {
-            store.rollback_upload(&id, checkpoint);
+            store
+                .rollback_upload(&id, checkpoint)
+                .map_err(gcs_core_err)?;
         }
         let m = finalized.map_err(|e| match e {
             // The JSON API dialect runs no rules, so a denial cannot happen here.

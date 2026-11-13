@@ -220,7 +220,13 @@ impl SnapshotHook for Storage {
             .store
             .lock()
             .map_err(|_| poisoned(self.name(), "the object store"))?;
-        Ok(Arc::new(store.capture_buckets(self.owned(scope))))
+        let captured = store.capture_buckets(self.owned(scope)).map_err(|error| {
+            TransitionFailure::new(
+                self.name(),
+                format!("cannot copy the object store: {error}"),
+            )
+        })?;
+        Ok(Arc::new(captured))
     }
     fn validate(&self, _: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
         part.downcast_ref::<fireemu_core_storage::store::StorageState>()
@@ -240,7 +246,14 @@ impl SnapshotHook for Storage {
             .store
             .lock()
             .map_err(|_| poisoned(self.name(), "the object store"))?;
-        store.restore_buckets(self.owned(scope), captured);
+        store
+            .restore_buckets(self.owned(scope), captured)
+            .map_err(|error| {
+                TransitionFailure::new(
+                    self.name(),
+                    format!("cannot restore the object store: {error}"),
+                )
+            })?;
         // Not checked against storage.maxStoredBytes either: say so when it is exceeded.
         for warning in crate::import_export::storage_limit_warnings(&store) {
             eprintln!("warning: snapshot restore: {warning}");
@@ -2738,5 +2751,126 @@ mod tests {
         // Authorization through the restored registry, bucket by bucket.
         assert_eq!(read_status("first"), denied);
         assert_eq!(read_status("second"), allowed);
+    }
+
+    /// A bare Storage state whose only content is what the test puts in its object store.
+    #[cfg(unix)]
+    fn storage_with(store: fireemu_core_storage::store::StorageState) -> super::Storage {
+        super::Storage(Arc::new(fireemu_adapter_http::storage::StorageState {
+            store: std::sync::Mutex::new(store),
+            clock: Arc::new(std::sync::Mutex::new(
+                fireemu_core_session::clock::VirtualClock::new(AT),
+            )),
+            auth: Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+                "demo-app",
+                Arc::new(std::sync::Mutex::new(
+                    fireemu_core_auth::store::AuthStore::new(
+                        "demo-app",
+                        fireemu_core_types::determinism::SplitMix64::new(3),
+                        fireemu_core_auth::mfa::TotpPolicy::default(),
+                    ),
+                )),
+            )),
+            tenancy: None,
+            rules: Arc::new(fireemu_adapter_http::storage::StorageRulesRegistry::global(
+                Arc::new(RulesetSlot::new(
+                    LoadedRules::from_source(
+                        "service firebase.storage { match /b/{bucket}/o { match /{p=**} { allow read: if true; } } }",
+                    )
+                    .unwrap(),
+                )),
+            )),
+            project: "demo-app".to_owned(),
+            events: None,
+            barrier: None,
+            firestore: None,
+            faults: None,
+            clock_observer: None,
+            app_check_policy: None,
+            admin_capability: None,
+            server_requests: fireemu_adapter_http::storage::StorageServerRequests::default(),
+            token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
+            allow_unsigned_id_tokens: false,
+            control_token: None,
+        }))
+    }
+
+    /// A spilled upload session that cannot be copied fails the capture and the restore with
+    /// the Storage hook's name, and leaves the live object store as it was.
+    #[cfg(unix)]
+    #[test]
+    fn the_storage_hook_reports_a_session_file_it_cannot_copy() {
+        use fireemu_core_storage::name::{BucketName, ObjectName};
+        use fireemu_core_storage::store::{NewMetadata, Precondition};
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!("snapshot-spill-{}", std::process::id()));
+        let process = fireemu_core_storage::spill::ProcessSpill::create(&root).unwrap();
+        let mut store = fireemu_core_storage::store::StorageState::new(9);
+        store.set_spill(Some((process.spill_dir(), 4)));
+        let bucket = BucketName::try_new("demo-app.appspot.com").unwrap();
+        let id = store
+            .begin_upload(
+                &bucket,
+                &ObjectName::try_new("session").unwrap(),
+                NewMetadata::default(),
+                Precondition::default(),
+                None,
+                AT,
+            )
+            .unwrap();
+        store.append_upload(&id, 0, b"0123456789", AT).unwrap();
+        assert_eq!(store.spilled_upload_sessions(), 1);
+        let hook = storage_with(store);
+        let scope = Scope::AllExcept(BTreeSet::new());
+        let part = hook.capture(&scope).expect("a copy that can be made");
+        hook.validate(&scope, &part).expect("its own part");
+
+        // No new file can be created in the process directory: copying the session fails.
+        let locked = std::fs::Permissions::from_mode(0o500);
+        std::fs::set_permissions(process.path(), locked).unwrap();
+        let writable = std::fs::File::create(process.path().join("probe")).is_ok();
+        let capture = hook.capture(&scope);
+        let restore = hook.restore(&scope, &part);
+        std::fs::set_permissions(process.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        if writable {
+            // Running as a user that ignores directory permissions: nothing to observe.
+            let _ = std::fs::remove_file(process.path().join("probe"));
+            drop((part, hook, process));
+            let _ = std::fs::remove_dir(&root);
+            return;
+        }
+        let capture = capture.expect_err("the copy fails");
+        assert_eq!(capture.part, "storage");
+        assert!(
+            capture.message.contains("cannot copy the object store"),
+            "{}",
+            capture.message
+        );
+        let restore = restore.expect_err("the copy fails");
+        assert!(
+            restore.message.contains("cannot restore the object store"),
+            "{}",
+            restore.message
+        );
+        // The live state is untouched, and the hook works again once the directory does.
+        {
+            let mut live = hook.0.store.lock().unwrap();
+            assert_eq!(live.upload_status(&id, AT).unwrap().0, 10);
+            assert_eq!(live.retained_upload_bytes(), 10);
+        }
+        hook.restore(&scope, &part).expect("restore");
+        assert_eq!(
+            hook.0
+                .store
+                .lock()
+                .unwrap()
+                .upload_status(&id, AT)
+                .unwrap()
+                .0,
+            10
+        );
+        drop((part, hook, process));
+        let _ = std::fs::remove_dir(&root);
     }
 }

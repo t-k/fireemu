@@ -237,11 +237,11 @@ fn a_write_after_an_import_takes_a_generation_past_the_imported_one() {
 #[test]
 fn restoring_a_capture_taken_before_an_import_preserves_the_imported_generation_high_water() {
     let mut store = StorageState::new(7);
-    let capture = store.capture_buckets(|_| true);
+    let capture = store.capture_buckets(|_| true).unwrap();
     store
         .insert_imported(imported("imported", b"x"), b"x".to_vec())
         .expect("the import succeeds");
-    store.restore_buckets(|_| true, &capture);
+    store.restore_buckets(|_| true, &capture).unwrap();
 
     let written = store
         .put(

@@ -193,7 +193,11 @@ impl StorageGenerationDriver {
         if self.snapshot.is_some() {
             return Err(invalid_data("snapshot is already captured"));
         }
-        self.snapshot = Some(self.store.capture_buckets(|_| true));
+        self.snapshot = Some(
+            self.store
+                .capture_buckets(|_| true)
+                .map_err(|error| invalid_data(&format!("snapshot capture failed: {error}")))?,
+        );
         self.record_action("CaptureSnapshot")
     }
 
@@ -203,7 +207,9 @@ impl StorageGenerationDriver {
             .snapshot
             .as_ref()
             .ok_or_else(|| invalid_data("restore requires a captured snapshot"))?;
-        self.store.restore_buckets(|_| true, snapshot);
+        self.store
+            .restore_buckets(|_| true, snapshot)
+            .map_err(|error| invalid_data(&format!("snapshot restore failed: {error}")))?;
         self.record_action("RestoreSnapshot")
     }
 

@@ -408,7 +408,7 @@ fn a_bucket_reset_drops_versions_and_configuration_and_a_snapshot_restores_them(
     let first = put(&mut store, &b, "o.txt", "one", 1);
     put(&mut store, &b, "o.txt", "two", 2);
     put(&mut store, &other, "x.txt", "keep", 3);
-    let snapshot = store.capture_buckets(|name| name == b.as_str());
+    let snapshot = store.capture_buckets(|name| name == b.as_str()).unwrap();
     assert_eq!(snapshot.noncurrent_versions(&b, &name("o.txt")).len(), 1);
     assert!(snapshot.versioning(&b));
     assert_eq!(store.remove_bucket(&b), 1);
@@ -419,7 +419,9 @@ fn a_bucket_reset_drops_versions_and_configuration_and_a_snapshot_restores_them(
     );
     assert!(store.versioning(&other), "another bucket is untouched");
     assert_eq!(store.retained_blob_bytes(), "keep".len() as u64);
-    store.restore_buckets(|name| name == b.as_str(), &snapshot);
+    store
+        .restore_buckets(|name| name == b.as_str(), &snapshot)
+        .unwrap();
     assert!(store.versioning(&b));
     let restored = store.noncurrent_versions(&b, &name("o.txt"));
     assert_eq!(restored.len(), 1);
@@ -1032,9 +1034,13 @@ fn versioning_is_a_tri_state_per_bucket() {
     assert_eq!(store.versioning_state(&other), None);
     // A snapshot carries every state of the buckets it owns; a clear drops them all.
     store.set_versioning(&other, true);
-    let captured = store.capture_buckets(|bucket| bucket == b.as_str());
+    let captured = store
+        .capture_buckets(|bucket| bucket == b.as_str())
+        .unwrap();
     let mut restored = StorageState::new(1);
-    restored.restore_buckets(|bucket| bucket == b.as_str(), &captured);
+    restored
+        .restore_buckets(|bucket| bucket == b.as_str(), &captured)
+        .unwrap();
     assert_eq!(restored.versioning_state(&b), Some(false));
     assert_eq!(restored.versioning_state(&other), None, "not owned");
     // Removing a bucket drops its configuration, enabled or disabled.

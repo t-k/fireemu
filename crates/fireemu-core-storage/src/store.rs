@@ -621,7 +621,7 @@ enum UploadState {
 /// ([`StorageState::upload_checkpoint`]).
 #[derive(Debug, Clone)]
 pub struct UploadCheckpoint {
-    received: usize,
+    received: u64,
     md5: Md5,
     crc32c: Crc32c,
 }
@@ -678,7 +678,7 @@ impl fmt::Debug for UploadAdmission {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct UploadSession {
     bucket: BucketName,
     name: ObjectName,
@@ -695,9 +695,139 @@ struct UploadSession {
     expected_crc32c: Option<u32>,
     md5: Md5,
     crc32c: Crc32c,
-    received: Vec<u8>,
+    received: SessionBytes,
     state: UploadState,
     started_at: LogicalInstant,
+}
+
+impl UploadSession {
+    /// A copy that shares nothing with the session: a spilled session's file is copied, so an
+    /// append or rollback on one never reaches the other. Fails when the copy cannot be made.
+    fn try_clone(&self) -> Result<Self, StorageError> {
+        let Self {
+            bucket,
+            name,
+            metadata,
+            precondition,
+            total,
+            authorization,
+            admission,
+            expected_md5,
+            expected_crc32c,
+            md5,
+            crc32c,
+            received,
+            state,
+            started_at,
+        } = self;
+        Ok(Self {
+            bucket: bucket.clone(),
+            name: name.clone(),
+            metadata: metadata.clone(),
+            precondition: *precondition,
+            total: *total,
+            authorization: authorization.clone(),
+            admission: admission.clone(),
+            expected_md5: *expected_md5,
+            expected_crc32c: *expected_crc32c,
+            md5: md5.clone(),
+            crc32c: *crc32c,
+            received: received.try_clone()?,
+            state: state.clone(),
+            started_at: *started_at,
+        })
+    }
+}
+
+/// The bytes a resumable session has received: in memory, or in a spill file once the session
+/// reaches `storage.spillObjectBytes`. Both kinds answer every question the same way.
+#[derive(Debug)]
+enum SessionBytes {
+    Memory(Vec<u8>),
+    Spilled(SpillFile),
+}
+
+impl Default for SessionBytes {
+    fn default() -> Self {
+        Self::Memory(Vec::new())
+    }
+}
+
+fn spill_failed(error: &std::io::Error) -> StorageError {
+    StorageError::SpillFailed(error.to_string())
+}
+
+impl SessionBytes {
+    fn len(&self) -> u64 {
+        match self {
+            Self::Memory(bytes) => bytes.len() as u64,
+            Self::Spilled(file) => file.len(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn is_spilled(&self) -> bool {
+        matches!(self, Self::Spilled(_))
+    }
+
+    /// Appends `chunk`. A memory session moves into a spill file when the result reaches the
+    /// threshold. A failure leaves the session as it was.
+    fn append(
+        &mut self,
+        chunk: &[u8],
+        spill: Option<&(SpillDir, u64)>,
+    ) -> Result<(), StorageError> {
+        match self {
+            Self::Spilled(file) => file.append(chunk).map_err(|e| spill_failed(&e)),
+            Self::Memory(bytes) => {
+                let end = (bytes.len() as u64).saturating_add(chunk.len() as u64);
+                match spill {
+                    Some((dir, threshold)) if end >= *threshold => {
+                        let mut file = dir.create_file().map_err(|e| spill_failed(&e))?;
+                        file.append(bytes).map_err(|e| spill_failed(&e))?;
+                        file.append(chunk).map_err(|e| spill_failed(&e))?;
+                        *self = Self::Spilled(file);
+                    }
+                    _ => bytes.extend_from_slice(chunk),
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Drops the bytes after `len`. A failure leaves the session as it was.
+    fn truncate(&mut self, len: u64) -> Result<(), StorageError> {
+        match self {
+            Self::Memory(bytes) => {
+                bytes.truncate(usize::try_from(len).unwrap_or(usize::MAX));
+                Ok(())
+            }
+            Self::Spilled(file) if len < file.len() => {
+                file.truncate(len).map_err(|e| spill_failed(&e))
+            }
+            Self::Spilled(_) => Ok(()),
+        }
+    }
+
+    fn digests(&self) -> Result<ObjectDigests, StorageError> {
+        match self {
+            Self::Memory(bytes) => Ok(ObjectDigests::new(bytes)),
+            Self::Spilled(file) => file.digests().map_err(|e| spill_failed(&e)),
+        }
+    }
+
+    fn try_clone(&self) -> Result<Self, StorageError> {
+        match self {
+            Self::Memory(bytes) => Ok(Self::Memory(bytes.clone())),
+            Self::Spilled(file) => file
+                .try_clone()
+                .map(Self::Spilled)
+                .map_err(|e| spill_failed(&e)),
+        }
+    }
 }
 
 /// Options of a resumable upload session.
@@ -724,8 +854,8 @@ pub struct PendingUpload<'a> {
     pub name: &'a ObjectName,
     /// Declared metadata.
     pub metadata: &'a NewMetadata,
-    /// Bytes received so far.
-    pub bytes: &'a [u8],
+    /// Number of bytes received so far.
+    pub len: u64,
     /// Digests of the accepted bytes, finalized from the incremental upload state in O(1).
     pub digests: ObjectDigests,
     /// Declared total, if any.
@@ -777,8 +907,9 @@ impl BlobBody {
     }
 }
 
-/// All buckets of one session.
-#[derive(Debug, Clone)]
+/// All buckets of one session. It has no `Clone`: a copy of a spilled upload session needs a
+/// file copy, which can fail, so a snapshot goes through [`Self::capture_buckets`].
+#[derive(Debug)]
 pub struct StorageState {
     objects: BTreeMap<(BucketName, ObjectName), ObjectMetadata>,
     /// Object data, shared by reference with every snapshot that captured the same blob.
@@ -914,10 +1045,7 @@ impl StorageState {
     }
 
     fn upload_bytes(uploads: &BTreeMap<UploadId, UploadSession>) -> u64 {
-        uploads
-            .values()
-            .map(|upload| upload.received.len() as u64)
-            .sum()
+        uploads.values().map(|upload| upload.received.len()).sum()
     }
 
     fn refresh_retained_upload_bytes(&mut self) {
@@ -942,12 +1070,12 @@ impl StorageState {
         let before = self
             .uploads
             .get(id)
-            .map_or(0, |upload| upload.received.len() as u64);
+            .map_or(0, |upload| upload.received.len());
         let result = change(self);
         let after = self
             .uploads
             .get(id)
-            .map_or(0, |upload| upload.received.len() as u64);
+            .map_or(0, |upload| upload.received.len());
         self.retained_upload_bytes = retained
             .checked_sub(before)
             .and_then(|other| other.checked_add(after))
@@ -962,9 +1090,9 @@ impl StorageState {
         change: impl FnOnce(&mut UploadSession) -> R,
     ) -> Result<R, StorageError> {
         let upload = self.upload_mut(id, now)?;
-        let before = upload.received.len() as u64;
+        let before = upload.received.len();
         let result = change(upload);
-        let after = upload.received.len() as u64;
+        let after = upload.received.len();
         self.retained_upload_bytes = self
             .retained_upload_bytes
             .checked_sub(before)
@@ -979,7 +1107,7 @@ impl StorageState {
             if keep(upload) {
                 true
             } else {
-                removed += upload.received.len() as u64;
+                removed += upload.received.len();
                 false
             }
         });
@@ -1044,7 +1172,7 @@ impl StorageState {
             if !owned(upload.bucket.as_str()) || !matches!(upload.state, UploadState::Receiving) {
                 continue;
             }
-            let bytes = count(upload.received.len());
+            let bytes = upload.received.len();
             uploads += 1;
             upload_bytes = upload_bytes.saturating_add(bytes);
             let digest = fireemu_core_types::hash::sha256(id.as_str().as_bytes());
@@ -1090,6 +1218,15 @@ impl StorageState {
     #[must_use]
     pub fn retained_upload_bytes(&self) -> u64 {
         self.retained_upload_bytes
+    }
+
+    /// How many upload sessions keep their bytes in a spill file.
+    #[must_use]
+    pub fn spilled_upload_sessions(&self) -> usize {
+        self.uploads
+            .values()
+            .filter(|upload| upload.received.is_spilled())
+            .count()
     }
 
     /// Drops every object, blob and upload (session reset).
@@ -1162,9 +1299,11 @@ impl StorageState {
     }
 
     /// A copy of the objects, blobs and uploads of the buckets `owned` selects (a session
-    /// snapshot); the counters and the token generator are copied as they are.
-    #[must_use]
-    pub fn capture_buckets(&self, owned: impl Fn(&str) -> bool) -> Self {
+    /// snapshot); the counters and the token generator are copied as they are. The bodies of
+    /// committed objects are shared with the copy; an upload session that keeps its bytes in a
+    /// spill file is copied together with its file, so the copy and the live state never share
+    /// one. When a file cannot be copied nothing is captured and the error is returned.
+    pub fn capture_buckets(&self, owned: impl Fn(&str) -> bool) -> Result<Self, StorageError> {
         let objects: BTreeMap<(BucketName, ObjectName), ObjectMetadata> = self
             .objects
             .iter()
@@ -1199,11 +1338,11 @@ impl StorageState {
             .uploads
             .iter()
             .filter(|(_, u)| owned(u.bucket.as_str()))
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+            .map(|(k, v)| Ok((k.clone(), v.try_clone()?)))
+            .collect::<Result<BTreeMap<_, _>, StorageError>>()?;
         let retained_upload_bytes = Self::upload_bytes(&uploads);
         let stored_bytes = blob_bytes(&blobs);
-        Self {
+        Ok(Self {
             objects,
             blobs,
             spill: self.spill.clone(),
@@ -1228,13 +1367,26 @@ impl StorageState {
             upload_recomputations: 0,
             #[cfg(test)]
             upload_accounting_lookups: 0,
-        }
+        })
     }
 
     /// Replaces the buckets `owned` selects with `captured`'s objects, blobs and uploads
     /// (a session restore); the other buckets stay. Global allocators and the credential RNG
     /// never rewind: their identifiers may still be referenced by another scope or client.
-    pub fn restore_buckets(&mut self, owned: impl Fn(&str) -> bool, captured: &Self) {
+    /// The restored upload sessions are copies (a spilled one gets a new file), so `captured`
+    /// stays usable for another restore. When a file cannot be copied nothing is changed and
+    /// the error is returned.
+    pub fn restore_buckets(
+        &mut self,
+        owned: impl Fn(&str) -> bool,
+        captured: &Self,
+    ) -> Result<(), StorageError> {
+        let uploads = captured
+            .uploads
+            .iter()
+            .filter(|(_, u)| owned(u.bucket.as_str()))
+            .map(|(k, v)| Ok((k.clone(), v.try_clone()?)))
+            .collect::<Result<Vec<_>, StorageError>>()?;
         self.remove_buckets_where(&owned);
         for (k, v) in &captured.objects {
             if owned(k.0.as_str()) {
@@ -1262,11 +1414,7 @@ impl StorageState {
                 self.public_read.insert(entry.clone());
             }
         }
-        for (k, v) in &captured.uploads {
-            if owned(v.bucket.as_str()) {
-                self.uploads.insert(k.clone(), v.clone());
-            }
-        }
+        self.uploads.extend(uploads);
         self.refresh_retained_upload_bytes();
         self.next_blob = self.next_blob.max(captured.next_blob);
         self.next_generation = self.next_generation.max(captured.next_generation);
@@ -1282,6 +1430,7 @@ impl StorageState {
             };
             !owned(bucket.as_str())
         });
+        Ok(())
     }
 
     /// The `storage.maxStoredBytes` bound on [`Self::retained_blob_bytes`], if any.
@@ -2924,7 +3073,7 @@ impl StorageState {
                 expected_crc32c: options.expected_crc32c,
                 md5: Md5::new(),
                 crc32c: Crc32c::new(),
-                received: Vec::new(),
+                received: SessionBytes::default(),
                 state: UploadState::Receiving,
                 started_at: now,
             },
@@ -2986,7 +3135,7 @@ impl StorageState {
             let removed = self.uploads.remove(id).expect("expired upload exists");
             self.retained_upload_bytes = self
                 .retained_upload_bytes
-                .checked_sub(removed.received.len() as u64)
+                .checked_sub(removed.received.len())
                 .expect("expired upload bytes were retained");
         }
         self.uploads.get_mut(id).ok_or(StorageError::UploadNotFound)
@@ -3003,7 +3152,7 @@ impl StorageState {
         Ok(match &u.state {
             UploadState::Committed(m) => (m.size, Some((**m).clone())),
             UploadState::Denied(received) => (*received, None),
-            UploadState::Receiving | UploadState::Aborted => (u.received.len() as u64, None),
+            UploadState::Receiving | UploadState::Aborted => (u.received.len(), None),
         })
     }
 
@@ -3014,8 +3163,8 @@ impl StorageState {
         id: &UploadId,
         now: LogicalInstant,
     ) -> Result<(u32, [u8; 16]), StorageError> {
-        let u = self.upload_mut(id, now)?;
-        Ok((crc32c(&u.received), md5(&u.received)))
+        let digests = self.upload_mut(id, now)?.received.digests()?;
+        Ok((digests.crc32c, digests.md5))
     }
 
     /// The full lifecycle phase of an upload, for the status queries the protocols answer.
@@ -3026,9 +3175,9 @@ impl StorageState {
     ) -> Result<UploadPhase, StorageError> {
         let u = self.upload_mut(id, now)?;
         Ok(match &u.state {
-            UploadState::Receiving => UploadPhase::Active(u.received.len() as u64),
+            UploadState::Receiving => UploadPhase::Active(u.received.len()),
             UploadState::Committed(m) => UploadPhase::Finalized(m.clone()),
-            UploadState::Aborted => UploadPhase::Cancelled(u.received.len() as u64),
+            UploadState::Aborted => UploadPhase::Cancelled(u.received.len()),
             UploadState::Denied(received) => UploadPhase::Denied(*received),
         })
     }
@@ -3046,8 +3195,8 @@ impl StorageState {
             if u.state == UploadState::Receiving {
                 // Keep the count for a later status query; drop the bytes, exactly as a cancel
                 // and a size / checksum abort do (S-2).
-                u.state = UploadState::Denied(u.received.len() as u64);
-                u.received = Vec::new();
+                u.state = UploadState::Denied(u.received.len());
+                u.received = SessionBytes::default();
             }
             Ok(())
         })?
@@ -3086,6 +3235,7 @@ impl StorageState {
         let retained = self.retained_upload_bytes;
         let limit = self.retained_upload_limit;
         let max_object_bytes = self.max_object_bytes;
+        let spill = self.spill.clone();
         self.with_upload_session(id, now, |u| {
             match u.state {
                 UploadState::Committed(_) | UploadState::Aborted | UploadState::Denied(_) => {
@@ -3093,7 +3243,7 @@ impl StorageState {
                 }
                 UploadState::Receiving => {}
             }
-            let received = u.received.len() as u64;
+            let received = u.received.len();
             let end = offset
                 .checked_add(chunk.len() as u64)
                 .ok_or(StorageError::TooLarge)?;
@@ -3105,18 +3255,18 @@ impl StorageState {
                 let skip = usize::try_from(received - offset).unwrap_or(0);
                 if let Some(error) = upload_size_error(end, u.total, max_object_bytes) {
                     u.state = UploadState::Aborted;
-                    u.received = Vec::new();
+                    u.received = SessionBytes::default();
                     return Err(error);
                 }
                 let appended = &chunk[skip..];
                 if !Self::can_retain_upload_bytes(retained, appended.len() as u64, limit) {
                     return Err(StorageError::UploadCapacityExceeded);
                 }
+                u.received.append(appended, spill.as_ref())?;
                 u.md5.update(appended);
                 u.crc32c.update(appended);
-                u.received.extend_from_slice(appended);
             }
-            Ok(u.received.len() as u64)
+            Ok(u.received.len())
         })?
     }
 
@@ -3134,6 +3284,7 @@ impl StorageState {
         let retained = self.retained_upload_bytes;
         let limit = self.retained_upload_limit;
         let max_object_bytes = self.max_object_bytes;
+        let spill_threshold = self.spill.as_ref().map(|(_, threshold)| *threshold);
         let attempt = self.with_upload_session(id, now, |u| {
             match u.state {
                 UploadState::Committed(_) | UploadState::Aborted | UploadState::Denied(_) => {
@@ -3141,13 +3292,18 @@ impl StorageState {
                 }
                 UploadState::Receiving => {}
             }
-            if offset != 0 || !u.received.is_empty() || chunk.is_empty() {
+            // A chunk that reaches the spill threshold is written to a file, not adopted.
+            if offset != 0
+                || !u.received.is_empty()
+                || chunk.is_empty()
+                || spill_threshold.is_some_and(|threshold| chunk.len() as u64 >= threshold)
+            {
                 return Ok(None);
             }
             let end = chunk.len() as u64;
             if let Some(error) = upload_size_error(end, u.total, max_object_bytes) {
                 u.state = UploadState::Aborted;
-                u.received = Vec::new();
+                u.received = SessionBytes::default();
                 return Err(error);
             }
             if !Self::can_retain_upload_bytes(retained, end, limit) {
@@ -3155,8 +3311,8 @@ impl StorageState {
             }
             u.md5.update(&chunk);
             u.crc32c.update(&chunk);
-            u.received = std::mem::take(&mut chunk);
-            Ok(Some(u.received.len() as u64))
+            u.received = SessionBytes::Memory(std::mem::take(&mut chunk));
+            Ok(Some(u.received.len()))
         })?;
         match attempt? {
             Some(received) => Ok(received),
@@ -3179,7 +3335,7 @@ impl StorageState {
                 bucket: &u.bucket,
                 name: &u.name,
                 metadata: &u.metadata,
-                bytes: &u.received,
+                len: u.received.len(),
                 digests: ObjectDigests {
                     md5: u.md5.clone().finalize(),
                     crc32c: u.crc32c.finalize(),
@@ -3256,9 +3412,9 @@ impl StorageState {
                 }
                 UploadState::Receiving => {}
             }
-            if u.total.is_some_and(|t| t != u.received.len() as u64) {
+            if u.total.is_some_and(|t| t != u.received.len()) {
                 u.state = UploadState::Aborted;
-                u.received = Vec::new();
+                u.received = SessionBytes::default();
                 return Err(StorageError::UploadSizeMismatch);
             }
             // A checksum failure is terminal: the client has to start a new session.
@@ -3279,7 +3435,7 @@ impl StorageState {
             };
             if let Some(m) = mismatch {
                 u.state = UploadState::Aborted;
-                u.received = Vec::new();
+                u.received = SessionBytes::default();
                 return Err(StorageError::ChecksumMismatch(m));
             }
             (
@@ -3291,7 +3447,7 @@ impl StorageState {
                     md5: received_md5,
                     crc32c: received_crc32c,
                 },
-                u.received.len() as u64,
+                u.received.len(),
             )
         };
         let plan = match self.plan_put(&bucket, &name, size, digests, metadata, precondition, now) {
@@ -3302,40 +3458,48 @@ impl StorageState {
             Err(error) => {
                 if let Some(upload) = self.uploads.get_mut(id) {
                     upload.state = UploadState::Aborted;
-                    upload.received = Vec::new();
+                    upload.received = SessionBytes::default();
                 }
                 return Err(error);
             }
         };
-        let spilled = if let Some((dir, threshold)) = &self.spill {
-            if size >= *threshold {
-                let bytes = &self
-                    .uploads
-                    .get(id)
-                    .ok_or(StorageError::UploadNotFound)?
-                    .received;
-                let mut file = dir
-                    .create_file()
-                    .map_err(|e| StorageError::SpillFailed(e.to_string()))?;
-                file.append(bytes)
-                    .map_err(|e| StorageError::SpillFailed(e.to_string()))?;
-                Some(Arc::new(file))
-            } else {
-                None
+        // A body that has to change kind is prepared before the event is admitted, so a failure
+        // leaves the session open for a retry; otherwise the session's bytes move into the blob
+        // as they are (a spilled session hands over its file without copying it).
+        let spill_dir = self
+            .spill
+            .as_ref()
+            .filter(|(_, threshold)| size >= *threshold)
+            .map(|(dir, _)| dir);
+        let prepared = match (
+            &self
+                .uploads
+                .get(id)
+                .ok_or(StorageError::UploadNotFound)?
+                .received,
+            spill_dir,
+        ) {
+            (SessionBytes::Memory(bytes), Some(dir)) => {
+                let mut file = dir.create_file().map_err(|e| spill_failed(&e))?;
+                file.append(bytes).map_err(|e| spill_failed(&e))?;
+                Some(BlobBody::Spilled(Arc::new(file)))
             }
-        } else {
-            None
+            (SessionBytes::Spilled(file), None) => Some(BlobBody::Memory(Arc::new(
+                file.read_all().map_err(|e| spill_failed(&e))?,
+            ))),
+            _ => None,
         };
         let events = Self::put_events(&plan);
         let reservation = admit(&events)?;
-        let bytes = self
+        let received = self
             .uploads
             .get_mut(id)
             .map(|upload| std::mem::take(&mut upload.received))
             .ok_or(StorageError::UploadNotFound)?;
-        let body = match spilled {
-            Some(file) => BlobBody::Spilled(file),
-            None => BlobBody::Memory(Arc::new(bytes)),
+        let body = match (prepared, received) {
+            (Some(body), _) => body,
+            (None, SessionBytes::Memory(bytes)) => BlobBody::Memory(Arc::new(bytes)),
+            (None, SessionBytes::Spilled(file)) => BlobBody::Spilled(Arc::new(file)),
         };
         let meta = plan.meta.clone();
         self.apply_planned_put(plan, body, events);
@@ -3365,7 +3529,7 @@ impl StorageState {
         let meta = match self.finalize_upload(id, now) {
             Err(StorageError::StoredBytesLimit) => {
                 if let Some(checkpoint) = checkpoint {
-                    self.rollback_upload(id, checkpoint);
+                    self.rollback_upload(id, checkpoint)?;
                 }
                 return Err(StorageError::StoredBytesLimit);
             }
@@ -3393,18 +3557,24 @@ impl StorageState {
 
     /// Takes a receiving session back to `checkpoint`: the bytes appended since are dropped
     /// and the running digests restored. A session that left the receiving state is left as
-    /// it is.
-    pub fn rollback_upload(&mut self, id: &UploadId, checkpoint: UploadCheckpoint) {
+    /// it is. When a spilled session's file cannot be shortened the session is left exactly as
+    /// it was, bytes and digests still agreeing, and the error is returned.
+    pub fn rollback_upload(
+        &mut self,
+        id: &UploadId,
+        checkpoint: UploadCheckpoint,
+    ) -> Result<(), StorageError> {
         self.with_upload_accounting(id, |store| {
             if let Some(upload) = store.uploads.get_mut(id) {
                 // Appending only grows a receiving session, so the checkpoint is a prefix of it.
                 if matches!(upload.state, UploadState::Receiving) {
-                    upload.received.truncate(checkpoint.received);
+                    upload.received.truncate(checkpoint.received)?;
                     upload.md5 = checkpoint.md5;
                     upload.crc32c = checkpoint.crc32c;
                 }
             }
-        });
+            Ok(())
+        })
     }
 
     /// Cancels an upload. A finalized session (committed, or refused by rules at
@@ -3422,7 +3592,7 @@ impl StorageState {
                 UploadState::Receiving | UploadState::Aborted => {}
             }
             u.state = UploadState::Aborted;
-            u.received = Vec::new();
+            u.received = SessionBytes::default();
             Ok(())
         })?
     }
@@ -3604,6 +3774,9 @@ impl MetadataPatch {
         next
     }
 }
+
+#[cfg(test)]
+mod spill_tests;
 
 #[cfg(test)]
 mod tests {
@@ -3871,9 +4044,13 @@ mod tests {
         #[test]
         fn retained_upload_bytes_match_recomputation_after_all_transitions(
             operations in proptest::collection::vec((0u8..20, 0usize..16, 0u8..16), 1..160),
+            spill_threshold in proptest::option::of(0u64..24),
         ) {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let spill_dir = std::env::temp_dir().join(format!("store-accounting-{}-{}", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
             let buckets = [BucketName::try_new("bucket-one").unwrap(), BucketName::try_new("bucket-two").unwrap()];
             let mut state = StorageState::new(3);
+            state.set_spill(spill_threshold.map(|threshold| (SpillDir::new(&spill_dir), threshold)));
             state.retained_upload_limit = 32;
             let mut ids = Vec::new();
             let mut capture = None;
@@ -3882,7 +4059,7 @@ mod tests {
                 let now = LogicalInstant::from_unix_seconds(seconds);
                 let id = ids.get(selected % ids.len().max(1)).cloned().unwrap_or_else(|| UploadId::from_str_unchecked("missing"));
                 let bucket = &buckets[selected % 2];
-                let received = state.uploads.get(&id).map_or(0, |u| u.received.len() as u64);
+                let received = state.uploads.get(&id).map_or(0, |u| u.received.len());
                 let chunk = vec![bytes; usize::from(bytes)];
                 match op {
                     0 | 1 => {
@@ -3901,7 +4078,7 @@ mod tests {
                         if let Some(checkpoint) = state.upload_checkpoint(&id) {
                             let _ = state.append_upload_owned(&id, received, chunk, now);
                             proptest::prop_assert_eq!(state.retained_upload_bytes, StorageState::upload_bytes(&state.uploads));
-                            state.rollback_upload(&id, checkpoint);
+                            state.rollback_upload(&id, checkpoint).unwrap();
                         }
                     }
                     10 => { let _ = state.set_upload_hashes(&id, Some([bytes; 16]), None, now); }
@@ -3909,8 +4086,8 @@ mod tests {
                     12 => { seconds += UPLOAD_SESSION_TTL_SECONDS + 1; let _ = state.upload_status(&id, LogicalInstant::from_unix_seconds(seconds)); }
                     13 => { state.remove_bucket(bucket); }
                     14 => { state.remove_buckets_where(|b| b == bucket.as_str()); }
-                    15 => { capture = Some(state.capture_buckets(|b| b == bucket.as_str())); }
-                    16 => { if let Some(captured) = &capture { state.restore_buckets(|b| b == bucket.as_str(), captured); } }
+                    15 => { capture = Some(state.capture_buckets(|b| b == bucket.as_str()).unwrap()); }
+                    16 => { if let Some(captured) = &capture { state.restore_buckets(|b| b == bucket.as_str(), captured).unwrap(); } }
                     17 => { state.clear(); }
                     18 => { state.set_stored_bytes_limit(Some(u64::from(bytes))); let _ = state.upload_chunk(&id, received, &chunk, true, now); }
                     _ => { let _ = state.pending_upload(&id, now); let _ = state.upload_phase(&id, now); }
@@ -3920,6 +4097,9 @@ mod tests {
                     proptest::prop_assert_eq!(captured.retained_upload_bytes, StorageState::upload_bytes(&captured.uploads));
                 }
             }
+            drop(capture);
+            drop(state);
+            let _ = std::fs::remove_dir_all(&spill_dir);
         }
     }
 
@@ -3986,7 +4166,7 @@ mod tests {
                 state.append_upload_owned(id, 0, vec![1; 4], now).unwrap();
                 let checkpoint = state.upload_checkpoint(id).unwrap();
                 state.append_upload(id, 6, &[1], now).unwrap();
-                state.rollback_upload(id, checkpoint);
+                state.rollback_upload(id, checkpoint).unwrap();
                 assert_eq!(
                     state.retained_upload_bytes,
                     StorageState::upload_bytes(&state.uploads)
@@ -4300,12 +4480,12 @@ mod tests {
             )
             .unwrap();
         let checkpoint = state.upload_checkpoint(&id).unwrap();
-        state.rollback_upload(&id, checkpoint.clone());
-        state.rollback_upload(&id, checkpoint);
+        state.rollback_upload(&id, checkpoint.clone()).unwrap();
+        state.rollback_upload(&id, checkpoint).unwrap();
         assert_eq!(state.upload_accounting_lookups, 4);
-        let captured = state.capture_buckets(|_| true);
-        state.restore_buckets(|_| true, &captured);
-        state.restore_buckets(|_| true, &captured);
+        let captured = state.capture_buckets(|_| true).unwrap();
+        state.restore_buckets(|_| true, &captured).unwrap();
+        state.restore_buckets(|_| true, &captured).unwrap();
         assert_eq!(state.upload_recomputations, 2);
     }
 }

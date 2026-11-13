@@ -842,7 +842,7 @@
         "spillObjectBytes": {
           "type": "integer",
           "minimum": 1,
-          "description": "Committed Storage objects of at least this many bytes keep their bytes in temporary files under the daemon's temp root instead of memory. Unset, every object stays in memory, as production has no such setting. Reads, digests, generations and limits are unchanged; a failed spill write answers 503 with Retry-After: 1. Resumable upload sessions still buffer in memory."
+          "description": "Committed Storage objects of at least this many bytes keep their bytes in temporary files under the daemon's temp root instead of memory. Unset, every object stays in memory, as production has no such setting. Reads, digests, generations and limits are unchanged; a failed spill write answers 503 with Retry-After: 1. A resumable upload session keeps its received bytes in a temporary file once they reach that size."
         },
         "buckets": {
           "type": "array",

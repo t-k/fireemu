@@ -701,7 +701,11 @@ fn upload_sessions_keep_the_committed_object_and_enforce_the_declared_total() {
         .unwrap();
     s.append_upload(&id, 0, b"abc", t(1)).unwrap();
     let pending = s.pending_upload(&id, t(1)).unwrap();
-    assert_eq!(pending.bytes, b"abc");
+    assert_eq!(pending.len, 3);
+    assert_eq!(
+        pending.digests,
+        fireemu_core_storage::store::ObjectDigests::new(b"abc")
+    );
     let committed = s.finalize_upload(&id, t(2)).unwrap();
     // A later overwrite does not change what the session reports.
     s.put(
@@ -746,7 +750,12 @@ fn resumable_event_admission_refusal_keeps_bytes_and_session_retryable() {
         Err(StorageError::EventAdmission(_))
     ));
     assert!(store.get(&b, &n).is_none());
-    assert_eq!(store.pending_upload(&id, t(2)).unwrap().bytes, b"abc");
+    let pending = store.pending_upload(&id, t(2)).unwrap();
+    assert_eq!(pending.len, 3);
+    assert_eq!(
+        pending.digests,
+        fireemu_core_storage::store::ObjectDigests::new(b"abc")
+    );
     assert!(store.drain_events().is_empty());
 
     let committed = store.finalize_upload(&id, t(3)).unwrap();
@@ -1587,9 +1596,8 @@ fn an_owned_chunk_is_adopted_by_an_empty_session_and_follows_every_append_rule()
         .unwrap();
     // The first chunk of an empty session becomes the session buffer as it is.
     let chunk = vec![9u8; 4096];
-    let at = chunk.as_ptr();
     assert_eq!(s.append_upload_owned(&id, 0, chunk, t(1)), Ok(4096));
-    assert_eq!(s.pending_upload(&id, t(1)).unwrap().bytes.as_ptr(), at);
+    assert_eq!(s.pending_upload(&id, t(1)).unwrap().len, 4096);
     // A later chunk appends, a gap is refused, a repeat is ignored.
     assert_eq!(
         s.append_upload_owned(&id, 4096, vec![1u8; 4], t(1)),

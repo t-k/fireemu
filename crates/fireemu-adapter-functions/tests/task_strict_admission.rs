@@ -200,6 +200,73 @@ fn refusal(h: &Harness, body: &Value) -> (u16, Value) {
 }
 
 #[tokio::test]
+async fn a_future_strict_task_starts_its_unstarted_codebase_runner() {
+    let spec = SpawnSpec {
+        command: vec![
+            "python3".to_owned(),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py").to_owned(),
+        ],
+        cwd: None,
+        env: Vec::new(),
+        hello_timeout: Duration::from_secs(60),
+    };
+    let probe = Runner::spawn_spec(&spec).await.unwrap();
+    let mut manifest = parse_manifest(probe.hello().manifest.as_ref().unwrap()).unwrap();
+    let mut function = manifest.get("echo").unwrap().clone();
+    function.name = "taskA".to_owned();
+    function.entry_point = "taskA".to_owned();
+    function.trigger = Trigger::TaskQueue {
+        retry: TaskRetryConfig::default(),
+        rate_limits: TaskRateLimits::default(),
+    };
+    manifest.functions.clear();
+    manifest.functions.push(function);
+    probe.shutdown().await;
+    let runtime = FunctionsRuntime::with_codebases(
+        vec![CodebaseSpec {
+            name: "tasks".to_owned(),
+            function: None,
+            manifest,
+            runner: Arc::new(Runner::unstarted("[functions:tasks]")),
+            spawn: Some(spec),
+            cleanup_dir: None,
+        }],
+        FunctionsConfig {
+            project: "demo-app".into(),
+            functions_host: Some("127.0.0.1:5001".into()),
+            honour_task_schedule_time: true,
+            ..FunctionsConfig::for_tests(1, "runner-secret".into())
+        },
+        Arc::new(Mutex::new(VirtualClock::new(START))),
+        FunctionsHttpProfile::Strict,
+    )
+    .unwrap();
+    assert!(runtime.runner_for("taskA").never_started());
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let (year, month, day) = civil(i64::try_from((now + 7 * 86_400) / 86_400).unwrap());
+    let scheduled = format!("{year:04}-{month:02}-{day:02}T00:00:00Z");
+    runtime
+        .enqueue_task(
+            "demo-app",
+            "us-central1",
+            "taskA",
+            &body_of(&json!({"scheduleTime": scheduled})),
+        )
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !runtime.runner_for("taskA").is_alive() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("accepting the task starts its codebase runner");
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
 async fn the_strict_profile_answers_with_the_task_and_refuses_in_production_s_words() {
     let h = start(
         "strict-answers",

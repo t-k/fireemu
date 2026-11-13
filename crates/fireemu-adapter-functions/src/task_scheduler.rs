@@ -203,8 +203,9 @@ impl BurstRule {
             // TASK-QUEUE burst recording 2026-11-13, run f7e5c776424f470a; stage 1 recordings 2026-11-11 queue read-backs.
             (Self::Production, 1.0) => 10.0,
             (Self::Production, 500.0) => 100.0,
-            // The burst of any other production rate is UNRECORDED. The pinned emulator
-            // uses TaskQueue.maxTokens = max(rate, 1.1), including fractional rates.
+            // Unrecorded production rates use the emulator capacity rounded down to whole tokens.
+            (Self::Production, _) => rate.max(1.1).floor(),
+            // The pinned emulator uses TaskQueue.maxTokens = max(rate, 1.1), including fractional rates.
             _ => rate.max(1.1),
         }
     }
@@ -214,10 +215,11 @@ impl BurstRule {
     /// first and the due time is 300 s after the program start), so at rate 1 its bucket had
     /// long refilled to capacity whatever it started with; starting full reproduces the observed
     /// 10 immediate starts. A queue's very first second after creation was not observed.
-    fn initial_tokens(self, rate: f64) -> f64 {
+    fn initial_tokens(self, rate: f64) -> u128 {
         match (self, rate) {
-            (Self::Production, 1.0 | 500.0) => self.capacity(rate),
-            _ => 0.0,
+            (Self::Production, 1.0) => 10,
+            (Self::Production, 500.0) => 100,
+            _ => 0,
         }
     }
 }
@@ -230,14 +232,50 @@ struct QueueState {
     active: BTreeMap<u64, ActiveTask>,
     names: BTreeSet<Arc<str>>,
     tokens: f64,
+    budget_nanos: u128,
+    period_nanos: Option<u128>,
     last_refill: TaskTime,
     added_times: StatisticWindow,
     completed_times: StatisticWindow,
     failed_times: StatisticWindow,
 }
 
+fn period_nanos(rate: f64) -> Option<u128> {
+    if rate.is_finite() && rate > 0.0 {
+        // Divide by the exact binary rate, rounding the integer period up only once.
+        let bits = rate.to_bits();
+        let exponent = i32::from(u16::try_from((bits >> 52) & 0x7ff).expect("exponent"));
+        let significand =
+            u128::from((bits & ((1 << 52) - 1)) | if exponent == 0 { 0 } else { 1 << 52 });
+        let shift = 1075 - exponent.max(1);
+        if shift <= 0 {
+            Some(1)
+        } else {
+            let mut quotient = Some(1_000_000_000 / significand);
+            let mut remainder = 1_000_000_000 % significand;
+            for _ in 0..shift {
+                remainder *= 2;
+                quotient = quotient.and_then(|value: u128| {
+                    value.checked_mul(2)?.checked_add(remainder / significand)
+                });
+                remainder %= significand;
+                if quotient.is_none() {
+                    break;
+                }
+            }
+            quotient
+                .and_then(|value| value.checked_add(u128::from(remainder != 0)))
+                .filter(|period| *period <= Duration::MAX.as_nanos())
+        }
+    } else {
+        None
+    }
+}
+
 impl QueueState {
     fn new(limits: TaskRateLimits, now: TaskTime) -> Self {
+        let rate = limits.max_dispatches_per_second;
+        let period_nanos = period_nanos(rate);
         Self {
             limits,
             burst_rule: BurstRule::Emulator,
@@ -245,6 +283,8 @@ impl QueueState {
             active: BTreeMap::new(),
             names: BTreeSet::new(),
             tokens: 0.0,
+            budget_nanos: 0,
+            period_nanos,
             last_refill: now,
             added_times: StatisticWindow::new(TASKS_ADDED_WINDOW),
             completed_times: StatisticWindow::new(COMPLETED_TASKS_WINDOW),
@@ -252,21 +292,54 @@ impl QueueState {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // capacity is a nonnegative integer, saturating at u128::MAX
     fn refill(&mut self, now: TaskTime) {
-        if now.duration_since(self.last_refill) < TOKEN_REFRESH_INTERVAL {
-            return;
+        match self.burst_rule {
+            BurstRule::Emulator => {
+                if now.duration_since(self.last_refill) < TOKEN_REFRESH_INTERVAL {
+                    return;
+                }
+                let elapsed = now.duration_since(self.last_refill).as_secs_f64();
+                let rate = self.limits.max_dispatches_per_second;
+                self.tokens = (self.tokens + elapsed * rate).min(self.burst_rule.capacity(rate));
+            }
+            BurstRule::Production => {
+                if let Some(period) = self.period_nanos {
+                    let capacity = self
+                        .burst_rule
+                        .capacity(self.limits.max_dispatches_per_second)
+                        as u128;
+                    self.budget_nanos = self
+                        .budget_nanos
+                        .saturating_add(now.duration_since(self.last_refill).as_nanos())
+                        .min(capacity.saturating_mul(period));
+                }
+            }
         }
-        let elapsed = now.duration_since(self.last_refill).as_secs_f64();
-        let rate = self.limits.max_dispatches_per_second;
-        self.tokens = (self.tokens + elapsed * rate).min(self.burst_rule.capacity(rate));
         self.last_refill = now;
     }
 
     fn next_refill(&self) -> Option<TaskTime> {
-        (self.limits.max_concurrent_dispatches > 0
-            && self.limits.max_dispatches_per_second > 0.0
-            && !self.pending.is_empty())
-        .then_some(self.last_refill + TOKEN_REFRESH_INTERVAL)
+        if self.limits.max_concurrent_dispatches == 0
+            || self.limits.max_dispatches_per_second <= 0.0
+            || self.pending.is_empty()
+        {
+            return None;
+        }
+        match self.burst_rule {
+            BurstRule::Emulator => Some(self.last_refill + TOKEN_REFRESH_INTERVAL),
+            BurstRule::Production => {
+                let period = self.period_nanos?;
+                if self.budget_nanos >= period {
+                    return None;
+                }
+                let wait = period - self.budget_nanos;
+                self.last_refill.checked_add(Duration::new(
+                    u64::try_from(wait / 1_000_000_000).ok()?,
+                    u32::try_from(wait % 1_000_000_000).expect("nanosecond remainder"),
+                ))
+            }
+        }
     }
 }
 
@@ -389,7 +462,9 @@ impl TaskScheduler {
     pub(crate) fn set_burst_rule(&mut self, rule: BurstRule) {
         for queue in self.queues.values_mut() {
             queue.burst_rule = rule;
-            queue.tokens = rule.initial_tokens(queue.limits.max_dispatches_per_second);
+            queue.tokens = 0.0;
+            queue.budget_nanos = queue.period_nanos.unwrap_or(0)
+                * rule.initial_tokens(queue.limits.max_dispatches_per_second);
         }
     }
 
@@ -605,7 +680,12 @@ impl TaskScheduler {
                     .expect("the queue key came from this map");
                 if queue.active.len()
                     >= usize::try_from(queue.limits.max_concurrent_dispatches).unwrap_or(usize::MAX)
-                    || queue.tokens < 1.0
+                    || match queue.burst_rule {
+                        BurstRule::Emulator => queue.tokens < 1.0,
+                        BurstRule::Production => queue
+                            .period_nanos
+                            .is_none_or(|period| queue.budget_nanos < period),
+                    }
                 {
                     continue;
                 }
@@ -619,7 +699,12 @@ impl TaskScheduler {
                     queue.pending.push_front(queued);
                     continue;
                 };
-                queue.tokens -= 1.0;
+                match queue.burst_rule {
+                    BurstRule::Emulator => queue.tokens -= 1.0,
+                    BurstRule::Production => {
+                        queue.budget_nanos -= queue.period_nanos.expect("available token");
+                    }
+                }
                 queue.active.insert(
                     queued.id,
                     ActiveTask {
@@ -652,18 +737,19 @@ impl TaskScheduler {
             .values()
             .filter_map(QueueState::next_refill)
             .min();
-        // Native time knows when the earliest scheduled task falls due; the virtual axis is
-        // woken by the clock change that moves it instead.
-        let schedule_wake = match (now, epoch_nanos) {
-            (TaskTime::Real(at), Some(epoch)) => self
-                .queues
+        // Strict queues report the same schedule deadline on both clock axes; virtual time
+        // still advances only when the task clock changes. Preserve emulator wake-ups.
+        let schedule_wake = epoch_nanos.and_then(|epoch| {
+            self.queues
                 .values()
+                .filter(|queue| {
+                    matches!(now, TaskTime::Real(_))
+                        || matches!(queue.burst_rule, BurstRule::Production)
+                })
                 .filter_map(|queue| queue.next_schedule_in(epoch))
                 .min()
-                .and_then(|wait| at.checked_add(wait))
-                .map(TaskTime::Real),
-            _ => None,
-        };
+                .and_then(|wait| now.checked_add(wait))
+        });
         let next_wake = match (refill_wake, schedule_wake) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
@@ -769,6 +855,23 @@ impl TaskScheduler {
             return RetryToken::Gone;
         }
         state.refill(now);
+        if matches!(state.burst_rule, BurstRule::Production) {
+            if let Some(period) = state.period_nanos {
+                if state.budget_nanos >= period {
+                    state.budget_nanos -= period;
+                    return RetryToken::Ready;
+                }
+                let wait = period - state.budget_nanos;
+                let duration = Duration::new(
+                    u64::try_from(wait / 1_000_000_000).expect("representable period"),
+                    u32::try_from(wait % 1_000_000_000).expect("nanosecond remainder"),
+                );
+                if let Some(deadline) = state.last_refill.checked_add(duration) {
+                    return RetryToken::WaitUntil(deadline);
+                }
+            }
+            return RetryToken::WaitUntil(state.last_refill + TOKEN_REFRESH_INTERVAL);
+        }
         if state.tokens >= 1.0 {
             state.tokens -= 1.0;
             RetryToken::Ready
@@ -777,6 +880,7 @@ impl TaskScheduler {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // capacity is a nonnegative integer, saturating at u128::MAX
     pub(crate) fn refund_token(&mut self, queue: &str, id: u64, generation: u64) {
         if generation != self.generation {
             return;
@@ -785,6 +889,19 @@ impl TaskScheduler {
             return;
         };
         if state.active.contains_key(&id) {
+            if matches!(state.burst_rule, BurstRule::Production) {
+                if let Some(period) = state.period_nanos {
+                    let capacity = state
+                        .burst_rule
+                        .capacity(state.limits.max_dispatches_per_second)
+                        as u128;
+                    state.budget_nanos = state
+                        .budget_nanos
+                        .saturating_add(period)
+                        .min(capacity.saturating_mul(period));
+                }
+                return;
+            }
             state.tokens = (state.tokens + 1.0).min(
                 state
                     .burst_rule
@@ -844,10 +961,18 @@ impl TaskScheduler {
                     ("scheduleTime", None)
                 } else if saturated {
                     ("concurrencyLimit", None)
-                } else if queue.tokens < 1.0 {
+                } else if match queue.burst_rule {
+                    BurstRule::Emulator => queue.tokens < 1.0,
+                    BurstRule::Production => queue
+                        .period_nanos
+                        .is_none_or(|period| queue.budget_nanos < period),
+                } {
                     (
                         "rateLimit",
-                        Some(queue.last_refill + TOKEN_REFRESH_INTERVAL),
+                        match queue.burst_rule {
+                            BurstRule::Production => queue.next_refill(),
+                            BurstRule::Emulator => Some(queue.last_refill + TOKEN_REFRESH_INTERVAL),
+                        },
                     )
                 } else {
                     ("ready", None)
@@ -957,9 +1082,11 @@ impl TaskScheduler {
             queue.pending.clear();
             queue.active.clear();
             queue.names.clear();
-            queue.tokens = queue
-                .burst_rule
-                .initial_tokens(queue.limits.max_dispatches_per_second);
+            queue.tokens = 0.0;
+            queue.budget_nanos = queue.period_nanos.unwrap_or(0)
+                * queue
+                    .burst_rule
+                    .initial_tokens(queue.limits.max_dispatches_per_second);
             queue.last_refill = now;
             queue.added_times.clear();
             queue.completed_times.clear();
@@ -988,6 +1115,41 @@ mod tests {
     use serde_json::json;
     use std::collections::BTreeMap;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn strict_period_covers_exact_rates_and_duration_boundary() {
+        let boundary = f64::from_bits(0x3bf0_0000_0000_0001);
+        for (rate, expected) in [
+            (1.0, Some(1_000_000_000)),
+            (500.0, Some(2_000_000)),
+            (3.0, Some(333_333_334)),
+            (3.0 / f64::from(1u32 << 25), Some(11_184_810_666_666_667)),
+            (1e300, Some(1)),
+            (boundary, Some(18_446_744_073_709_547_520_000_000_001)),
+            (f64::from_bits(boundary.to_bits() - 1), None),
+            (f64::MIN_POSITIVE, None),
+            (f64::from_bits(1), None),
+            (0.0, None),
+            (-1.0, None),
+            (f64::NAN, None),
+            (f64::INFINITY, None),
+        ] {
+            assert_eq!(super::period_nanos(rate), expected, "rate: {rate:?}");
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn strict_period_is_the_exact_ceiling(rate in 1e-6f64..=1e9) {
+            let bits = rate.to_bits();
+            let exponent = ((bits >> 52) & 0x7ff) as u32;
+            let significand = u128::from((bits & ((1u64 << 52) - 1)) | (1u64 << 52));
+            let numerator = 1_000_000_000u128 << (1075 - exponent);
+            let period = super::period_nanos(rate).unwrap();
+            proptest::prop_assert!(period * significand >= numerator);
+            proptest::prop_assert!((period - 1) * significand < numerator);
+        }
+    }
 
     fn manifest(limits: TaskRateLimits) -> FunctionManifest {
         FunctionManifest {
@@ -1928,6 +2090,340 @@ mod tests {
     }
 
     #[test]
+    fn strict_due_burst_dispatches_at_schedule_time() {
+        for (rule, burst, first_wake) in [
+            (super::BurstRule::Production, 10, 300_000_000_000),
+            (super::BurstRule::Emulator, 1, 1_000_000_000),
+        ] {
+            let start = super::TaskTime::Virtual(0);
+            let due = super::TaskTime::Virtual(300_000_000_000);
+            let epoch = nanos("2026-02-01T00:05:00.25Z");
+            let mut scheduler = TaskScheduler::from_manifest(
+                &manifest(TaskRateLimits {
+                    max_concurrent_dispatches: 20,
+                    max_dispatches_per_second: 1.0,
+                }),
+                start,
+            );
+            scheduler.set_burst_rule(rule);
+            for index in 0..20 {
+                let mut queued = task(&format!("task-{index}"));
+                queued.schedule_time = Some("2026-02-01T00:05:00.25Z".into());
+                scheduler
+                    .enqueue_at("queue", queued, TaskRetryConfig::default(), 1, start)
+                    .unwrap();
+            }
+            let (early, wake) = scheduler.dispatch_ready_at(
+                start,
+                Some(epoch - 300_000_000_000),
+                "demo-app",
+                |_| Some(DEFAULT_REGION.into()),
+                20,
+            );
+            assert!(early.is_empty(), "{rule:?}");
+            assert_eq!(wake, Some(super::TaskTime::Virtual(first_wake)), "{rule:?}");
+            let (early, wake) = scheduler.dispatch_ready_at(
+                super::TaskTime::Virtual(299_950_000_000),
+                Some(epoch - 50_000_000),
+                "demo-app",
+                |_| Some(DEFAULT_REGION.into()),
+                20,
+            );
+            assert!(early.is_empty(), "{rule:?}");
+            let expected = match rule {
+                super::BurstRule::Production => due,
+                super::BurstRule::Emulator => due + Duration::from_millis(950),
+            };
+            assert_eq!(wake, Some(expected), "{rule:?}");
+            let (early, _) = scheduler.dispatch_ready_at(
+                super::TaskTime::Virtual(299_999_999_999),
+                Some(epoch - 1),
+                "demo-app",
+                |_| Some(DEFAULT_REGION.into()),
+                20,
+            );
+            assert!(early.is_empty(), "{rule:?}");
+            let (dispatches, wake) = scheduler.dispatch_ready_at(
+                due,
+                Some(epoch),
+                "demo-app",
+                |_| Some(DEFAULT_REGION.into()),
+                20,
+            );
+            assert_eq!(dispatches.len(), burst, "{rule:?}");
+            let delay = match rule {
+                super::BurstRule::Production => 1000,
+                super::BurstRule::Emulator => 950,
+            };
+            assert_eq!(wake, Some(due + Duration::from_millis(delay)), "{rule:?}");
+        }
+    }
+
+    #[test]
+    fn strict_cadence_has_no_drift_with_late_wakeups() {
+        for (rule, burst) in [
+            (super::BurstRule::Production, 10),
+            (super::BurstRule::Emulator, 1),
+        ] {
+            let start = super::TaskTime::Virtual(0);
+            let due = start + Duration::from_secs(300);
+            let mut scheduler = TaskScheduler::from_manifest(
+                &manifest(TaskRateLimits {
+                    max_concurrent_dispatches: 120,
+                    max_dispatches_per_second: 1.0,
+                }),
+                start,
+            );
+            scheduler.set_burst_rule(rule);
+            for index in 0..burst + 110 {
+                let mut queued = task(&format!("task-{index}"));
+                queued.schedule_time = Some("2026-02-01T00:05:00Z".into());
+                scheduler
+                    .enqueue_at("queue", queued, TaskRetryConfig::default(), 1, start)
+                    .unwrap();
+            }
+            let epoch = nanos("2026-02-01T00:05:00Z");
+            let (dispatches, mut wake) = scheduler.dispatch_ready_at(
+                due,
+                Some(epoch),
+                "demo-app",
+                |_| Some(DEFAULT_REGION.into()),
+                120,
+            );
+            assert_eq!(dispatches.len(), burst, "{rule:?}");
+            for k in 1..=110 {
+                let now = wake.expect("pending tasks have a wake") + Duration::from_millis(4);
+                let expected_ms = match rule {
+                    super::BurstRule::Production => k * 1000 + 4,
+                    super::BurstRule::Emulator => k * 1004,
+                };
+                assert_eq!(
+                    now,
+                    due + Duration::from_millis(expected_ms),
+                    "{rule:?}, {k}"
+                );
+                let (dispatches, next) = scheduler.dispatch_ready_at(
+                    now,
+                    Some(epoch + i128::try_from(now.duration_since(due).as_nanos()).unwrap()),
+                    "demo-app",
+                    |_| Some(DEFAULT_REGION.into()),
+                    120,
+                );
+                assert_eq!(dispatches.len(), 1, "{rule:?}, {k}");
+                wake = next;
+            }
+            assert_eq!(wake, None, "{rule:?}");
+        }
+    }
+
+    #[test]
+    fn strict_fractional_rate_conserves_tokens_at_deadlines() {
+        let start = super::TaskTime::Virtual(0);
+        let mut scheduler = TaskScheduler::from_manifest(
+            &manifest(TaskRateLimits {
+                max_concurrent_dispatches: 20,
+                max_dispatches_per_second: 7.5,
+            }),
+            start,
+        );
+        scheduler.set_burst_rule(super::BurstRule::Production);
+        for index in 0..10 {
+            scheduler
+                .enqueue_at(
+                    "queue",
+                    task(&format!("task-{index}")),
+                    TaskRetryConfig::default(),
+                    1,
+                    start,
+                )
+                .unwrap();
+        }
+        let (_, mut wake) =
+            scheduler.dispatch_ready_at(start, None, "demo", |_| Some(DEFAULT_REGION.into()), 20);
+        assert_eq!(
+            scheduler.idle_projection(start, None)["waiting"][0]["elapsedDeadlineNanos"],
+            "133333334"
+        );
+        let mut count = 0;
+        while let Some(now) = wake {
+            let (dispatches, next) =
+                scheduler.dispatch_ready_at(now, None, "demo", |_| Some(DEFAULT_REGION.into()), 20);
+            count += dispatches.len();
+            let earned = now.duration_since(start).as_nanos() * 15 / 2_000_000_000;
+            assert!((count as u128) <= earned);
+            wake = next;
+        }
+        assert_eq!(count, 10);
+    }
+
+    #[test]
+    fn strict_small_binary_rate_never_dispatches_before_its_integer_period() {
+        let start = super::TaskTime::Virtual(123);
+        let period = 11_184_810_666_666_667u64;
+        let mut scheduler = TaskScheduler::from_manifest(
+            &manifest(TaskRateLimits {
+                max_concurrent_dispatches: 1,
+                max_dispatches_per_second: 3.0 / f64::from(1u32 << 25),
+            }),
+            start,
+        );
+        scheduler.set_burst_rule(super::BurstRule::Production);
+        assert_eq!(scheduler.queues["queue"].budget_nanos, 0);
+        assert_eq!(
+            scheduler.queues["queue"].period_nanos,
+            Some(u128::from(period))
+        );
+        scheduler
+            .enqueue_at("queue", task("slow"), TaskRetryConfig::default(), 1, start)
+            .unwrap();
+        let deadline = start + Duration::from_nanos(period);
+        for now in [start, start + Duration::from_nanos(period - 1)] {
+            let (dispatches, wake) =
+                scheduler.dispatch_ready_at(now, None, "demo", |_| Some(DEFAULT_REGION.into()), 1);
+            assert!(dispatches.is_empty());
+            assert_eq!(wake, Some(deadline));
+        }
+        let (dispatches, wake) =
+            scheduler.dispatch_ready_at(deadline, None, "demo", |_| Some(DEFAULT_REGION.into()), 1);
+        assert_eq!(dispatches.len(), 1);
+        assert_eq!(wake, None);
+        let dispatch = &dispatches[0];
+        let retry_deadline = deadline + Duration::from_nanos(period);
+        for now in [deadline, deadline + Duration::from_nanos(period - 1)] {
+            assert_eq!(
+                scheduler.reserve_retry("queue", dispatch.id, dispatch.generation, now),
+                super::RetryToken::WaitUntil(retry_deadline),
+            );
+        }
+        assert_eq!(
+            scheduler.reserve_retry("queue", dispatch.id, dispatch.generation, retry_deadline),
+            super::RetryToken::Ready,
+        );
+        assert_eq!(scheduler.queues["queue"].budget_nanos, 0);
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn strict_dispatches_conserve_integer_budget_and_make_progress(
+            rate in proptest::prop_oneof![
+                proptest::strategy::Just(0.000_001),
+                proptest::strategy::Just(1.0),
+                proptest::strategy::Just(500.0),
+                0.000_001f64..=1000.0,
+                0.000_001f64..2.0,
+            ],
+            lateness in proptest::collection::vec(0u64..=50, 100),
+        ) {
+            let start = super::TaskTime::Virtual(0);
+            let horizon = start + Duration::from_secs(5);
+            let mut scheduler = TaskScheduler::from_manifest(
+                &manifest(TaskRateLimits { max_concurrent_dispatches: 200, max_dispatches_per_second: rate }), start,
+            );
+            scheduler.set_burst_rule(super::BurstRule::Production);
+            let period = scheduler.queues["queue"].period_nanos.unwrap();
+            let initial = scheduler.queues["queue"].budget_nanos / period;
+            for index in 0..200 {
+                scheduler.enqueue_at("queue", task(&format!("task-{index}")), TaskRetryConfig::default(), 1, start).unwrap();
+            }
+            let mut now = start;
+            let mut count = 0u128;
+            // The bounded horizon also limits legitimate overflow losses at capacity-one rates.
+            for late in lateness {
+                let (dispatches, wake) = scheduler.dispatch_ready_at(now, None, "demo", |_| Some(DEFAULT_REGION.into()), 200);
+                count += dispatches.len() as u128;
+                let earned = now.duration_since(start).as_nanos() / period;
+                proptest::prop_assert!(count <= initial + earned, "count={} initial={} earned={} rate={}", count, initial, earned, rate);
+                proptest::prop_assert!(count >= earned.saturating_sub(1), "count={} earned={} rate={}", count, earned, rate);
+                let queue = &scheduler.queues["queue"];
+                proptest::prop_assert!(!queue.pending.is_empty());
+                proptest::prop_assert!(queue.budget_nanos < period);
+                proptest::prop_assert!(wake.is_some(), "pending tasks must have a refill deadline");
+                let deadline = wake.unwrap();
+                proptest::prop_assert!(deadline > now, "refill must advance virtual time");
+                if count >= initial + 30 || now == horizon {
+                    break;
+                }
+                now = (deadline + Duration::from_millis(late)).min(horizon);
+            }
+            proptest::prop_assert!(count >= initial + 30 || now == horizon);
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn strict_dispatches_conserve_tokens_with_late_wakes(
+            rate_eighths in 1u32..=8_000,
+            lateness in proptest::collection::vec(0u64..=50, 100),
+        ) {
+            let rate = f64::from(rate_eighths) / 8.0;
+            let start = super::TaskTime::Virtual(0);
+            let mut scheduler = TaskScheduler::from_manifest(
+                &manifest(TaskRateLimits { max_concurrent_dispatches: 200, max_dispatches_per_second: rate }), start,
+            );
+            scheduler.set_burst_rule(super::BurstRule::Production);
+            scheduler.queues.get_mut("queue").unwrap().budget_nanos = 0;
+            for index in 0..200 {
+                scheduler.enqueue_at("queue", task(&format!("task-{index}")), TaskRetryConfig::default(), 1, start).unwrap();
+            }
+            let (_, mut wake) = scheduler.dispatch_ready_at(start, None, "demo", |_| Some(DEFAULT_REGION.into()), 200);
+            let mut count = 0;
+            for late in lateness {
+                if scheduler.queues["queue"].pending.is_empty() {
+                    break;
+                }
+                proptest::prop_assert!(wake.is_some(), "pending tasks must have a refill deadline");
+                let deadline = wake.unwrap();
+                let now = deadline + Duration::from_millis(late);
+                let (dispatches, next) = scheduler.dispatch_ready_at(now, None, "demo", |_| Some(DEFAULT_REGION.into()), 200);
+                count += dispatches.len();
+                let elapsed_nanos = now.duration_since(start).as_nanos();
+                let earned = elapsed_nanos * u128::from(rate_eighths) / 8_000_000_000;
+                proptest::prop_assert!((count as u128) <= earned, "count={} earned={} rate={}", count, earned, rate);
+                wake = next;
+            }
+            proptest::prop_assert!(count >= 30);
+        }
+
+        #[test]
+        fn strict_cadence_bounds_random_wakeup_lateness(
+            lateness in proptest::collection::vec(0u64..=50, 110),
+        ) {
+            let start = super::TaskTime::Virtual(0);
+            let due = start + Duration::from_secs(300);
+            let mut scheduler = TaskScheduler::from_manifest(
+                &manifest(TaskRateLimits {
+                    max_concurrent_dispatches: 120,
+                    max_dispatches_per_second: 1.0,
+                }),
+                start,
+            );
+            scheduler.set_burst_rule(super::BurstRule::Production);
+            for index in 0..120 {
+                scheduler.enqueue_at(
+                    "queue", task(&format!("task-{index}")), TaskRetryConfig::default(), 1, start,
+                ).unwrap();
+            }
+            let (dispatches, mut wake) = scheduler.dispatch_ready_at(
+                due, None, "demo-app", |_| Some(DEFAULT_REGION.into()), 120,
+            );
+            proptest::prop_assert_eq!(dispatches.len(), 10);
+            for (index, late_ms) in lateness.into_iter().enumerate() {
+                let expected = due + Duration::from_secs(index as u64 + 1);
+                proptest::prop_assert_eq!(wake, Some(expected));
+                let now = wake.unwrap() + Duration::from_millis(late_ms);
+                let (dispatches, next) = scheduler.dispatch_ready_at(
+                    now, None, "demo-app", |_| Some(DEFAULT_REGION.into()), 120,
+                );
+                proptest::prop_assert_eq!(dispatches.len(), 1);
+                proptest::prop_assert!(now >= expected);
+                proptest::prop_assert!(now <= expected + Duration::from_millis(50));
+                wake = next;
+            }
+            proptest::prop_assert_eq!(wake, None);
+        }
+    }
+
+    #[test]
     fn recorded_strict_burst_and_emulator_empty_bucket_dispatch_on_virtual_clock() {
         for (rule, first) in [
             (super::BurstRule::Production, 10),
@@ -1988,8 +2484,7 @@ mod tests {
     #[test]
     #[allow(clippy::float_cmp)] // the recorded capacities are exact values
     fn production_recorded_and_unrecorded_bucket_state_and_reset() {
-        for (rate, capacity, initial) in [(1.0, 10.0, 10.0), (500.0, 100.0, 100.0), (2.0, 2.0, 0.0)]
-        {
+        for (rate, capacity, initial) in [(1.0, 10, 10), (500.0, 100, 100), (2.0, 2, 0)] {
             let start = super::TaskTime::Virtual(0);
             let mut scheduler = TaskScheduler::from_manifest(
                 &manifest(TaskRateLimits {
@@ -2000,14 +2495,20 @@ mod tests {
             );
             scheduler.set_burst_rule(super::BurstRule::Production);
             let queue = &scheduler.queues["queue"];
-            assert_eq!(queue.burst_rule.capacity(rate), capacity);
-            assert_eq!(queue.tokens, initial);
-            scheduler.queues.get_mut("queue").unwrap().tokens = 0.0;
+            assert_eq!(queue.burst_rule.capacity(rate), f64::from(capacity));
+            assert_eq!(queue.budget_nanos, initial * queue.period_nanos.unwrap());
+            scheduler.queues.get_mut("queue").unwrap().budget_nanos = 0;
             scheduler.reset(start);
-            assert_eq!(scheduler.queues["queue"].tokens, initial);
+            assert_eq!(
+                scheduler.queues["queue"].budget_nanos,
+                initial * scheduler.queues["queue"].period_nanos.unwrap()
+            );
             let queue = scheduler.queues.get_mut("queue").unwrap();
             queue.refill(super::TaskTime::Virtual(200_000_000_000));
-            assert_eq!(queue.tokens, capacity);
+            assert_eq!(
+                queue.budget_nanos,
+                u128::try_from(capacity).unwrap() * queue.period_nanos.unwrap()
+            );
         }
     }
 
@@ -2040,19 +2541,19 @@ mod tests {
             1,
         );
         assert_eq!(dispatch.len(), 1);
-        assert_eq!(scheduler.queues["queue"].tokens, 9.0);
+        assert_eq!(scheduler.queues["queue"].budget_nanos, 9_000_000_000);
         scheduler.refund_token("queue", dispatch[0].id, dispatch[0].generation);
-        assert_eq!(scheduler.queues["queue"].tokens, 10.0);
+        assert_eq!(scheduler.queues["queue"].budget_nanos, 10_000_000_000);
         scheduler.refund_token("queue", dispatch[0].id, dispatch[0].generation);
-        assert_eq!(scheduler.queues["queue"].tokens, 10.0);
+        assert_eq!(scheduler.queues["queue"].budget_nanos, 10_000_000_000);
     }
 
     proptest::proptest! {
         #[test]
         #[allow(clippy::float_cmp)] // exact rates select the recorded rows
-        fn unrecorded_rates_keep_emulator_capacity(rate in 0.0f64..=1000.0) {
+        fn unrecorded_rates_floor_emulator_capacity(rate in 0.0f64..=1000.0) {
             if rate > 0.0 && rate != 1.0 && rate != 500.0 {
-                proptest::prop_assert_eq!(super::BurstRule::Production.capacity(rate), super::BurstRule::Emulator.capacity(rate));
+                proptest::prop_assert_eq!(super::BurstRule::Production.capacity(rate), super::BurstRule::Emulator.capacity(rate).floor());
             }
         }
     }

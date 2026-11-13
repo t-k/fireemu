@@ -1,0 +1,23 @@
+{
+  "kind": "task-queue-burst-comparison-v1",
+  "rows": [
+    {
+      "name": "burst",
+      "production": 10,
+      "local": 10,
+      "verdict": "MATCH"
+    },
+    {
+      "name": "cadence",
+      "toleranceMs": 271,
+      "verdict": "MATCH"
+    },
+    {
+      "name": "count",
+      "production": 120,
+      "local": 120,
+      "verdict": "MATCH"
+    }
+  ],
+  "verdict": "MATCH"
+}

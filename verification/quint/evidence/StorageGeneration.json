@@ -100,7 +100,7 @@
     },
     "crates/fireemu-core-storage/src/spill.rs": {
       "kind": "sha256",
-      "value": "42feaac8d5c0fed0cfbc11fa60a78f9fb1c1d44f29418382689f9bcf755e7868"
+      "value": "e620f379722e5c7de5b396c8b013adb7d85ffdbd6659784c3c4f6e9ee1e42e69"
     },
     "crates/fireemu-core-storage/src/store.rs": {
       "kind": "sha256",

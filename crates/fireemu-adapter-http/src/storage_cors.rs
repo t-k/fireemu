@@ -181,7 +181,17 @@ impl BucketCors {
         } else if rule.response_headers.iter().any(|h| h == "*") {
             request_headers.unwrap_or_default().to_owned()
         } else {
-            rule.response_headers.join(",")
+            // C2 records one configured/requested header. UNRECORDED beyond that shape: assume configured order and comma joining, as recorded for Allow-Methods, including only requested headers.
+            rule.response_headers
+                .iter()
+                .filter(|header| {
+                    wanted
+                        .iter()
+                        .any(|wanted| header.eq_ignore_ascii_case(wanted))
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(",")
         };
         headers.push(("access-control-allow-headers".to_owned(), allowed));
         headers.push((
@@ -352,11 +362,11 @@ mod tests {
     }
 
     #[test]
-    fn a_preflight_needs_every_requested_header_in_the_response_header_list() {
+    fn a_preflight_needs_every_requested_header_with_unrecorded_multi_header_assumptions() {
         let c = cors(&json!([{
             "origin": ["http://localhost:3000"],
             "method": ["PUT"],
-            "responseHeader": ["Content-Type", "X-Goog-Content-Length-Range"],
+            "responseHeader": ["Content-Type", "X-Goog-Content-Length-Range", "X-Unrequested"],
             "maxAgeSeconds": 120,
         }]));
         let hit = c
@@ -367,9 +377,17 @@ mod tests {
             )
             .unwrap();
         assert_eq!(header(&hit, "access-control-allow-methods"), Some("PUT"));
+        // UNRECORDED assumption beyond C2's single header: requested headers use configured spelling and order, joined with commas without spaces.
         assert_eq!(
             header(&hit, "access-control-allow-headers"),
             Some("Content-Type,X-Goog-Content-Length-Range")
+        );
+        let single = c
+            .preflight("http://localhost:3000", "PUT", Some("content-type"))
+            .unwrap();
+        assert_eq!(
+            header(&single, "access-control-allow-headers"),
+            Some("Content-Type")
         );
         assert_eq!(header(&hit, "access-control-max-age"), Some("120"));
         assert_eq!(

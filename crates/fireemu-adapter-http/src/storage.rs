@@ -3659,13 +3659,14 @@ pub fn handle_framed(state: &StorageState, req: StorageRequest) -> (StorageRespo
         .then(|| production_shape(state, &req))
         .flatten();
     let method = req.method.clone();
-    let mut response = handle_request(state, req);
+    let mut missing_xml_bucket = false;
+    let mut response = handle_request(state, req, &mut missing_xml_bucket);
     // RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case A9): no emulator CORS on the XML NoSuchBucket answer.
     if state.is_strict()
         && shape.is_none()
         && matches!(method.as_str(), "GET" | "PUT")
         && response.status == 404
-        && response.body == missing_bucket_response(BucketSurface::Xml).body
+        && missing_xml_bucket
     {
         // RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case A10): PUT also carries Vary: Origin.
         if method == "PUT" {
@@ -3716,9 +3717,7 @@ fn production_shape(
         Route::GcsObject { .. } => (Wire::Gcs, false, get),
         Route::GcsCopy { .. } | Route::GcsUpload { .. } => (Wire::Gcs, false, false),
         // RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case A8): ACL missing-bucket errors use the JSON API framing too.
-        _ if acl_get || (is_json_api_route(&route) && req.header("origin").is_some()) => {
-            (Wire::Gcs, false, false)
-        }
+        _ if acl_get => (Wire::Gcs, false, false),
         _ => return None,
     };
     let params = query_params(&req.query);
@@ -3743,7 +3742,11 @@ fn production_shape(
 }
 
 #[allow(clippy::too_many_lines)]
-fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse {
+fn handle_request(
+    state: &StorageState,
+    req: StorageRequest,
+    missing_xml_bucket: &mut bool,
+) -> StorageResponse {
     let params = query_params(&req.query);
     let host = req.host.clone().unwrap_or_else(|| "127.0.0.1".to_owned());
     let Ok(route) = route(&req.method, &req.path) else {
@@ -3927,6 +3930,9 @@ fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse 
                     if let Some(mut refused) =
                         missing_bucket_refusal(state, acl_get.as_ref().unwrap_or(&route))
                     {
+                        // Mark the refusal explicitly; object bytes must never select missing-bucket framing.
+                        *missing_xml_bucket =
+                            matches!(route, Route::XmlStyle { .. } | Route::FormUpload { .. });
                         // RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case A2): a JSON API media read has a plain HTML-typed bucket error.
                         if matches!(route, Route::GcsObject { .. })
                             && req.method == "GET"
@@ -4198,8 +4204,9 @@ pub(crate) fn cors_bucket(method: &str, path: &str) -> Option<(String, bool, boo
             | Route::GcsUpload { bucket }
             | Route::FormUpload { bucket }
             | Route::XmlStyle { bucket, .. } => bucket,
-            Route::GcsListBuckets => String::new(),
-            Route::SetRules | Route::FbRoot | Route::NotImplemented => return None,
+            Route::GcsListBuckets | Route::SetRules | Route::FbRoot | Route::NotImplemented => {
+                return None
+            }
         };
         Some((bucket, path.starts_with("/v0/"), json_api))
     })

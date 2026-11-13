@@ -313,8 +313,13 @@ fn bucket_cors_for(
         return None;
     }
     let (bucket, firebase, json_api) = crate::storage::cors_bucket(method, path)?;
-    // RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case C6): JSON API CORS is independent of bucket rules (also C7 and C8).
-    if json_api {
+    // C6-C8 recorded JSON API CORS only with nonempty bucket rules. Absent and empty entries retain the base behavior.
+    if json_api
+        && state
+            .rules
+            .bucket_cors(&bucket)
+            .is_some_and(|cors| !cors.is_empty())
+    {
         return None;
     }
     if firebase
@@ -506,12 +511,19 @@ async fn respond(
         req.uri().path(),
         req.uri().query().unwrap_or(""),
     );
+    let json_api_cors = state.is_strict()
+        && crate::storage::cors_bucket(req.method().as_str(), req.uri().path()).is_some_and(
+            |(bucket, _, json_api)| {
+                json_api
+                    && state
+                        .rules
+                        .bucket_cors(&bucket)
+                        .is_some_and(|cors| !cors.is_empty())
+            },
+        );
     if req.method() == hyper::Method::OPTIONS {
-        if state.is_strict()
-            && crate::storage::cors_bucket("OPTIONS", req.uri().path())
-                .is_some_and(|(_, _, json_api)| json_api)
-        {
-            // RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case C8): JSON API preflight ignores bucket CORS.
+        if json_api_cors {
+            // RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case C8): JSON API preflight with nonempty bucket CORS rules.
             let mut builder = Response::builder()
                 .status(200)
                 .header("content-type", "application/octet-stream")
@@ -760,12 +772,31 @@ async fn respond(
         // text/html content-type renders, so it is not a substitute for typing
         // caller-influenced bodies as text/plain -- see storage::gcs_no_such_object.
         builder = builder.header("x-content-type-options", "nosniff");
-        if bucket_cors.is_none() {
+        if bucket_cors.is_none() && !(json_api_cors && origin.is_some()) {
             builder = cors(builder, origin.as_deref());
         }
     }
     let body = body_of(&response);
     let mut response_headers = response.headers;
+    if let Some(origin) = origin.as_deref().filter(|_| json_api_cors) {
+        // RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, cases C6-C7): replace only CORS headers; preserve the route's base JSON layout, caching and other framing.
+        let media = request_method == "GET"
+            && crate::storage::query_params(&trace_query)
+                .get("alt")
+                .map(String::as_str)
+                == Some("media");
+        response_headers.retain(|(name, _)| !name.eq_ignore_ascii_case("vary"));
+        response_headers = with_bucket_cors(response_headers, Some(vec![
+            ("access-control-allow-origin".to_owned(), origin.to_owned()),
+            ("access-control-allow-credentials".to_owned(), "true".to_owned()),
+            ("vary".to_owned(), "Origin, X-Origin".to_owned()),
+            ("access-control-expose-headers".to_owned(), match (media, request_method.as_str()) {
+                (true, _) => "Cache-Control, Content-Disposition, Content-Length, Content-Type, Date, ETag, Expires, Last-Modified, Pragma, Server, Transfer-Encoding, Vary, X-GUploader-UploadID, X-Goog-Gcs-Base-Ts, X-Goog-Generation, X-Goog-Hash, X-Goog-Metageneration, X-Google-Trace",
+                (_, "GET") => "Cache-Control, Content-Length, Content-Type, Date, ETag, Expires, Server, Transfer-Encoding, Vary, X-GUploader-UploadID, X-Goog-Gcs-Base-Ts, X-Google-Trace",
+                _ => EXPOSED_HEADERS,
+            }.to_owned()),
+        ]));
+    }
     if let Some(configured) = &bucket_cors {
         let mut matched = origin
             .as_deref()

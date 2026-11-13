@@ -192,6 +192,7 @@ fn reads(bucket: &str) -> [String; 2] {
 
 #[tokio::test]
 async fn a_configured_bucket_answers_a_matching_preflight_with_its_rule() {
+    // UNRECORDED assumption for two named XML headers: configured spelling and order, joined with commas without spaces; C2 recorded only Content-Type.
     let (addr, task) = serve(configured(TokenAcceptance::Verified, &rule())).await;
     let mut paths = reads(CONFIGURED).to_vec();
     paths.push(format!("/{CONFIGURED}"));
@@ -494,6 +495,127 @@ async fn a_non_local_origin_is_still_refused_whatever_the_rule_lists() {
     task.abort();
 }
 
+// UNRECORDED for JSON API CORS: absent and empty entries retain c14a29eba behavior, including productionExact.
+#[tokio::test]
+async fn absent_and_empty_cors_keep_base_behavior_on_every_surface() {
+    for production_exact in [false, true] {
+        for empty_entry in [false, true] {
+            let s = state(TokenAcceptance::Verified);
+            seed(&s, CONFIGURED);
+            s.rules.set_unlisted_buckets_cors_none(production_exact);
+            if empty_entry {
+                s.rules.set_bucket_cors(BTreeMap::from([(
+                    CONFIGURED.to_owned(),
+                    BucketCors::default(),
+                )]));
+            }
+            let (addr, task) = serve(s).await;
+            for path in [
+                format!("/{CONFIGURED}/a.txt"),
+                format!("/v0/b/{CONFIGURED}/o/a.txt?alt=media"),
+                format!("/v0/b/{CONFIGURED}/o/a.txt"),
+                format!("/storage/v1/b/{CONFIGURED}/o/a.txt?alt=media"),
+                format!("/storage/v1/b/{CONFIGURED}/o/a.txt"),
+            ] {
+                let firebase_metadata = path.starts_with("/v0/") && !path.contains("alt=media");
+                let no_cors = !firebase_metadata && (empty_entry || production_exact);
+                for method in ["GET", "OPTIONS"] {
+                    let answer = send(
+                        addr,
+                        method,
+                        &path,
+                        &[("Origin", ORIGIN), ("Access-Control-Request-Method", "GET")],
+                    )
+                    .await;
+                    assert_eq!(
+                        answer.status,
+                        if method == "OPTIONS" && !no_cors {
+                            204
+                        } else {
+                            200
+                        },
+                        "{path}: {method}, empty {empty_entry}, productionExact {production_exact}"
+                    );
+                    if no_cors {
+                        assert!(answer.cors_names().is_empty(), "{path}: {method}, empty {empty_entry}, productionExact {production_exact}");
+                    } else {
+                        assert_eq!(
+                            answer.header("access-control-allow-origin"),
+                            Some(ORIGIN),
+                            "{path}: {method}"
+                        );
+                        assert_eq!(
+                            answer.header("access-control-allow-credentials"),
+                            None,
+                            "{path}: {method}"
+                        );
+                        assert_eq!(answer.header("access-control-expose-headers"), Some("content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url"), "{path}: {method}");
+                        if method == "OPTIONS" {
+                            assert_eq!(
+                                answer.header("access-control-allow-methods"),
+                                Some("GET,HEAD,PUT,PATCH,POST,DELETE")
+                            );
+                            assert_eq!(answer.header("access-control-max-age"), None);
+                            assert_eq!(
+                                answer.header("vary"),
+                                Some("Origin, Access-Control-Request-Headers")
+                            );
+                        }
+                    }
+                }
+            }
+            task.abort();
+            let _ = task.await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn json_api_origin_changes_only_cors_headers_without_extending_production_framing() {
+    for production_exact in [false, true] {
+        let s = configured(TokenAcceptance::Verified, &rule());
+        s.rules.set_unlisted_buckets_cors_none(production_exact);
+        let (addr, task) = serve(s).await;
+        for (method, path) in [
+            ("GET", format!("/storage/v1/b/{CONFIGURED}")),
+            ("GET", format!("/b/{CONFIGURED}")),
+            ("GET", "/b".to_owned()),
+            ("POST", format!("/storage/v1/b/{CONFIGURED}/o/a.txt/acl")),
+            (
+                "DELETE",
+                format!("/storage/v1/b/{CONFIGURED}/o/a.txt/acl/allUsers"),
+            ),
+        ] {
+            let bare = send(addr, method, &path, &[]).await;
+            let browser = send(addr, method, &path, &[("Origin", ORIGIN)]).await;
+            assert_eq!(browser.status, bare.status, "{method} {path}");
+            assert_eq!(browser.body, bare.body, "{method} {path}: JSON bytes");
+            let mut bare_headers = bare.headers.clone();
+            let mut browser_headers = browser.headers.clone();
+            for headers in [&mut bare_headers, &mut browser_headers] {
+                headers.retain(|(name, _)| {
+                    !name.starts_with("access-control-") && name != "vary" && name != "date"
+                });
+                headers.sort();
+            }
+            assert_eq!(
+                browser_headers, bare_headers,
+                "{method} {path}: non-CORS framing"
+            );
+            if path != "/b" {
+                assert_eq!(browser.header("access-control-allow-origin"), Some(ORIGIN));
+                assert_eq!(
+                    browser.header("access-control-allow-credentials"),
+                    Some("true")
+                );
+                assert_eq!(browser.header("vary"), Some("Origin, X-Origin"));
+            }
+        }
+        task.abort();
+        let _ = task.await;
+    }
+}
+
 /// The fixture omits successful metadata bodies; only recorded bodies and stable headers are compared byte for byte.
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
@@ -507,13 +629,8 @@ async fn strict_storage_answers_match_the_production_recording() {
         if case == "K1" {
             continue;
         }
-        // Repeat JSON CORS cases with no configured entry and an explicit empty entry: neither may apply bucket rules.
-        let configurations: &[u8] = if matches!(case, "C6" | "C7" | "C8") {
-            &[0, 1, 2]
-        } else {
-            &[0]
-        };
-        for configuration in configurations {
+        // The recorded bucket has nonempty rules except R3. productionExact must not alter these XML, Firebase or JSON API answers.
+        for production_exact in [false, true] {
             let mut s = state(TokenAcceptance::Verified);
             s.rules
                 .set_undeclared_buckets(fireemu_adapter_http::storage::UndeclaredBuckets::Refuse);
@@ -538,8 +655,8 @@ async fn strict_storage_answers_match_the_production_recording() {
                     )
                     .unwrap();
             }
-            if *configuration != 1 {
-                let rules = if case == "R3" || *configuration == 2 {
+            {
+                let rules = if case == "R3" {
                     json!([])
                 } else {
                     json!([
@@ -557,6 +674,7 @@ async fn strict_storage_answers_match_the_production_recording() {
                     LoadedRules::from_source("rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read: if request.auth != null; } } }").unwrap(),
                 ))));
             }
+            s.rules.set_unlisted_buckets_cors_none(production_exact);
             let url = row["url"]
                 .as_str()
                 .unwrap()
@@ -590,7 +708,7 @@ async fn strict_storage_answers_match_the_production_recording() {
             assert_eq!(
                 u64::from(answer.status),
                 row["status"].as_u64().unwrap(),
-                "{case}, configuration {configuration}"
+                "{case}, productionExact {production_exact}"
             );
             for (name, value) in row["headers"].as_object().unwrap() {
                 // A13/A14/C7 metadata contains generated identifiers and the recording deliberately omits its bytes.
@@ -611,7 +729,7 @@ async fn strict_storage_answers_match_the_production_recording() {
                 assert!(answer.header(name).is_some(), "{case}: missing {name}");
                 assert_eq!(
                     actual, expected,
-                    "{case}: {name}, configuration {configuration}"
+                    "{case}: {name}, productionExact {production_exact}"
                 );
             }
             for name in [

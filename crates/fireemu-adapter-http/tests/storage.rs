@@ -7858,7 +7858,7 @@ fn resumable_uploads_verify_declared_checksums_only_under_strict() {
     }
 }
 
-/// RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case C7): JSON metadata uses its own exposed headers and allows credentials. Firebase and upload protocols retain their existing browser header exposure; without Origin the recorded sets stay unchanged.
+/// Without bucket CORS rules, browser requests keep the base reflection and exposed headers. C7 recorded a configured bucket, covered by the server fixture matrix in `storage_cors.rs`.
 #[test]
 #[allow(clippy::too_many_lines)]
 fn strict_answers_to_a_browser_origin_carry_the_reflection_and_the_exposed_headers() {
@@ -7881,37 +7881,14 @@ fn strict_answers_to_a_browser_origin_carry_the_reflection_and_the_exposed_heade
         let exposed = header(response, "access-control-expose-headers")
             .unwrap_or_default()
             .to_ascii_lowercase();
-        if what == "JSON API metadata" {
-            let recording: Value = serde_json::from_str(include_str!(
-                "../../../conformance/storage-strictness-obs/recordings/run-1.json"
-            ))
-            .unwrap();
-            let row = recording["rows"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|row| row["case"] == "C7")
-                .unwrap();
-            assert_eq!(
-                exposed,
-                row["headers"]["access-control-expose-headers"]
-                    .as_str()
-                    .unwrap()
-                    .to_ascii_lowercase()
-            );
-            assert_eq!(
-                header(response, "access-control-allow-credentials"),
-                Some("true")
-            );
-        } else {
-            for name in [
-                "x-goog-upload-status",
-                "x-goog-upload-url",
-                "x-goog-upload-size-received",
-                "x-goog-upload-chunk-granularity",
-            ] {
-                assert!(exposed.contains(name), "{what}: {name} in {exposed}");
-            }
+        assert_eq!(header(response, "access-control-allow-credentials"), None);
+        for name in [
+            "x-goog-upload-status",
+            "x-goog-upload-url",
+            "x-goog-upload-size-received",
+            "x-goog-upload-chunk-granularity",
+        ] {
+            assert!(exposed.contains(name), "{what}: {name} in {exposed}");
         }
         let vary: Vec<_> = response
             .headers
@@ -8246,9 +8223,9 @@ async fn the_strict_server_sends_production_headers_on_framed_answers() {
         "{json_api}"
     );
     assert!(!json_api.contains("x-content-type-options"), "{json_api}");
-    // JSON API uses its recorded exposed headers; Firebase keeps the upload headers its browser SDK needs.
+    // With no bucket CORS entry, both dialects retain the base browser header exposure.
     assert!(
-        json_api.contains("access-control-expose-headers: cache-control, content-length, content-type, date, etag, expires, server, transfer-encoding, vary, x-guploader-uploadid, x-goog-gcs-base-ts, x-google-trace"),
+        json_api.contains("access-control-expose-headers: content-type,x-firebase-storage-version"),
         "{json_api}"
     );
     let firebase = get("/v0/b/demo-app.appspot.com/o/absent.bin").await;
@@ -8280,15 +8257,14 @@ async fn the_strict_server_sends_production_headers_on_framed_answers() {
         !recorded_json.contains("access-control-"),
         "{recorded_json}"
     );
-    // JSON API bucket routes use the same CORS policy even without storage.cors.
+    // The bucket listing has no bucket configuration and keeps the base framing.
     let buckets = get("/b").await;
     assert!(
-        buckets.contains("access-control-allow-credentials: true"),
+        !buckets.contains("access-control-allow-credentials:"),
         "{buckets}"
     );
     assert!(
-        buckets
-            .contains("access-control-expose-headers: cache-control, content-length, content-type"),
+        buckets.contains("access-control-expose-headers: content-type,x-firebase-storage-version"),
         "{buckets}"
     );
     server.abort();

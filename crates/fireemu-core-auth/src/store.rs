@@ -6338,6 +6338,8 @@ impl TenantMetadata {
 }
 
 impl AuthRegistry {
+    // fetch_update is required for MSRV 1.85.
+    #[allow(deprecated)]
     fn next_lifecycle_epoch(&self) -> Option<AuthLifecycleEpoch> {
         let incarnation = self.lifecycle_incarnation?;
         self.next_lifecycle_serial
@@ -7452,6 +7454,8 @@ impl AuthRegistry {
         Ok(())
     }
 
+    // fetch_update is required for MSRV 1.85.
+    #[allow(deprecated)]
     fn reserve_import_lifecycle_epochs(
         &self,
         count: usize,

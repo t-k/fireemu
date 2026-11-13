@@ -1274,6 +1274,8 @@ struct CleanupDir(
 );
 
 impl CleanupDir {
+    // fetch_update is required for MSRV 1.85.
+    #[allow(deprecated)]
     fn release(&self) {
         let previous = self
             .2

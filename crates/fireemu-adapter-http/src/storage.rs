@@ -2560,8 +2560,7 @@ impl StorageState {
     fn now(&self) -> LogicalInstant {
         self.clock
             .lock()
-            .map(|c| c.now())
-            .unwrap_or(LogicalInstant::UNIX_EPOCH)
+            .map_or(LogicalInstant::UNIX_EPOCH, |c| c.now())
     }
 
     /// The caller of a request on `bucket`: an end-user token is verified against the

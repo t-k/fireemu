@@ -869,7 +869,7 @@ fn merged_indexes_for(
             candidates.push((fields, index.clone()));
         }
     }
-    candidates.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    candidates.sort_by_key(|a| std::cmp::Reverse(a.0.len()));
     if req.order.iter().all(|o| o.field.is_document_name()) {
         let name_mode = mode_for_direction(requested_name_direction(req));
         let mut fields = req.equality.clone();

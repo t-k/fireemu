@@ -1339,6 +1339,8 @@ struct QuerySelectionInner {
 }
 
 impl QuerySelection {
+    // fetch_update is required for MSRV 1.85.
+    #[allow(deprecated)]
     fn from_paths(
         paths: Vec<DocumentPath>,
         retained_total: Arc<std::sync::atomic::AtomicU64>,
@@ -1367,6 +1369,8 @@ impl QuerySelection {
 }
 
 impl Drop for QuerySelectionInner {
+    // fetch_update is required for MSRV 1.85.
+    #[allow(deprecated)]
     fn drop(&mut self) {
         let _ = self.retained_total.fetch_update(
             std::sync::atomic::Ordering::AcqRel,

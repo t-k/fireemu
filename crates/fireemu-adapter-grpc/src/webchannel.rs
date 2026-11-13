@@ -892,6 +892,8 @@ impl Session {
         usize::try_from(capacity).unwrap_or(usize::MAX)
     }
 
+    // fetch_update is required for MSRV 1.85.
+    #[allow(deprecated)]
     fn trace_event(&self, event: &TraceEvent) {
         if !trace_enabled() {
             return;

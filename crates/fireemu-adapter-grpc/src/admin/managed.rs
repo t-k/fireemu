@@ -570,6 +570,8 @@ static IMPORTS_RUNNING: std::sync::atomic::AtomicUsize = std::sync::atomic::Atom
 struct ImportSlot;
 
 impl ImportSlot {
+    // fetch_update is required for MSRV 1.85.
+    #[allow(deprecated)]
     fn take() -> Option<Self> {
         IMPORTS_RUNNING
             .fetch_update(

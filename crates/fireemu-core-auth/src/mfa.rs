@@ -99,9 +99,7 @@ impl TotpSecret {
 
 impl Drop for TotpSecret {
     fn drop(&mut self) {
-        for byte in &mut self.0 {
-            *byte = 0;
-        }
+        self.0.fill(0);
         std::hint::black_box(&self.0);
     }
 }

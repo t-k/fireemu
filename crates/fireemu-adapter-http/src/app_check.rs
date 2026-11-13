@@ -214,8 +214,7 @@ fn now(state: &AppCheckState) -> LogicalInstant {
     state
         .clock
         .lock()
-        .map(|c| c.now())
-        .unwrap_or(LogicalInstant::UNIX_EPOCH)
+        .map_or(LogicalInstant::UNIX_EPOCH, |c| c.now())
 }
 
 /// Routes one App Check request.

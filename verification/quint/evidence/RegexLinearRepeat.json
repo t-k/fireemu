@@ -264,7 +264,7 @@
     },
     "verification/quint/evidence/cargo-authority.json": {
       "kind": "json-semantic",
-      "value": "791a11fe4f8a60d274311809a5ab9a47616d4750de28ba1d0cefcc83dd5c21ca"
+      "value": "7c18c7954a3af84b7b17b100e0fa87873534e0cb525316c229f14033f51ee73f"
     },
     "verification/quint/java/io/fireemu/verification/LoopbackServerProviderAgent.java": {
       "kind": "sha256",
@@ -292,15 +292,15 @@
     },
     "verification/quint/src/cargo_authority.rs": {
       "kind": "sha256",
-      "value": "3ab0bc612c20a116e6c44e17eb28852b669fc854d4104ee5a439e8c425d36af0"
+      "value": "3eca6e3cfb79cc4d4a65e8ceea2f7cbf3fbe545a8c05b1158491e83d600a23d0"
     },
     "verification/quint/src/evidence.rs": {
       "kind": "sha256",
-      "value": "7e4b217c2890d4992d3d0f4a900b2660715c554bbe941471d914b95852a426cf"
+      "value": "2ea58660433a79546c295abe0706740fca091a5a258501a4d656068ddc40b5ac"
     },
     "verification/quint/src/evidence/source_closure.rs": {
       "kind": "sha256",
-      "value": "547f010d95a74e055afcff7751c48cd78725413851a969cf0d31e4ac8dff5763"
+      "value": "2b2374039fc7f1030014d3a547c797f632d245fb6cee4da67cc60d2450ed5275"
     },
     "verification/quint/src/lib.rs": {
       "kind": "sha256",

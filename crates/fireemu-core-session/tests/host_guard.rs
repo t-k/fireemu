@@ -482,13 +482,18 @@ fn each_refused_name_is_logged_once_up_to_a_bound() {
 
 #[test]
 fn entries_that_turn_the_defence_off_are_warned_about() {
-    assert!(HostPolicy::default().warnings().is_empty());
-    assert!(policy(
-        &["emulator.ci.example", ".svc.cluster.local", ".ci.example"],
-        true
-    )
-    .warnings()
-    .is_empty());
+    assert_eq!(
+        HostPolicy::default().warnings(),
+        [] as [std::string::String; 0]
+    );
+    assert_eq!(
+        policy(
+            &["emulator.ci.example", ".svc.cluster.local", ".ci.example"],
+            true
+        )
+        .warnings(),
+        [] as [std::string::String; 0]
+    );
     let all = policy(&["*"], false).warnings();
     assert_eq!(all.len(), 1, "{all:?}");
     assert!(

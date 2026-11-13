@@ -156,7 +156,10 @@ fn representable_identity_exhaustion_fails_without_changing_object_state() {
         before.as_ref()
     );
     assert!(generation_store.get(&bucket(), &object("new")).is_none());
-    assert!(generation_store.drain_events().is_empty());
+    assert_eq!(
+        generation_store.drain_events(),
+        [] as [fireemu_core_storage::store::StorageEvent; 0]
+    );
 
     let mut metageneration_store = StorageState::new(7);
     let mut last_metageneration = imported("last-metageneration", b"x");
@@ -194,7 +197,10 @@ fn representable_identity_exhaustion_fails_without_changing_object_state() {
         metageneration_store.get(&bucket(), &object("last-metageneration")),
         before.as_ref()
     );
-    assert!(metageneration_store.drain_events().is_empty());
+    assert_eq!(
+        metageneration_store.drain_events(),
+        [] as [fireemu_core_storage::store::StorageEvent; 0]
+    );
 }
 
 #[test]
@@ -360,7 +366,10 @@ fn reimporting_an_old_generation_never_revives_its_grant() {
                     assert_eq!(archived[0].object.generation, original.generation);
                     assert_eq!(store.bytes(&archived[0].object), b"first");
                 } else {
-                    assert!(archived.is_empty());
+                    assert_eq!(
+                        archived,
+                        [] as [&fireemu_core_storage::store::NoncurrentVersion; 0]
+                    );
                 }
                 if intervening_grant {
                     assert!(store.set_public_read(&bucket(), &object("b")));

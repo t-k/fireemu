@@ -270,7 +270,7 @@ fn an_empty_body_tenant_id_is_no_tenant_in_the_emulator_profile() {
     );
     assert_eq!(status, 200, "{created}");
     assert_eq!(project_users(&state), 1);
-    assert!(registry.tenants("demo-app").is_empty());
+    assert_eq!(registry.tenants("demo-app"), [] as [std::string::String; 0]);
     // A path tenant beside it: the path tenant is the target (and is made), no mismatch.
     let (status, created) = admin(
         &state,
@@ -343,7 +343,7 @@ fn the_strict_profile_reads_an_empty_body_tenant_as_before() {
         (400, Some("INVALID_TENANT_ID")),
         "{refused}"
     );
-    assert!(registry.tenants("demo-app").is_empty());
+    assert_eq!(registry.tenants("demo-app"), [] as [std::string::String; 0]);
 }
 
 #[test]
@@ -883,7 +883,7 @@ fn the_strict_profile_reads_the_query_tenant_as_before() {
     let (status, refused) = sign_up(&state, "&tenantId=qt1", &account("q1@example.com"));
     assert_eq!(status, 404, "{refused}");
     assert_eq!(refused["error"]["message"], "TENANT_NOT_FOUND");
-    assert!(registry.tenants("demo-app").is_empty());
+    assert_eq!(registry.tenants("demo-app"), [] as [std::string::String; 0]);
 }
 
 #[test]
@@ -1147,7 +1147,7 @@ fn a_tenant_id_of_another_type_is_no_tenant_in_the_emulator_profile() {
         );
         assert_eq!(status, 200, "{n}: {created}");
     }
-    assert!(registry.tenants("demo-app").is_empty());
+    assert_eq!(registry.tenants("demo-app"), [] as [std::string::String; 0]);
     assert_eq!(project_users(&state), 4);
 }
 

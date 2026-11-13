@@ -99,7 +99,7 @@ fn report_mode_reports_nothing_production_serves_by_a_merge() {
         accepted.decision,
         IndexDecision::MergeIndexes { .. }
     ));
-    assert!(accepted.warnings.is_empty());
+    assert_eq!(accepted.warnings, [] as [std::string::String; 0]);
     let database = database("merged-only");
     assert_eq!(gateway.report_missing_index(&database, &accepted), None);
     assert!(missing_index_reports()
@@ -222,7 +222,10 @@ fn clearing_forgets_one_project_or_all_and_a_cleared_index_is_reported_again() {
     assert_eq!(listed("projects/demo-clear-a/"), [mine("one"), mine("two")]);
 
     assert_eq!(clear_missing_index_reports(Some("demo-clear-a")), 2);
-    assert!(listed("projects/demo-clear-a/").is_empty());
+    assert_eq!(
+        listed("projects/demo-clear-a/"),
+        [] as [std::string::String; 0]
+    );
     assert_eq!(listed("projects/demo-clear-b/"), [other.as_str()]);
     // A project that is a prefix of another's name is not that project.
     assert_eq!(clear_missing_index_reports(Some("demo-clear")), 0);
@@ -236,7 +239,10 @@ fn clearing_forgets_one_project_or_all_and_a_cleared_index_is_reported_again() {
     assert_eq!(gateway.report_missing_index(&other, &accepted), None);
 
     assert!(clear_missing_index_reports(None) >= 2);
-    assert!(missing_index_reports().is_empty());
+    assert_eq!(
+        missing_index_reports(),
+        [] as [fireemu_adapter_grpc::gateway::MissingIndexReport; 0]
+    );
 }
 
 fn gateway_refusal_message(database: &str) -> String {

@@ -492,7 +492,10 @@ fn an_app_check_denial_installs_no_routed_project() {
     );
     assert_eq!(denied.status, 403, "{}", denied.body);
     assert!(registry.routed_store_for("demo-routed").is_none());
-    assert!(registry.tenants("demo-routed").is_empty());
+    assert_eq!(
+        registry.tenants("demo-routed"),
+        [] as [std::string::String; 0]
+    );
     // The owner's request is served, installs the project and makes the tenant.
     let served = admin_read(&h, vec![]);
     assert_eq!(served.status, 200, "{}", served.body);

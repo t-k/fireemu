@@ -1344,7 +1344,10 @@ fn a_form_upload_names_its_object_as_strictly_as_every_other_upload() {
     );
     assert_eq!(response.status, 400, "{}", text(&response));
     assert!(text(&response).contains("Disallowed unicode characters"));
-    assert!(s.store.lock().unwrap().buckets().is_empty());
+    assert_eq!(
+        s.store.lock().unwrap().buckets(),
+        [] as [fireemu_core_storage::name::BucketName; 0]
+    );
 }
 
 #[test]

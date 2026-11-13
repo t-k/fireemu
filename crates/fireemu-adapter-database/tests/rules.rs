@@ -3090,7 +3090,10 @@ fn a_rules_change_judges_an_event_stream_with_the_query_it_follows() {
     ) else {
         panic!("not streamed");
     };
-    assert!(load(&mut db, "eq", rules).is_empty());
+    assert_eq!(
+        load(&mut db, "eq", rules),
+        [] as [(u64, fireemu_adapter_database::rest::SseEvent); 0]
+    );
     let events = load(
         &mut db,
         "eq",
@@ -3897,7 +3900,7 @@ fn gauth_refusal_profile_shape_and_prior_access_matrix() {
         let refused_string = strict && matches!(shape.as_str(), "fixed" | "other");
         let refused_scalar = strict && shape == "scalar";
         if shape == "missing" {
-            assert!(answer.is_empty());
+            assert_eq!(answer, [] as [std::string::String; 0]);
         } else if refused_string {
             assert_eq!(
                 answer,

@@ -69,7 +69,7 @@ fn a_routed_project_holds_tenants_that_a_default_scope_reset_drops() {
     expected.sort();
     assert_eq!(listed, expected);
     // The tenants are the routed project's own: the same id in another project is another tenant.
-    assert!(registry.tenants("demo-app").is_empty());
+    assert_eq!(registry.tenants("demo-app"), [] as [std::string::String; 0]);
     assert!(registry
         .tenant_store("demo-app", "made-on-the-way")
         .is_none());
@@ -80,7 +80,10 @@ fn a_routed_project_holds_tenants_that_a_default_scope_reset_drops() {
     // A default-scope reset drops the routed project and everything it held.
     let reset = registry.prepare_default_scope_reset().unwrap();
     registry.apply_default_scope_reset(&reset).unwrap();
-    assert!(registry.tenants("demo-routed").is_empty());
+    assert_eq!(
+        registry.tenants("demo-routed"),
+        [] as [std::string::String; 0]
+    );
     assert!(registry.routed_store_for("demo-routed").is_none());
 }
 
@@ -113,7 +116,10 @@ fn a_project_the_registry_does_not_hold_still_takes_no_tenant() {
             None,
         )
         .is_none());
-    assert!(registry.tenants("demo-unknown").is_empty());
+    assert_eq!(
+        registry.tenants("demo-unknown"),
+        [] as [std::string::String; 0]
+    );
 }
 
 #[derive(Debug)]
@@ -167,7 +173,7 @@ fn a_stored_declaration_is_applied_once_to_each_project_when_it_is_installed() {
     ));
     registry.apply_pending_project_seeds().unwrap();
     assert_eq!(seed.calls.load(Ordering::SeqCst), 2);
-    assert!(registry.tenants("demo-app").is_empty());
+    assert_eq!(registry.tenants("demo-app"), [] as [std::string::String; 0]);
     // After a default-scope reset the routed projects are gone, and their next install seeds again.
     let reset = registry.prepare_default_scope_reset().unwrap();
     registry.apply_default_scope_reset(&reset).unwrap();
@@ -279,7 +285,7 @@ fn a_session_displaces_a_routed_project_with_its_tenants_and_a_rollback_restores
     let routed = registry.routed_store_for("demo-b").unwrap();
     assert!(registry.register_session("demo-b", session_store("demo-b")));
     // The session starts without the routed namespace's tenants; the routed store is displaced.
-    assert!(registry.tenants("demo-b").is_empty());
+    assert_eq!(registry.tenants("demo-b"), [] as [std::string::String; 0]);
     assert!(registry.tenant_store("demo-b", "kept").is_none());
     assert!(registry.routed_store_for("demo-b").is_none());
     // Rolled back, the routed namespace and its tenants are what they were.
@@ -296,7 +302,7 @@ fn a_session_displaces_a_routed_project_with_its_tenants_and_a_rollback_restores
     // Committed, the displaced tenants are gone for good.
     assert!(registry.register_session("demo-b", session_store("demo-b")));
     assert!(registry.commit_session("demo-b"));
-    assert!(registry.tenants("demo-b").is_empty());
+    assert_eq!(registry.tenants("demo-b"), [] as [std::string::String; 0]);
     assert!(registry.store_for("demo-b").is_some());
 }
 
@@ -337,7 +343,7 @@ fn a_seed_pending_for_a_displaced_incarnation_is_not_applied_to_its_successor() 
     assert!(registry.commit_session("demo-b"));
     registry.apply_pending_project_seeds().unwrap();
     assert_eq!(seed.calls.load(Ordering::SeqCst), 0);
-    assert!(registry.tenants("demo-b").is_empty());
+    assert_eq!(registry.tenants("demo-b"), [] as [std::string::String; 0]);
 }
 
 /// A project registers once: not again while its registration is provisional, nor after it is
@@ -378,7 +384,7 @@ fn a_rollback_removes_the_tenants_made_while_the_registration_was_pending() {
         registry.rollback_session("demo-f"),
         fireemu_core_auth::store::SessionRegistrationRollback::Restored
     );
-    assert!(registry.tenants("demo-f").is_empty());
+    assert_eq!(registry.tenants("demo-f"), [] as [std::string::String; 0]);
     assert!(registry.register_session("demo-f", session_store("demo-f")));
     assert!(registry.commit_session("demo-f"));
     // A displaced routed namespace.

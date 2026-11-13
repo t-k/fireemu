@@ -651,7 +651,7 @@ fn ensure_tenant_with_initialises_the_new_store_before_it_is_published() {
         ran += 1;
         // Nothing can see the tenant yet.
         assert!(registry.tenant_store("demo-app", "fresh").is_none());
-        assert!(registry.tenants("demo-app").is_empty());
+        assert_eq!(registry.tenants("demo-app"), [] as [std::string::String; 0]);
         tenant_store.set_mfa_config(fireemu_core_auth::mfa_config::MfaProjectConfig {
             state: fireemu_core_auth::mfa_config::MfaConfigState::Enabled,
             phone_sms: true,

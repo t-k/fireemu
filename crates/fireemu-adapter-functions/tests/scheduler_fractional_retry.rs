@@ -38,7 +38,10 @@ fn the_recorded_declaration_is_listed_and_the_accepted_one_is_not() {
         "duration",
         &json!({"maxRetrySeconds": 30, "minBackoffSeconds": 4, "maxBackoffSeconds": 10}),
     )]});
-    assert!(scheduler_fractional_retry_refusals(&accepted).is_empty());
+    assert_eq!(
+        scheduler_fractional_retry_refusals(&accepted),
+        [] as [(std::string::String, &str); 0]
+    );
 }
 
 #[test]
@@ -57,8 +60,14 @@ fn only_a_scheduled_functions_max_retry_seconds_counts_and_names_keep_manifest_o
         scheduler_fractional_retry_refusals(&manifest),
         vec![("b".to_owned(), RECORDED), ("a".to_owned(), RECORDED)]
     );
-    assert!(scheduler_fractional_retry_refusals(&json!({})).is_empty());
-    assert!(scheduler_fractional_retry_refusals(&json!({"functions": "x"})).is_empty());
+    assert_eq!(
+        scheduler_fractional_retry_refusals(&json!({})),
+        [] as [(std::string::String, &str); 0]
+    );
+    assert_eq!(
+        scheduler_fractional_retry_refusals(&json!({"functions": "x"})),
+        [] as [(std::string::String, &str); 0]
+    );
 }
 
 proptest! {

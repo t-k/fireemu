@@ -97,8 +97,7 @@ fn alive(pid: &str) -> bool {
         .args(["-0", pid])
         .stderr(Stdio::null())
         .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .is_ok_and(|s| s.success())
 }
 
 struct ChildGuard(Option<Child>);

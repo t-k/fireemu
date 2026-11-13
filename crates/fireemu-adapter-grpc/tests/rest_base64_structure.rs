@@ -267,7 +267,7 @@ fn valid_empty_and_absent_transaction_and_token_commit_remain_accepted() {
     );
     assert_eq!(begun.status, 200, "{:?}", begun.body);
     let token = begun.body["transaction"].as_str().unwrap();
-    assert!(!base64_decode(token).unwrap().is_empty());
+    assert_ne!(base64_decode(token).unwrap(), [] as [u8; 0]);
     let committed = call(
         &s,
         "POST",

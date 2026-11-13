@@ -805,7 +805,7 @@ fn not_in_with_a_null_candidate_matches_nothing() {
         FieldOp::NotIn,
         Value::Array(vec![Value::Integer(1), Value::Null]),
     ));
-    assert!(ids(&s, &with_null).is_empty());
+    assert_eq!(ids(&s, &with_null), [] as [std::string::String; 0]);
 }
 
 fn put_vector(state: &mut FirestoreState, id: &str, vector: Vec<f64>, second: i64) {
@@ -939,5 +939,8 @@ fn without_production_refusals_a_zero_vector_is_left_out() {
         .collect();
     assert_eq!(ids, ["near", "mid", "far"]);
     query.find_nearest.as_mut().unwrap().query_vector = vec![0.0, 0.0];
-    assert!(state.run_query(&query, None).unwrap().is_empty());
+    assert_eq!(
+        state.run_query(&query, None).unwrap(),
+        [] as [fireemu_core_firestore::store::Document; 0]
+    );
 }

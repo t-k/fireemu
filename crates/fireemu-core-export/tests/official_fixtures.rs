@@ -74,7 +74,10 @@ fn the_recorded_multi_product_export_is_read_section_by_section() {
         ExportMetadata::parse(&read_text(&format!("{dir}/firebase-export-metadata.json")))
             .expect("the manifest parses");
     assert_eq!(manifest.version, "15.28.2");
-    assert!(manifest.deferred().is_empty());
+    assert_eq!(
+        manifest.deferred(),
+        [] as [fireemu_core_export::metadata::Product; 0]
+    );
 
     let accounts = AccountsFile::parse(&read_text(&format!("{dir}/auth_export/accounts.json")))
         .expect("the accounts document parses");

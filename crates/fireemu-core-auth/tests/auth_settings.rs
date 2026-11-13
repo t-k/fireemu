@@ -65,7 +65,10 @@ fn denied_end_user_creation_and_deletion_do_not_mutate_state() {
         Err(AuthError::UserDeletionDisabled)
     );
     assert!(store.user_by_id(uid.as_str()).is_some());
-    assert!(store.take_user_events().is_empty());
+    assert_eq!(
+        store.take_user_events(),
+        [] as [fireemu_core_auth::store::UserEvent; 0]
+    );
 
     assert!(store
         .delete_user_by_id_as(AuthPrincipal::Admin, uid.as_str())

@@ -2840,7 +2840,7 @@ mod g10 {
         }
         // Everything that moved: only strict, only GET, and none to an identity: the answers that
         // changed are 401 -> 401 with another body (S2) or 401 -> the anonymous answer (S1).
-        assert!(!moved.is_empty());
+        assert_ne!(moved, [] as [(g10::Carrier, &str, &str, &str, u16, u16); 0]);
         for (carrier, name, _, mode, before, after) in &moved {
             assert_eq!(*mode, "get");
             match carrier {

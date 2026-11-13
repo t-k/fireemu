@@ -276,16 +276,18 @@ fn composition_candidates_precede_depth_and_pagination_without_new_score_rules()
         )
         .unwrap();
     assert_eq!(page[0].path.relative(), "docs/old");
-    assert!(index
-        .search(
-            &query,
-            &SearchOptions {
-                retrieval_depth: Some(0),
-                ..SearchOptions::default()
-            }
-        )
-        .unwrap()
-        .is_empty());
+    assert_eq!(
+        index
+            .search(
+                &query,
+                &SearchOptions {
+                    retrieval_depth: Some(0),
+                    ..SearchOptions::default()
+                }
+            )
+            .unwrap(),
+        [] as [fireemu_core_firestore::text_search::SearchHit; 0]
+    );
     assert!(names(&index, "larch").iter().all(|id| id != "docs/new"));
     assert!(SearchQuery::parse(&"larch ".repeat(MAX_QUERY_CLAUSES + 1), tokenize_query).is_err());
     assert!(SearchQuery::parse(
@@ -316,7 +318,10 @@ fn positional_phrases_do_not_cross_fields_and_exclusions_apply() {
     assert_eq!(names(&index, "red fox"), ["docs/c", "docs/b", "docs/a"]);
     assert_eq!(names(&index, "\"red fox\""), ["docs/a"]);
     assert_eq!(names(&index, "red -\"red fox\""), ["docs/c", "docs/b"]);
-    assert!(names(&index, "title:red body:fox").is_empty());
+    assert_eq!(
+        names(&index, "title:red body:fox"),
+        [] as [std::string::String; 0]
+    );
     assert!(index
         .search(
             &SearchQuery::parse("missing:\"red\"", tokenize_query).unwrap(),
@@ -344,12 +349,14 @@ fn rebuild_reconciles_updates_and_deletes() {
     let fresh =
         SearchIndex::build(&definition(), &[document("a", "blue fox", "", 2)], tokenize).unwrap();
     assert_eq!(names(&old, "red").len(), 1);
-    assert!(names(&fresh, "red").is_empty());
-    assert!(names(
-        &SearchIndex::build(&definition(), &[], tokenize).unwrap(),
-        "fox"
-    )
-    .is_empty());
+    assert_eq!(names(&fresh, "red"), [] as [std::string::String; 0]);
+    assert_eq!(
+        names(
+            &SearchIndex::build(&definition(), &[], tokenize).unwrap(),
+            "fox"
+        ),
+        [] as [std::string::String; 0]
+    );
 }
 #[test]
 fn retrieval_depth_precedes_score_ranking_and_pagination() {
@@ -384,7 +391,10 @@ fn language_overrides_are_validated_and_non_strings_are_ignored() {
     doc.fields
         .insert("language".into(), Value::String("ja".into()));
     doc.fields.insert("title".into(), Value::Integer(1));
-    assert!(names(&SearchIndex::build(&def, &[doc], tokenize).unwrap(), "fox").is_empty());
+    assert_eq!(
+        names(&SearchIndex::build(&def, &[doc], tokenize).unwrap(), "fox"),
+        [] as [std::string::String; 0]
+    );
 }
 proptest::proptest! {
  #[test]
@@ -486,7 +496,10 @@ fn exclusion_only_queries_match_no_documents() {
         assert!(names(&index, query).is_empty(), "{query}");
     }
     assert_eq!(names(&index, "quartz -nebula"), ["docs/willow"]);
-    assert!(names(&index, "quartz -mica").is_empty());
+    assert_eq!(
+        names(&index, "quartz -mica"),
+        [] as [std::string::String; 0]
+    );
 }
 
 #[test]
@@ -517,15 +530,24 @@ fn match_none_preserves_query_bounds_and_rejects_structured_tokenless_clauses() 
             "{query}"
         );
     }
-    assert!(names(&index, &"!".repeat(MAX_QUERY_BYTES)).is_empty());
+    assert_eq!(
+        names(&index, &"!".repeat(MAX_QUERY_BYTES)),
+        [] as [std::string::String; 0]
+    );
     assert!(SearchQuery::parse(&"!".repeat(MAX_QUERY_BYTES + 1), tokenize_query).is_err());
-    assert!(names(&index, &vec!["!!!"; MAX_QUERY_CLAUSES].join(" ")).is_empty());
+    assert_eq!(
+        names(&index, &vec!["!!!"; MAX_QUERY_CLAUSES].join(" ")),
+        [] as [std::string::String; 0]
+    );
     assert!(SearchQuery::parse(
         &vec!["!!!"; MAX_QUERY_CLAUSES + 1].join(" "),
         tokenize_query
     )
     .is_err());
-    assert!(names(&index, &vec!["-nebula"; MAX_QUERY_CLAUSES].join(" ")).is_empty());
+    assert_eq!(
+        names(&index, &vec!["-nebula"; MAX_QUERY_CLAUSES].join(" ")),
+        [] as [std::string::String; 0]
+    );
     assert!(SearchQuery::parse(
         &vec!["-nebula"; MAX_QUERY_CLAUSES + 1].join(" "),
         tokenize_query
@@ -561,7 +583,10 @@ fn unquoted_colons_delimit_conjunctive_terms_without_field_scoping() {
         assert_eq!(names(&index, query), ["docs/elm", "docs/oak"], "{query}");
     }
     assert_eq!(names(&index, "body:nebula"), ["docs/ash"]);
-    assert!(names(&index, "unknown:nebula").is_empty());
+    assert_eq!(
+        names(&index, "unknown:nebula"),
+        [] as [std::string::String; 0]
+    );
     assert!(SearchQuery::parse("unknown:nebula", tokenize_query)
         .unwrap()
         .is_covered_by(&definition()));
@@ -582,7 +607,7 @@ fn a_leading_unmatched_quote_is_a_conjunction_not_an_eof_phrase() {
         ["docs/gold", "docs/iron", "docs/silver", "docs/copper"]
     );
     assert_eq!(names(&index, "\"cedar amber\""), ["docs/copper"]);
-    assert!(names(&index, "\"").is_empty());
+    assert_eq!(names(&index, "\""), [] as [std::string::String; 0]);
     for query in [
         "cedar\"",
         "\"cedar\" amber\"",
@@ -645,7 +670,7 @@ fn plain_tokenless_fragments_are_ignored_but_still_count_toward_bounds() {
         assert_eq!(names(&index, query), names(&index, "cedar"));
     }
     assert_eq!(names(&index, "cedar !!! -amber"), ["docs/ochre"]);
-    assert!(names(&index, "-cedar !!!").is_empty());
+    assert_eq!(names(&index, "-cedar !!!"), [] as [std::string::String; 0]);
     let at_limit = format!("{} cedar", vec!["!!!"; MAX_QUERY_CLAUSES - 1].join(" "));
     assert_eq!(names(&index, &at_limit), names(&index, "cedar"));
     assert!(SearchQuery::parse(&format!("!!! {at_limit}"), tokenize_query).is_err());
@@ -680,7 +705,7 @@ fn latin_purpose_search_keeps_direction_greek_and_phrase_positions() {
     ];
     let index = SearchIndex::build(&definition(), &docs, tokenize).unwrap();
     assert_eq!(names(&index, "iris"), ["docs/copper"]);
-    assert!(names(&index, "İris").is_empty());
+    assert_eq!(names(&index, "İris"), [] as [std::string::String; 0]);
     assert_eq!(names(&index, "\"creme brulee\""), ["docs/silver"]);
     assert_eq!(names(&index, "ά"), ["docs/jade"]);
     assert_eq!(names(&index, "α"), ["docs/opal"]);

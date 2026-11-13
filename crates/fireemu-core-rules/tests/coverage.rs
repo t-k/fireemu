@@ -91,8 +91,14 @@ fn every_evaluated_expression_is_recorded_with_its_extent_and_its_values() {
         .iter()
         .find(|n| n.span.offset == create_at)
         .expect("the create condition is a report node");
-    assert!(create.values.is_empty());
-    assert!(!create.children.is_empty());
+    assert_eq!(
+        create.values,
+        [] as [(fireemu_core_rules::coverage::ExprValue, u64); 0]
+    );
+    assert_ne!(
+        create.children,
+        [] as [fireemu_core_rules::coverage::CoverageNode; 0]
+    );
 }
 
 #[test]
@@ -118,7 +124,7 @@ fn an_expression_that_raises_is_recorded_as_undefined_with_the_innermost_cause()
         panic!("the outermost node carries a cause");
     };
     assert_eq!(cause.span.offset, cause_at);
-    assert!(!cause.message.is_empty());
+    assert_ne!(cause.message, "");
 }
 
 #[test]
@@ -305,5 +311,8 @@ service cloud.firestore {\n\
 
     // Nothing is decided where nothing was evaluated.
     let empty = fireemu_core_rules::coverage::Coverage::default();
-    assert!(decided_conditions(&ruleset, &empty).is_empty());
+    assert_eq!(
+        decided_conditions(&ruleset, &empty),
+        [] as [fireemu_core_rules::coverage::CoverageEntry; 0]
+    );
 }

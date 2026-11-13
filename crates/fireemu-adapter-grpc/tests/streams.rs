@@ -361,8 +361,11 @@ async fn write_stream_handshake_then_sequential_commits() {
     .await
     .unwrap();
     let handshake = responses.next().await.unwrap().unwrap();
-    assert!(!handshake.stream_token.is_empty());
-    assert!(handshake.write_results.is_empty());
+    assert_ne!(handshake.stream_token, [] as [u8; 0]);
+    assert_eq!(
+        handshake.write_results,
+        [] as [fireemu_proto_firestore::google::firestore::v1::WriteResult; 0]
+    );
     tx.send(pb::WriteRequest {
         writes: vec![set_write("open/a", &[("v", s("1"))])],
         stream_token: handshake.stream_token.clone(),
@@ -1007,7 +1010,7 @@ service cloud.firestore {
         .into_inner();
     tx.send(add_query_target(1, "protected")).await.unwrap();
     let (initial, token) = trace_and_token(&mut responses, "NO_CHANGE[]").await;
-    assert!(!token.is_empty());
+    assert_ne!(token, [] as [u8; 0]);
     assert_eq!(
         initial,
         vec!["ADD[1]", "CHANGE a", "CURRENT[1]", "NO_CHANGE[]"]
@@ -1190,7 +1193,7 @@ async fn write_stream_accepts_pipelined_acknowledgements_and_once_targets_are_re
     .await
     .unwrap();
     let handshake = responses.next().await.unwrap().unwrap();
-    assert!(!handshake.stream_id.is_empty());
+    assert_ne!(handshake.stream_id, "");
     // Two distinguishable batches queued against the same acknowledged token (what the JS
     // SDK does); response swapping is observable from result cardinality.
     tx.send(pb::WriteRequest {
@@ -1471,7 +1474,7 @@ async fn write_stream_graceful_half_close_has_no_side_effect() {
     let handshake = responses.next().await.unwrap().unwrap();
     drop(tx);
     assert!(responses.next().await.is_none());
-    assert!(!handshake.stream_token.is_empty());
+    assert_ne!(handshake.stream_token, [] as [u8; 0]);
     handle.abort();
     handle.await.unwrap_err();
 }
@@ -2142,7 +2145,7 @@ async fn partition_query_splits_a_collection_group_at_sampled_keys() {
     let mut sorted = names(&four);
     sorted.sort_by(|a, b| a.split('/').cmp(b.split('/')));
     assert_eq!(names(&four), sorted, "key order");
-    assert!(four.next_page_token.is_empty());
+    assert_eq!(four.next_page_token, "");
     let two = client
         .partition_query(partition_request("items", 2, 0, ""))
         .await
@@ -2166,14 +2169,14 @@ async fn partition_query_splits_a_collection_group_at_sampled_keys() {
         .unwrap()
         .into_inner();
     assert_eq!(first.partitions.len(), 3);
-    assert!(!first.next_page_token.is_empty());
+    assert_ne!(first.next_page_token, "");
     let second = client
         .partition_query(partition_request("items", 4, 3, &first.next_page_token))
         .await
         .unwrap()
         .into_inner();
     assert_eq!([names(&first), names(&second)].concat(), names(&four));
-    assert!(second.next_page_token.is_empty());
+    assert_eq!(second.next_page_token, "");
     // Without an explicit order production does not split at all.
     let mut unordered = partition_request("items", 4, 0, "");
     if let Some(pb::partition_query_request::QueryType::StructuredQuery(sq)) =
@@ -2181,13 +2184,15 @@ async fn partition_query_splits_a_collection_group_at_sampled_keys() {
     {
         sq.order_by.clear();
     }
-    assert!(client
-        .partition_query(unordered)
-        .await
-        .unwrap()
-        .into_inner()
-        .partitions
-        .is_empty());
+    assert_eq!(
+        client
+            .partition_query(unordered)
+            .await
+            .unwrap()
+            .into_inner()
+            .partitions,
+        [] as [fireemu_proto_firestore::google::firestore::v1::Cursor; 0]
+    );
     // A plain collection query is refused.
     let mut plain = partition_request("items", 2, 0, "");
     if let Some(pb::partition_query_request::QueryType::StructuredQuery(sq)) = &mut plain.query_type
@@ -2272,7 +2277,7 @@ async fn current_boundary_tokens_are_bound_to_their_target() {
         .into_inner();
     tx.send(add_query_target(1, "first")).await.unwrap();
     let (_, current_token) = trace_and_token(&mut listen, "CURRENT[1]").await;
-    assert!(!current_token.is_empty());
+    assert_ne!(current_token, [] as [u8; 0]);
     let _ = next_until(&mut listen, "NO_CHANGE[]").await;
 
     let mut other = add_query_target(2, "second");
@@ -3334,7 +3339,7 @@ async fn a_document_that_leaves_the_query_is_a_change_with_removed_target_ids() 
             }
         }
         let change = leaving.expect("a document change for the document that left");
-        assert!(change.target_ids.is_empty());
+        assert_eq!(change.target_ids, [] as [i32; 0]);
         assert_eq!(change.removed_target_ids, vec![1]);
         assert!(change.document.unwrap().name.ends_with("/g/a"));
         handle.abort();
@@ -3539,7 +3544,7 @@ async fn a_strict_resume_without_an_expected_count_ends_its_replay_with_a_count_
         .expect("the bloom filter is present, and empty");
     assert_eq!(bloom.hash_count, 0);
     let bits = bloom.bits.expect("the bit sequence is present");
-    assert!(bits.bitmap.is_empty());
+    assert_eq!(bits.bitmap, [] as [u8; 0]);
     assert_eq!(bits.padding, 0);
     handle.abort();
 }
@@ -4357,7 +4362,10 @@ mod l1b_resume_answers {
                 "NO_CHANGE[]"
             ]
         );
-        assert!(filters(&trace).is_empty());
+        assert_eq!(
+            filters(&trace),
+            [] as [fireemu_proto_firestore::google::firestore::v1::ExistenceFilter; 0]
+        );
         handle.abort();
     }
 
@@ -4401,7 +4409,10 @@ mod l1b_resume_answers {
                 "NO_CHANGE[]"
             ]
         );
-        assert!(filters(&trace).is_empty());
+        assert_eq!(
+            filters(&trace),
+            [] as [fireemu_proto_firestore::google::firestore::v1::ExistenceFilter; 0]
+        );
         handle.abort();
     }
 

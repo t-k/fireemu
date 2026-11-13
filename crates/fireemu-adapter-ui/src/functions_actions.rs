@@ -388,7 +388,7 @@ mod tests {
         );
         // No body, so no default content-type is added; only the header the caller gave.
         assert_eq!(plan.headers, vec![("x-smoke".to_owned(), "hi".to_owned())]);
-        assert!(plan.body.is_empty());
+        assert_eq!(plan.body, [] as [u8; 0]);
     }
 
     #[test]

@@ -37,7 +37,7 @@ fn a_locally_issued_token_verifies_against_its_own_project() {
     assert_eq!(identity.project_number, "1234567890");
     assert_eq!(identity.issued_at, now(0));
     assert_eq!(identity.expires_at, now(3600));
-    assert!(!identity.token_id.is_empty());
+    assert_ne!(identity.token_id, "");
 }
 
 #[test]

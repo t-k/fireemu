@@ -1843,7 +1843,7 @@ fn rest_aggregation_refused_commit_preserves_state_and_new_transaction_route() {
         .as_str()
         .expect("REST aggregation announces new transaction")
         .to_owned();
-    assert!(!transaction.is_empty());
+    assert_ne!(transaction, "");
     let (status, committed) = call(
         &s,
         "POST",
@@ -4828,7 +4828,7 @@ fn rest_new_transaction_retry_batch_get_and_run_query_return_documents() {
         let responses = responses.as_array().unwrap();
         assert_eq!(responses.len(), 2);
         let transaction = responses[0]["transaction"].as_str().unwrap();
-        assert!(!transaction.is_empty());
+        assert_ne!(transaction, "");
         assert_ne!(transaction, previous);
         assert_eq!(responses[1][document_field]["name"], name);
         assert_eq!(
@@ -4921,7 +4921,7 @@ fn rest_retry_transaction_starts_fresh_transaction_and_replay_is_refused() {
     );
     assert_eq!(status, 200, "{retried}");
     let fresh = retried["transaction"].as_str().unwrap();
-    assert!(!fresh.is_empty());
+    assert_ne!(fresh, "");
     assert_ne!(fresh, second);
 
     let (status, replay) = call(

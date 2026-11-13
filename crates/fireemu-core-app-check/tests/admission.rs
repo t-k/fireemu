@@ -306,7 +306,7 @@ fn every_bypass_names_the_privileged_credential_it_required() {
         PrivilegedBypass::ControlApi,
     ] {
         assert!(bypass.is_privileged());
-        assert!(!bypass.reason().is_empty());
+        assert_ne!(bypass.reason(), "");
     }
     assert!(!PrivilegedBypass::None.is_privileged());
 }
@@ -652,10 +652,11 @@ fn an_unnameable_project_id_opens_no_ring() {
             now: NOW,
         });
     }
-    assert!(gate
-        .registry()
-        .read()
-        .expect("readable")
-        .observed_projects()
-        .is_empty());
+    assert_eq!(
+        gate.registry()
+            .read()
+            .expect("readable")
+            .observed_projects(),
+        [] as [std::string::String; 0]
+    );
 }

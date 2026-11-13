@@ -511,7 +511,7 @@ fn ast_compound_nodes_retain_constructor_observations() {
             (node.guard, node.singleton, node.deterministic),
             (guard, singleton, deterministic)
         );
-        assert!(!node.node.is_empty());
+        assert_ne!(node.node, "");
     }
 }
 

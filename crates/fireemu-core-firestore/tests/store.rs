@@ -375,7 +375,10 @@ fn create_read_update_delete_with_versions_and_times() {
     assert_eq!(doc.create_time, t(0), "create time survives updates");
     assert_eq!(doc.update_time, t(5));
     assert!(doc.version > v1);
-    assert!(doc.fields.get("name") == Some(&Value::String("Alicia".into())));
+    assert_eq!(
+        doc.fields.get("name"),
+        Some(&Value::String("Alicia".into()))
+    );
 
     s.commit(
         &[Write {
@@ -1251,7 +1254,10 @@ fn a_query_in_a_transaction_locks_its_range() {
     .canonicalize()
     .unwrap();
     let txn = s.begin_transaction(false, t(0)).unwrap();
-    assert!(s.run_query_in_transaction(&txn, &q).unwrap().is_empty());
+    assert_eq!(
+        s.run_query_in_transaction(&txn, &q).unwrap(),
+        [] as [fireemu_core_firestore::store::Document; 0]
+    );
     // A document that would appear in the queried range cannot be created out of band while
     // the transaction is active (production blocks the phantom writer); a document in another
     // collection, or deeper than the range, can.
@@ -1611,10 +1617,16 @@ fn the_holders_listed_for_a_write_are_the_ones_whose_range_it_touches() {
     let (s, txn) = filtered_range_lock();
     let outside = [set("rg/new-out", &[("state", Value::String("out".into()))])];
     let inside = [set("rg/new-in", &[("state", Value::String("in".into()))])];
-    assert!(s.lock_holders(&outside, None).is_empty());
+    assert_eq!(
+        s.lock_holders(&outside, None),
+        [] as [fireemu_core_firestore::store::TransactionId; 0]
+    );
     assert_eq!(s.lock_holders(&inside, None), vec![txn.clone()]);
     // the holder's own writes never wait on itself
-    assert!(s.lock_holders(&inside, Some(&txn)).is_empty());
+    assert_eq!(
+        s.lock_holders(&inside, Some(&txn)),
+        [] as [fireemu_core_firestore::store::TransactionId; 0]
+    );
 }
 
 #[test]
@@ -1629,7 +1641,10 @@ fn an_unfiltered_query_and_an_unsupported_filter_still_lock_the_whole_collection
     .canonicalize()
     .unwrap();
     let txn = s.begin_transaction(false, t(0)).unwrap();
-    assert!(s.run_query_in_transaction(&txn, &q).unwrap().is_empty());
+    assert_eq!(
+        s.run_query_in_transaction(&txn, &q).unwrap(),
+        [] as [fireemu_core_firestore::store::Document; 0]
+    );
     assert_refused(
         &mut s,
         &[set("rg/any", &[("state", Value::String("out".into()))])],
@@ -1669,7 +1684,10 @@ fn a_disjunction_locks_every_document_matching_either_side() {
     .canonicalize()
     .unwrap();
     let txn = s.begin_transaction(false, t(0)).unwrap();
-    assert!(s.run_query_in_transaction(&txn, &q).unwrap().is_empty());
+    assert_eq!(
+        s.run_query_in_transaction(&txn, &q).unwrap(),
+        [] as [fireemu_core_firestore::store::Document; 0]
+    );
     assert_refused(
         &mut s,
         &[set("rg/x", &[("state", Value::String("a".into()))])],
@@ -1720,7 +1738,10 @@ fn conjunction_range_lock() -> (FirestoreState, TransactionId) {
     .canonicalize()
     .unwrap();
     let txn = s.begin_transaction(false, t(0)).unwrap();
-    assert!(s.run_query_in_transaction(&txn, &q).unwrap().is_empty());
+    assert_eq!(
+        s.run_query_in_transaction(&txn, &q).unwrap(),
+        [] as [fireemu_core_firestore::store::Document; 0]
+    );
     (s, txn)
 }
 
@@ -1780,7 +1801,10 @@ fn the_holders_of_a_two_write_commit_are_listed_on_the_combined_result() {
         masked("rg/x", "b", Value::Integer(1)),
     ];
     assert_eq!(s.lock_holders(&together, None), vec![txn]);
-    assert!(s.lock_holders(&together[..1], None).is_empty());
+    assert_eq!(
+        s.lock_holders(&together[..1], None),
+        [] as [fireemu_core_firestore::store::TransactionId; 0]
+    );
 }
 
 #[test]
@@ -2460,10 +2484,10 @@ fn large_read_only_queries_retain_descriptors_but_not_document_conflicts() {
         CollectionId::try_new("large-ro").unwrap(),
     ));
     let empty = state.begin_transaction(true, t(0)).unwrap();
-    assert!(state
-        .run_query_in_transaction(&empty, &query)
-        .unwrap()
-        .is_empty());
+    assert_eq!(
+        state.run_query_in_transaction(&empty, &query).unwrap(),
+        [] as [fireemu_core_firestore::store::Document; 0]
+    );
     let descriptor_bytes = state.transaction_bookkeeping_stats().conflict_ledger_bytes;
     assert!(descriptor_bytes > 0);
     state.rollback(&empty).unwrap();
@@ -2552,10 +2576,10 @@ fn read_only_queries_do_not_consume_document_bytes_at_the_exact_query_budget_bou
             CollectionId::try_new("byte-boundary").unwrap(),
         ));
         let empty = state.begin_transaction(false, t(0)).unwrap();
-        assert!(state
-            .run_query_in_transaction(&empty, &query)
-            .unwrap()
-            .is_empty());
+        assert_eq!(
+            state.run_query_in_transaction(&empty, &query).unwrap(),
+            [] as [fireemu_core_firestore::store::Document; 0]
+        );
         let descriptor_bytes = state.transaction_bookkeeping_stats().conflict_ledger_bytes;
         assert!(descriptor_bytes > 0);
         state.abandon_transaction(&empty);
@@ -2613,10 +2637,12 @@ fn read_only_query_descriptors_still_have_count_and_byte_limits() {
             });
         } else {
             for _ in 0..MAX_TRANSACTION_QUERY_RECORDS {
-                assert!(state
-                    .run_query_in_transaction(&transaction, &query)
-                    .unwrap()
-                    .is_empty());
+                assert_eq!(
+                    state
+                        .run_query_in_transaction(&transaction, &query)
+                        .unwrap(),
+                    [] as [fireemu_core_firestore::store::Document; 0]
+                );
             }
         }
         assert!(matches!(

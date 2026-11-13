@@ -918,13 +918,16 @@ fn the_scan_sees_a_number_inside_a_token_in_any_context_and_ignores_what_is_not_
         project_numbers_in(format!("pageToken/{other}").as_bytes()),
         [111_111_111_111]
     );
-    assert!(project_numbers_in(b"sha512-r1w81DpR+KyRWd3f+rk6TNqMgedmAxZP5v5KWlXQWlgMUUtyEJch0DKEci1SorPMiSeM8XPl7MZ3miJ60JIpQg==").is_empty());
-    assert!(
-        project_numbers_in(b"just some words and spaces of ordinary text, nothing encoded")
-            .is_empty()
+    assert_eq!(project_numbers_in(b"sha512-r1w81DpR+KyRWd3f+rk6TNqMgedmAxZP5v5KWlXQWlgMUUtyEJch0DKEci1SorPMiSeM8XPl7MZ3miJ60JIpQg=="), [] as [u64; 0]);
+    assert_eq!(
+        project_numbers_in(b"just some words and spaces of ordinary text, nothing encoded"),
+        [] as [u64; 0]
     );
-    assert!(project_numbers_in(b"d41d8cd98f00b204e9800998ecf8427e").is_empty());
-    assert!(project_numbers_in(b"").is_empty());
+    assert_eq!(
+        project_numbers_in(b"d41d8cd98f00b204e9800998ecf8427e"),
+        [] as [u64; 0]
+    );
+    assert_eq!(project_numbers_in(b""), [] as [u64; 0]);
 }
 
 /// A synthetic number (never a real project number) written as ASCII digits inside a message, then encoded.
@@ -1054,10 +1057,10 @@ fn the_scan_ignores_an_instant_only_in_the_context_the_corpus_holds_it_in() {
         assert_eq!(numbers_in_text(text).len(), 1, "{text}");
     }
     // A whole JWT payload.
-    assert!(numbers_in_text(
-        r#"{"iat":1791200000,"exp":1791203600,"auth_time":1791200000,"x":"y"}"#
-    )
-    .is_empty());
+    assert_eq!(
+        numbers_in_text(r#"{"iat":1791200000,"exp":1791203600,"auth_time":1791200000,"x":"y"}"#),
+        [] as [std::string::String; 0]
+    );
 }
 
 #[test]
@@ -1426,8 +1429,8 @@ fn the_listing_parser_drops_empty_names_sorts_and_removes_duplicates() {
         parse_listing(root, b"b\0a\0b\0\0c/d\0a\0"),
         [root.join("a"), root.join("b"), root.join("c/d")]
     );
-    assert!(parse_listing(root, b"").is_empty());
-    assert!(parse_listing(root, b"\0\0").is_empty());
+    assert_eq!(parse_listing(root, b""), [] as [std::path::PathBuf; 0]);
+    assert_eq!(parse_listing(root, b"\0\0"), [] as [std::path::PathBuf; 0]);
     // A name with a newline or a space is one name (the list is NUL separated).
     assert_eq!(parse_listing(root, b"x y\nz\0"), [root.join("x y\nz")]);
 }
@@ -1445,8 +1448,11 @@ fn a_go_module_checksum_is_a_digest_but_the_same_run_elsewhere_is_a_token() {
     assert_eq!(token.len(), GO_MODULE_CHECKSUM_LEN, "{token}");
     let line =
         format!("example.com/mod v1.2.3 h1:{token}=\nexample.com/mod v1.2.3/go.mod h1:{token}=\n");
-    assert!(project_numbers_in(line.as_bytes()).is_empty());
-    assert!(ascii_numbers_in(line.as_bytes()).is_empty());
+    assert_eq!(project_numbers_in(line.as_bytes()), [] as [u64; 0]);
+    assert_eq!(
+        ascii_numbers_in(line.as_bytes()),
+        [] as [std::string::String; 0]
+    );
     // Near misses: another prefix, no prefix, a longer run behind the prefix.
     for text in [
         format!("h2:{token}"),
@@ -1502,7 +1508,10 @@ fn a_digest_or_an_identifier_is_not_decoded_as_a_message_but_a_token_is() {
     }
     // A token behind a digest prefix is not scanned; the same token alone, or glued to another word, is.
     let token = token_of(111_111_111_111);
-    assert!(project_numbers_in(format!("sha512-{token}").as_bytes()).is_empty());
+    assert_eq!(
+        project_numbers_in(format!("sha512-{token}").as_bytes()),
+        [] as [u64; 0]
+    );
     assert_eq!(
         project_numbers_in(format!("shasum-{token}").as_bytes()),
         [111_111_111_111]
@@ -1556,15 +1565,30 @@ fn a_whole_string_field_is_found_whatever_byte_follows_its_tag() {
 fn the_length_byte_decides_whether_a_letter_beside_the_digits_is_a_tag() {
     // Digits that are not a whole string field stay inside an identifier when a letter with a letter or a
     // digit behind it is beside them; the same digits with their length in front are a field.
-    assert!(numbers_in_text("q-ab407182936504/b").is_empty());
-    assert!(numbers_in_text("q-407182936504ab/b").is_empty());
+    assert_eq!(
+        numbers_in_text("q-ab407182936504/b"),
+        [] as [std::string::String; 0]
+    );
+    assert_eq!(
+        numbers_in_text("q-407182936504ab/b"),
+        [] as [std::string::String; 0]
+    );
     assert_eq!(numbers_in_text("q-\u{c}407182936504ab/b"), ["407182936504"]);
     assert_eq!(numbers_in_text("q-\u{c}ab407182936504/b").len(), 0);
     // A length that is not the digit count does not make a field; one more digit (the tag of field 6 or 7 is
     // a digit) still does.
-    assert!(numbers_in_text("q-\u{9}407182936504ab/b").is_empty());
-    assert!(numbers_in_text("q-\u{e}407182936504ab/b").is_empty());
-    assert!(numbers_in_text("q-\u{9}4071829365041ab/b").is_empty());
+    assert_eq!(
+        numbers_in_text("q-\u{9}407182936504ab/b"),
+        [] as [std::string::String; 0]
+    );
+    assert_eq!(
+        numbers_in_text("q-\u{e}407182936504ab/b"),
+        [] as [std::string::String; 0]
+    );
+    assert_eq!(
+        numbers_in_text("q-\u{9}4071829365041ab/b"),
+        [] as [std::string::String; 0]
+    );
     assert_eq!(
         numbers_in_text("q-\u{c}4071829365041ab/b"),
         ["407182936504"]
@@ -1573,9 +1597,15 @@ fn the_length_byte_decides_whether_a_letter_beside_the_digits_is_a_tag() {
         numbers_in_text("q-\u{c}40718293650412ab/b"),
         ["407182936504"]
     );
-    assert!(numbers_in_text("q-\u{c}407182936504123ab/b").is_empty());
+    assert_eq!(
+        numbers_in_text("q-\u{c}407182936504123ab/b"),
+        [] as [std::string::String; 0]
+    );
     // A UTCTime is not a field either: with its length in front it is a number.
-    assert!(numbers_in_text("\u{17}\r261015000000Z\u{18}").is_empty());
+    assert_eq!(
+        numbers_in_text("\u{17}\r261015000000Z\u{18}"),
+        [] as [std::string::String; 0]
+    );
     assert_eq!(numbers_in_text("\u{c}261015000000Z\u{18}").len(), 1);
 }
 
@@ -1665,14 +1695,20 @@ fn the_varint_scan_covers_the_shortest_run_and_a_long_run_behind_a_glued_word() 
 
 #[test]
 fn the_scan_ignores_noise_and_ordinary_text() {
-    assert!(ascii_numbers_in(b"").is_empty());
-    assert!(ascii_numbers_in(b"407182936504").is_empty());
-    assert!(
-        ascii_numbers_in(b"just some words and spaces of ordinary text, nothing encoded")
-            .is_empty()
+    assert_eq!(ascii_numbers_in(b""), [] as [std::string::String; 0]);
+    assert_eq!(
+        ascii_numbers_in(b"407182936504"),
+        [] as [std::string::String; 0]
     );
-    assert!(ascii_numbers_in(b"d41d8cd98f00b204e9800998ecf8427e").is_empty());
-    assert!(ascii_numbers_in(b"sha512-r1w81DpR+KyRWd3f+rk6TNqMgedmAxZP5v5KWlXQWlgMUUtyEJch0DKEci1SorPMiSeM8XPl7MZ3miJ60JIpQg==").is_empty());
+    assert_eq!(
+        ascii_numbers_in(b"just some words and spaces of ordinary text, nothing encoded"),
+        [] as [std::string::String; 0]
+    );
+    assert_eq!(
+        ascii_numbers_in(b"d41d8cd98f00b204e9800998ecf8427e"),
+        [] as [std::string::String; 0]
+    );
+    assert_eq!(ascii_numbers_in(b"sha512-r1w81DpR+KyRWd3f+rk6TNqMgedmAxZP5v5KWlXQWlgMUUtyEJch0DKEci1SorPMiSeM8XPl7MZ3miJ60JIpQg=="), [] as [std::string::String; 0]);
 }
 
 mod properties {

@@ -145,11 +145,13 @@ fn a_manifest_of_accepted_schedules_and_other_triggers_has_no_refusal() {
         ],
         ignored: vec![],
     };
-    assert!(manifest.scheduler_refusals().is_empty());
-    assert!(FunctionManifest {
-        functions: vec![],
-        ignored: vec![]
-    }
-    .scheduler_refusals()
-    .is_empty());
+    assert_eq!(manifest.scheduler_refusals(), [] as [(&str, &str); 0]);
+    assert_eq!(
+        FunctionManifest {
+            functions: vec![],
+            ignored: vec![]
+        }
+        .scheduler_refusals(),
+        [] as [(&str, &str); 0]
+    );
 }

@@ -266,7 +266,7 @@ async fn measure_listen_network_delivery() {
                     first_document_micros.get_or_insert_with(|| start.elapsed().as_micros());
                     assert!(boundary.is_none());
                     assert_eq!(change.target_ids, [1]);
-                    assert!(change.removed_target_ids.is_empty());
+                    assert_eq!(change.removed_target_ids, [] as [i32; 0]);
                     let document = change.document.unwrap();
                     assert_eq!(document.name, document_name(received));
                     check_document(&document, 0);
@@ -277,7 +277,7 @@ async fn measure_listen_network_delivery() {
                 {
                     assert_eq!(received, count);
                     assert_eq!(change.target_ids, [1]);
-                    assert!(!change.resume_token.is_empty());
+                    assert_ne!(change.resume_token, [] as [u8; 0]);
                     assert!(change.read_time.is_some());
                     assert!(boundary
                         .replace((change.resume_token, change.read_time))
@@ -286,7 +286,7 @@ async fn measure_listen_network_delivery() {
                 Response::TargetChange(change)
                     if change.target_change_type == Kind::NoChange as i32 =>
                 {
-                    assert!(change.target_ids.is_empty());
+                    assert_eq!(change.target_ids, [] as [i32; 0]);
                     assert_eq!(boundary, Some((change.resume_token, change.read_time)));
                     break;
                 }
@@ -311,7 +311,7 @@ async fn measure_listen_network_delivery() {
                     Response::TargetChange(change)
                         if change.target_change_type == Kind::NoChange as i32 =>
                     {
-                        assert!(change.target_ids.is_empty());
+                        assert_eq!(change.target_ids, [] as [i32; 0]);
                         assert!(expected_delta.is_empty());
                         break;
                     }

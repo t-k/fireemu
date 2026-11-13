@@ -35,5 +35,5 @@ fn version_flag_prints_the_crate_version_and_exits_zero() {
 fn version_flag_rejects_extra_arguments_as_usage_errors() {
     let output = run(&["--version", "extra"]);
     assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty());
+    assert_eq!(output.stdout, [] as [u8; 0]);
 }

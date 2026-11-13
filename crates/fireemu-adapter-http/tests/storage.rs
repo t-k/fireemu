@@ -323,7 +323,7 @@ fn firebase_protocol_upload_download_list_update_delete() {
     assert_eq!(meta["contentType"], "image/png");
     assert_eq!(meta["metadata"]["k"], "v");
     let token = meta["downloadTokens"].as_str().unwrap().to_owned();
-    assert!(!token.is_empty());
+    assert_ne!(token, "");
 
     // Metadata and bytes (download token instead of credentials).
     let enc = "photos%2F%E8%AB%8B%E6%B1%82%E6%9B%B8.png";
@@ -537,7 +537,10 @@ fn event_admission_refusal_returns_429_without_publishing_the_object() {
     let object = ObjectName::try_new("refused.txt").unwrap();
     let mut store = s.store.lock().unwrap();
     assert!(store.get(&bucket, &object).is_none());
-    assert!(store.drain_events().is_empty());
+    assert_eq!(
+        store.drain_events(),
+        [] as [fireemu_core_storage::store::StorageEvent; 0]
+    );
     drop(store);
 
     s.events = None;
@@ -2256,7 +2259,7 @@ fn only_a_metadata_read_mints_the_first_download_token() {
         let metadata = handle(&s, req("GET", &format!("/v0/b/{BUCKET}/o/m.txt"), &[], b""));
         let metadata = json_body(&metadata);
         assert_eq!(metadata["metageneration"], "2");
-        assert!(!metadata["downloadTokens"].as_str().unwrap().is_empty());
+        assert_ne!(metadata["downloadTokens"].as_str().unwrap(), "");
         assert_eq!(gcs_meta()["metageneration"], "2");
     }
 }
@@ -2278,7 +2281,7 @@ fn the_firebase_dialect_omits_empty_metadata_and_absent_tokens() {
                 b"hello",
             ),
         ));
-        assert!(!uploaded["downloadTokens"].as_str().unwrap().is_empty());
+        assert_ne!(uploaded["downloadTokens"].as_str().unwrap(), "");
         assert!(
             uploaded.get("metadata").is_none(),
             "{acceptance:?}: {uploaded}"
@@ -8920,7 +8923,10 @@ fn a_glob_page_reads_and_keeps_a_bounded_part_of_a_large_bucket() {
 
     // A glob nothing matches keeps nothing, whatever the bucket size.
     let scan = glob_scan(&state, &bucket, &query("", None, &none), None).unwrap();
-    assert!(scan.entries.is_empty());
+    assert_eq!(
+        scan.entries,
+        [] as [fireemu_adapter_http::storage::GlobEntry; 0]
+    );
 }
 
 /// A flood of list requests that carry an expensive `matchGlob` (more than the handler slots, each

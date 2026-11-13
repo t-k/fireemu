@@ -44,7 +44,10 @@ fn policy_reports_each_requirement_without_retaining_password_data() {
             ViolationCode::MissingNonAlphanumericCharacter,
         ]
     );
-    assert!(policy.violations("ValidPassword9!").is_empty());
+    assert_eq!(
+        policy.violations("ValidPassword9!"),
+        [] as [fireemu_core_auth::password_policy::ViolationCode; 0]
+    );
     assert_eq!(
         ViolationCode::MissingNumericCharacter.as_str(),
         "MISSING_NUMERIC_CHARACTER"
@@ -60,7 +63,10 @@ fn rejected_registration_is_atomic_and_does_not_create_an_account() {
         Err(AuthError::WeakPassword)
     );
     assert!(store.user_by_email("weak@example.com").is_none());
-    assert!(store.take_user_events().is_empty());
+    assert_eq!(
+        store.take_user_events(),
+        [] as [fireemu_core_auth::store::UserEvent; 0]
+    );
 }
 
 #[test]

@@ -181,7 +181,7 @@ fn creating_a_tenant_on_an_unknown_project_installs_the_project_and_makes_the_te
     assert_eq!(status, 200, "{read}");
     assert_eq!(read["displayName"], "x");
     // Nothing reached the default project.
-    assert!(registry.tenants("demo-app").is_empty());
+    assert_eq!(registry.tenants("demo-app"), [] as [std::string::String; 0]);
 }
 
 #[test]
@@ -209,7 +209,7 @@ fn naming_a_tenant_on_an_unknown_project_makes_both_as_the_official_emulator_doe
     assert_eq!(made, ["one", "two"]);
     let store = registry.tenant_store("demo-routed", "two").unwrap();
     assert_eq!(store.lock().unwrap().project_id(), "demo-routed");
-    assert!(registry.tenants("demo-app").is_empty());
+    assert_eq!(registry.tenants("demo-app"), [] as [std::string::String; 0]);
 }
 
 #[test]
@@ -269,7 +269,10 @@ fn a_refused_request_installs_no_project() {
     assert_eq!(status, 400, "{refused}");
     assert!(registry.routed_store_for("demo-routed").is_none());
     assert!(registry.routed_store_for("Bad_Project").is_none());
-    assert!(registry.tenants("demo-routed").is_empty());
+    assert_eq!(
+        registry.tenants("demo-routed"),
+        [] as [std::string::String; 0]
+    );
 }
 
 /// A create the create route would refuse installs nothing: the project is made for a tenant, not
@@ -285,7 +288,10 @@ fn a_tenant_create_the_route_refuses_installs_no_project() {
     );
     assert_eq!(status, 400, "{refused}");
     assert!(registry.routed_store_for("demo-routed").is_none());
-    assert!(registry.tenants("demo-routed").is_empty());
+    assert_eq!(
+        registry.tenants("demo-routed"),
+        [] as [std::string::String; 0]
+    );
 }
 
 #[test]
@@ -325,7 +331,10 @@ fn the_strict_profile_still_serves_no_project_it_was_not_told_about() {
     );
     assert!(status >= 400, "{refused}");
     assert!(registry.routed_store_for("demo-routed").is_none());
-    assert!(registry.tenants("demo-routed").is_empty());
+    assert_eq!(
+        registry.tenants("demo-routed"),
+        [] as [std::string::String; 0]
+    );
 }
 
 fn declared() -> Vec<Value> {
@@ -351,7 +360,10 @@ fn a_routed_project_is_seeded_with_the_declared_tenants_when_a_request_installs_
     // A read installs nothing, so nothing is seeded.
     let (status, listed) = admin(&state, "GET", ROUTED_TENANTS, &json!({}));
     assert_eq!((status, listed), (200, json!({})));
-    assert!(registry.tenants("demo-routed").is_empty());
+    assert_eq!(
+        registry.tenants("demo-routed"),
+        [] as [std::string::String; 0]
+    );
     // A tenant the request names installs the project, and the declaration comes with it.
     let (status, made) = admin(
         &state,
@@ -382,7 +394,7 @@ fn a_routed_project_is_seeded_with_the_declared_tenants_when_a_request_installs_
     // The switch is the declared one, and the default project is not touched.
     let store = registry.routed_store_for("demo-routed").unwrap();
     assert!(store.lock().unwrap().allows_tenants());
-    assert!(registry.tenants("demo-app").is_empty());
+    assert_eq!(registry.tenants("demo-app"), [] as [std::string::String; 0]);
     // The next project is seeded on its own; a request to the installed one seeds nothing again.
     let (status, created) = admin(
         &state,
@@ -590,7 +602,10 @@ fn a_disagreeing_foreign_token_on_an_unknown_project_is_a_mismatch_that_installs
     assert_eq!(status, 400, "{refused}");
     assert_eq!(refused["error"]["message"], "TENANT_ID_MISMATCH");
     assert!(registry.routed_store_for("demo-late").is_none());
-    assert!(registry.tenants("demo-late").is_empty());
+    assert_eq!(
+        registry.tenants("demo-late"),
+        [] as [std::string::String; 0]
+    );
 }
 
 fn with_barrier(
@@ -674,7 +689,10 @@ fn a_pending_seed_is_applied_under_admission() {
         answer.recv_timeout(SOON).is_err(),
         "the seed waited for the reset"
     );
-    assert!(registry.tenants("demo-pend").is_empty());
+    assert_eq!(
+        registry.tenants("demo-pend"),
+        [] as [std::string::String; 0]
+    );
     drop(reset);
     let (status, body) = answer.recv_timeout(LONG).unwrap();
     assert!(matches!(status, 401 | 403), "{status} {body}");

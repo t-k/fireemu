@@ -2289,13 +2289,14 @@ fn an_off_storage_service_classifies_nothing() {
         b"hello",
     );
     assert_eq!(admitted.status, 200);
-    assert!(h
-        .app_check
-        .registry
-        .read()
-        .expect("readable")
-        .observed_projects()
-        .is_empty());
+    assert_eq!(
+        h.app_check
+            .registry
+            .read()
+            .expect("readable")
+            .observed_projects(),
+        [] as [std::string::String; 0]
+    );
 }
 
 // ------------------------------------------------------------------------------------------

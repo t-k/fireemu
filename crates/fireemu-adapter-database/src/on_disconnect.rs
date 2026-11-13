@@ -360,7 +360,13 @@ mod tests {
         let mut pending = Pending::default();
         pending.remember(&keys("x/y"), json("1"));
         assert!(pending.forget(&keys("x/y")));
-        assert!(pending.entries().is_empty());
+        assert_eq!(
+            pending.entries(),
+            [] as [(
+                std::vec::Vec<std::string::String>,
+                fireemu_core_database::Json
+            ); 0]
+        );
         // A split retains the priority as an entry.
         pending.remember(&keys("a"), json(r#"{"b":1,"c":2,".priority":3}"#));
         assert!(!pending.forget(&keys("a/b")));
@@ -376,7 +382,13 @@ mod tests {
         pending.forget(&keys("l/x"));
         assert_eq!(entries(&pending).len(), 2);
         assert!(pending.forget(&[]));
-        assert!(pending.entries().is_empty());
+        assert_eq!(
+            pending.entries(),
+            [] as [(
+                std::vec::Vec<std::string::String>,
+                fireemu_core_database::Json
+            ); 0]
+        );
     }
 
     /// The value as the official emulator stores it: null children dropped at any depth, an object
@@ -559,7 +571,13 @@ mod tests {
         assert!(!pending.forget(&keys("a/b")));
         assert_eq!(entries(&pending), vec![("a".to_owned(), "null".to_owned())]);
         assert!(pending.forget(&keys("a")));
-        assert!(pending.entries().is_empty());
+        assert_eq!(
+            pending.entries(),
+            [] as [(
+                std::vec::Vec<std::string::String>,
+                fireemu_core_database::Json
+            ); 0]
+        );
     }
 
     #[test]

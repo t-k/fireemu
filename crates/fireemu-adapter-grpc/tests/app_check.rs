@@ -1003,7 +1003,7 @@ async fn an_admitted_grpc_stream_remains_admitted_after_token_expiry_until_it_re
         .await
         .expect("a handshake response")
         .expect("the stream was admitted");
-    assert!(!handshake.stream_id.is_empty());
+    assert_ne!(handshake.stream_id, "");
 
     h.advance(7200);
 
@@ -1050,7 +1050,7 @@ async fn owner_stream_traffic_follows_the_explicit_app_check_bypass() {
     let ok = write_stream_first(&mut h, Some("Bearer owner"), &[])
         .await
         .expect("the owner credential bypasses App Check");
-    assert!(!ok.stream_id.is_empty());
+    assert_ne!(ok.stream_id, "");
     let err = write_stream_first(&mut h, Some("Bearer ownerx"), &[])
         .await
         .expect_err("an owner-shaped credential is not the owner credential");

@@ -337,16 +337,18 @@ fn missing_requirements_preserve_aggregation_fields() {
     for requirement in requirements {
         indexes.add_composite(requirement);
     }
-    assert!(missing_requirements(
-        &query,
-        &aggregations,
-        &indexes,
-        &ctx(
-            FirestoreEdition::Standard,
-            IndexValidationPolicy::Production
-        )
-    )
-    .is_empty());
+    assert_eq!(
+        missing_requirements(
+            &query,
+            &aggregations,
+            &indexes,
+            &ctx(
+                FirestoreEdition::Standard,
+                IndexValidationPolicy::Production
+            )
+        ),
+        [] as [fireemu_core_firestore::index::IndexDefinition; 0]
+    );
 }
 
 proptest! {
@@ -430,5 +432,8 @@ fn missing_requirements_keep_vector_and_scope_semantics() {
         requirements[1..]
     );
     let kindless = Query::new(QueryScope::kindless_all_descendants(None));
-    assert!(missing_requirements(&kindless, &[], &indexes, &context).is_empty());
+    assert_eq!(
+        missing_requirements(&kindless, &[], &indexes, &context),
+        [] as [fireemu_core_firestore::index::IndexDefinition; 0]
+    );
 }

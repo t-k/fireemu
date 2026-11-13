@@ -15,7 +15,7 @@ fn all_catalog_ids_are_valid_and_unique() {
     for c in ALL_CATALOGS {
         LimitCatalogId::try_new(c.meta.id).unwrap();
         assert!(seen.insert(c.meta.id), "duplicate catalog id {}", c.meta.id);
-        assert!(!c.limits.is_empty());
+        assert_ne!(c.limits, []);
     }
 }
 

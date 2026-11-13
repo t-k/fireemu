@@ -1204,10 +1204,10 @@ fn locally_signed_users_match_twenty_native_auth_rules_cases() {
         ("a", sign_up(&daemon, "a@example.invalid", None)),
         ("b", sign_up(&daemon, "b@example.invalid", None)),
     ]);
-    assert!(users["a"].0 != users["b"].0);
+    assert_ne!(users["a"].0, users["b"].0);
     for (_, token) in users.values() {
         assert_eq!(token.split('.').count(), 3);
-        assert!(!token.rsplit('.').next().unwrap().is_empty());
+        assert_ne!(token.rsplit('.').next().unwrap(), "");
     }
     // Each environment issues its own tokens. Only Rules-visible roles and outcomes
     // are compared; Native token bytes or validity under the local signer are not.

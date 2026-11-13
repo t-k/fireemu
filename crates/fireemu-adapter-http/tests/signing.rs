@@ -372,7 +372,7 @@ fn session_rsa_tokens_round_trip_and_forgeries_are_refused() {
     let token = encode_with(&claims, store.signer());
     let parts: Vec<&str> = token.split('.').collect();
     assert_eq!(parts.len(), 3);
-    assert!(!parts[2].is_empty());
+    assert_ne!(parts[2], "");
     let header: serde_json::Value =
         serde_json::from_slice(&fireemu_core_auth::jwt::base64url_decode(parts[0]).unwrap())
             .unwrap();

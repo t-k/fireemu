@@ -78,20 +78,32 @@ fn an_ancestor_update_emits_only_changed_bound_references_with_complete_delta() 
 #[test]
 fn unchanged_wrong_instance_wrong_region_and_wrong_mutation_family_emit_nothing() {
     let manifest = trigger("deleted");
-    assert!(database_event_payloads(&commit(), &manifest.functions[0]).is_empty());
+    assert_eq!(
+        database_event_payloads(&commit(), &manifest.functions[0]),
+        [] as [(std::string::String, serde_json::Value); 0]
+    );
     let manifest = trigger("written");
     let mut change = commit();
     change.data = DatabaseChangeData::Whole {
         before: json!({"same":true}),
         after: json!({"same":true}),
     };
-    assert!(database_event_payloads(&change, &manifest.functions[0]).is_empty());
+    assert_eq!(
+        database_event_payloads(&change, &manifest.functions[0]),
+        [] as [(std::string::String, serde_json::Value); 0]
+    );
     change = commit();
     change.instance = "other".to_owned();
-    assert!(database_event_payloads(&change, &manifest.functions[0]).is_empty());
+    assert_eq!(
+        database_event_payloads(&change, &manifest.functions[0]),
+        [] as [(std::string::String, serde_json::Value); 0]
+    );
     change = commit();
     change.location = "europe-west1".to_owned();
-    assert!(database_event_payloads(&change, &manifest.functions[0]).is_empty());
+    assert_eq!(
+        database_event_payloads(&change, &manifest.functions[0]),
+        [] as [(std::string::String, serde_json::Value); 0]
+    );
 }
 
 use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
@@ -187,15 +199,18 @@ async fn database_capture_scopes_project_instance_and_generation_region() {
             .len(),
         1
     );
-    assert!(runtime
-        .database_capture_patterns("another-project", "app-first", "us-central1")
-        .is_empty());
-    assert!(runtime
-        .database_capture_patterns("demo-db", "unmatched", "us-central1")
-        .is_empty());
-    assert!(runtime
-        .database_capture_patterns("demo-db", "app-first", "europe-west1")
-        .is_empty());
+    assert_eq!(
+        runtime.database_capture_patterns("another-project", "app-first", "us-central1"),
+        [] as [fireemu_core_functions::manifest::DatabasePattern; 0]
+    );
+    assert_eq!(
+        runtime.database_capture_patterns("demo-db", "unmatched", "us-central1"),
+        [] as [fireemu_core_functions::manifest::DatabasePattern; 0]
+    );
+    assert_eq!(
+        runtime.database_capture_patterns("demo-db", "app-first", "europe-west1"),
+        [] as [fireemu_core_functions::manifest::DatabasePattern; 0]
+    );
     // the same scoping, with the event kind the trigger declared
     let triggers = runtime.database_capture_triggers("demo-db", "app-first", "us-central1");
     assert_eq!(triggers.len(), 1);
@@ -207,9 +222,13 @@ async fn database_capture_scopes_project_instance_and_generation_region() {
         triggers[0].0,
         runtime.database_capture_patterns("demo-db", "app-first", "us-central1")[0]
     );
-    assert!(runtime
-        .database_capture_triggers("another-project", "app-first", "us-central1")
-        .is_empty());
+    assert_eq!(
+        runtime.database_capture_triggers("another-project", "app-first", "us-central1"),
+        [] as [(
+            fireemu_core_functions::manifest::DatabasePattern,
+            fireemu_core_functions::manifest::DocumentEvent
+        ); 0]
+    );
     let mut other = commit();
     other.project = "another-project".to_owned();
     runtime.reserve_database_events(&other).unwrap().publish();
@@ -232,7 +251,10 @@ async fn database_reservations_are_invisible_refundable_and_invalidated_by_reset
         runtime.source_event_accounting().unwrap().published_records,
         0
     );
-    assert!(runtime.history().is_empty());
+    assert_eq!(
+        runtime.history(),
+        [] as [fireemu_adapter_functions::runtime::InvocationRecord; 0]
+    );
     drop(reservation);
     assert_eq!(
         runtime.source_event_accounting().unwrap().reserved_records,
@@ -249,7 +271,10 @@ async fn database_reservations_are_invisible_refundable_and_invalidated_by_reset
         runtime.source_event_accounting().unwrap().published_records,
         0
     );
-    assert!(runtime.history().is_empty());
+    assert_eq!(
+        runtime.history(),
+        [] as [fireemu_adapter_functions::runtime::InvocationRecord; 0]
+    );
     runtime.begin_shutdown();
     assert!(matches!(
         runtime.reserve_database_events(&commit()),

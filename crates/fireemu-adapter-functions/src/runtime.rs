@@ -1616,10 +1616,7 @@ impl FunctionsRuntime {
             .clock_policy
             .bind(&mut clock.lock().expect("clock lock"))
             .expect("validated clock policy");
-        let now = clock
-            .lock()
-            .map(|c| c.now())
-            .unwrap_or(LogicalInstant::UNIX_EPOCH);
+        let now = clock.lock().map_or(LogicalInstant::UNIX_EPOCH, |c| c.now());
         let jobs = manifest
             .scheduled()
             .map(|(f, schedule, tz)| ScheduledJob {
@@ -1777,10 +1774,7 @@ impl FunctionsRuntime {
     }
 
     fn clock_follows_real_time(&self) -> bool {
-        self.clock
-            .lock()
-            .map(|clock| clock.is_following())
-            .unwrap_or(false)
+        self.clock.lock().is_ok_and(|clock| clock.is_following())
     }
 
     fn task_now(&self) -> crate::task_scheduler::TaskTime {
@@ -2083,8 +2077,7 @@ impl FunctionsRuntime {
             if self
                 .inner
                 .lock()
-                .map(|inner| inner.reserved_event_records == 0)
-                .unwrap_or(true)
+                .map_or(true, |inner| inner.reserved_event_records == 0)
             {
                 break;
             }
@@ -2292,8 +2285,7 @@ impl FunctionsRuntime {
     pub fn now(&self) -> LogicalInstant {
         self.clock
             .lock()
-            .map(|c| c.now())
-            .unwrap_or(LogicalInstant::UNIX_EPOCH)
+            .map_or(LogicalInstant::UNIX_EPOCH, |c| c.now())
     }
 
     /// Shares the session's fault plan with this runtime.
@@ -5697,22 +5689,19 @@ impl FunctionsRuntime {
     /// Runnable scope leaves future task schedules and retry backoff untouched.
     #[must_use]
     pub fn is_idle_with_scope(&self, runnable_only: bool) -> bool {
-        self.inner
-            .lock()
-            .map(|i| {
-                !i.outbox.has_active()
-                    && i.running.is_empty()
-                    && i.reserved_event_bytes == 0
-                    && i.pending_auth.is_empty()
-                    && !i.catch_up_pending
-                    && if runnable_only {
-                        let (now, epoch) = self.task_projection_time();
-                        i.task_scheduler.idle_projection(now, epoch)["runnable"] == 0
-                    } else {
-                        i.task_scheduler.outstanding() == 0
-                    }
-            })
-            .unwrap_or(true)
+        self.inner.lock().map_or(true, |i| {
+            !i.outbox.has_active()
+                && i.running.is_empty()
+                && i.reserved_event_bytes == 0
+                && i.pending_auth.is_empty()
+                && !i.catch_up_pending
+                && if runnable_only {
+                    let (now, epoch) = self.task_projection_time();
+                    i.task_scheduler.idle_projection(now, epoch)["runnable"] == 0
+                } else {
+                    i.task_scheduler.outstanding() == 0
+                }
+        })
     }
 
     /// Bounded task phase diagnostics without payloads or request metadata.
@@ -5970,8 +5959,7 @@ impl FunctionsRuntime {
         let released = self
             .inner
             .lock()
-            .map(|mut inner| inner.task_scheduler.run_now(function, task))
-            .unwrap_or(0);
+            .map_or(0, |mut inner| inner.task_scheduler.run_now(function, task));
         if released > 0 {
             self.wake.notify_one();
         }
@@ -6017,7 +6005,7 @@ impl FunctionsRuntime {
     /// never by the number of occurrences the clock jumped over; tests hold that bound.
     #[must_use]
     pub fn catch_up_steps(&self) -> u64 {
-        self.inner.lock().map(|i| i.catch_up_steps).unwrap_or(0)
+        self.inner.lock().map_or(0, |i| i.catch_up_steps)
     }
 
     /// The retained window of invocation records, oldest first. Records older than the
@@ -6815,8 +6803,7 @@ impl FunctionsRuntime {
             let recheck = self
                 .inner
                 .lock()
-                .map(|mut inner| std::mem::take(&mut inner.schedule_recheck_pending))
-                .unwrap_or(false);
+                .is_ok_and(|mut inner| std::mem::take(&mut inner.schedule_recheck_pending));
             if recheck {
                 self.on_clock_changed();
             }
@@ -7519,19 +7506,15 @@ impl FunctionsRuntime {
         }
         // The completed delivery freed its record: a held Auth event may fit now.
         self.admit_pending_auth();
-        let more_due = self
-            .inner
-            .lock()
-            .map(|mut inner| {
-                // Publication refusals have no invocation slot and may complete inside a clock sweep.
-                if key.is_empty() {
-                    inner.schedule_recheck_pending |= inner.catch_up_pending;
-                    false
-                } else {
-                    inner.catch_up_pending
-                }
-            })
-            .unwrap_or(false);
+        let more_due = self.inner.lock().is_ok_and(|mut inner| {
+            // Publication refusals have no invocation slot and may complete inside a clock sweep.
+            if key.is_empty() {
+                inner.schedule_recheck_pending |= inner.catch_up_pending;
+                false
+            } else {
+                inner.catch_up_pending
+            }
+        });
         if more_due {
             self.on_clock_changed();
         }

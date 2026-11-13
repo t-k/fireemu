@@ -870,7 +870,7 @@ mod tests {
                 .unwrap();
             answer_text(&shared, &mut session, &mut pushes, prepared)
         };
-        assert!(received.replies.is_empty());
+        assert_eq!(received.replies, [] as [std::string::String; 0]);
         assert!(received.drop_connection);
         let prepared = session
             .prepare(&frame(3, "o", r#"{"p":"/again","d":1}"#))

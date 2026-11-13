@@ -24,7 +24,10 @@ fn a_silent_delete_removes_the_user_and_records_no_event() {
     store.delete_user_by_id_without_event(uid.as_str()).unwrap();
     assert!(store.user_by_id(uid.as_str()).is_none());
     assert!(store.user_by_email("gone@example.test").is_none());
-    assert!(store.take_user_events().is_empty());
+    assert_eq!(
+        store.take_user_events(),
+        [] as [fireemu_core_auth::store::UserEvent; 0]
+    );
     assert_eq!(
         store.delete_user_by_id_without_event(uid.as_str()),
         Err(AuthError::UserNotFound),

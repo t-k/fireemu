@@ -163,7 +163,7 @@ mod tests {
         // snapshot, so exactly-once holds across the subscribe boundary).
         let bus = LogBus::with_capacity(10);
         let mut sub = bus.subscribe();
-        assert!(sub.history.is_empty());
+        assert_eq!(sub.history, [] as [std::sync::Arc<str>; 0]);
         bus.publish(&line("only-live"));
         let got = sub.live.recv().await.unwrap();
         assert!(got.contains("only-live"));

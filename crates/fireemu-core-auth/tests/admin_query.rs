@@ -111,13 +111,18 @@ fn empty_store_zero_limit_and_huge_offsets_never_allocate_from_request_values() 
     for store in [empty(), fixture()] {
         for field in FIELDS {
             for descending in [false, true] {
-                assert!(store.users_sorted_page(field, 0, 0, descending).is_empty());
-                assert!(store
-                    .users_sorted_page(field, usize::MAX, usize::MAX, descending)
-                    .is_empty());
-                assert!(store
-                    .users_sorted_page(field, usize::MAX - 1, 500, descending)
-                    .is_empty());
+                assert_eq!(
+                    store.users_sorted_page(field, 0, 0, descending),
+                    [] as [&fireemu_core_auth::store::UserRecord; 0]
+                );
+                assert_eq!(
+                    store.users_sorted_page(field, usize::MAX, usize::MAX, descending),
+                    [] as [&fireemu_core_auth::store::UserRecord; 0]
+                );
+                assert_eq!(
+                    store.users_sorted_page(field, usize::MAX - 1, 500, descending),
+                    [] as [&fireemu_core_auth::store::UserRecord; 0]
+                );
             }
         }
     }

@@ -331,7 +331,10 @@ async fn bridge_capacity_refusal_does_not_publish_to_the_broker() {
         .unwrap()
         .into_inner()
         .received_messages;
-    assert!(pulled.is_empty());
+    assert_eq!(
+        pulled,
+        [] as [fireemu_proto_pubsub::google::pubsub::v1::ReceivedMessage; 0]
+    );
     harness.shutdown().await;
 }
 
@@ -425,18 +428,23 @@ async fn dead_letter_transfer_retries_after_destination_admission_recovers() {
         .unwrap()
         .into_inner()
         .received_messages;
-    assert!(exhausted.is_empty());
-    assert!(subscriber
-        .pull(pb::PullRequest {
-            subscription: destination_subscription.to_owned(),
-            max_messages: 1,
-            ..Default::default()
-        })
-        .await
-        .unwrap()
-        .into_inner()
-        .received_messages
-        .is_empty());
+    assert_eq!(
+        exhausted,
+        [] as [fireemu_proto_pubsub::google::pubsub::v1::ReceivedMessage; 0]
+    );
+    assert_eq!(
+        subscriber
+            .pull(pb::PullRequest {
+                subscription: destination_subscription.to_owned(),
+                max_messages: 1,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .received_messages,
+        [] as [fireemu_proto_pubsub::google::pubsub::v1::ReceivedMessage; 0]
+    );
     assert_eq!(
         committed.lock().unwrap().clone(),
         vec![source_topic.to_owned()]
@@ -471,17 +479,19 @@ async fn dead_letter_transfer_retries_after_destination_admission_recovers() {
         committed.lock().unwrap().clone(),
         vec![source_topic.to_owned(), destination.clone()]
     );
-    assert!(subscriber
-        .pull(pb::PullRequest {
-            subscription: source_subscription.to_owned(),
-            max_messages: 1,
-            ..Default::default()
-        })
-        .await
-        .unwrap()
-        .into_inner()
-        .received_messages
-        .is_empty());
+    assert_eq!(
+        subscriber
+            .pull(pb::PullRequest {
+                subscription: source_subscription.to_owned(),
+                max_messages: 1,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .received_messages,
+        [] as [fireemu_proto_pubsub::google::pubsub::v1::ReceivedMessage; 0]
+    );
     harness.shutdown().await;
 }
 
@@ -924,7 +934,10 @@ async fn publish_pull_ack_round_trip() {
         .unwrap()
         .into_inner()
         .received_messages;
-    assert!(again.is_empty());
+    assert_eq!(
+        again,
+        [] as [fireemu_proto_pubsub::google::pubsub::v1::ReceivedMessage; 0]
+    );
 }
 
 #[tokio::test]
@@ -1308,7 +1321,10 @@ async fn redelivery_after_ack_deadline_on_virtual_clock() {
         .unwrap()
         .into_inner()
         .received_messages;
-    assert!(none.is_empty());
+    assert_eq!(
+        none,
+        [] as [fireemu_proto_pubsub::google::pubsub::v1::ReceivedMessage; 0]
+    );
 
     // Advance the virtual clock past the ack deadline: the message comes back.
     h.clock
@@ -1669,7 +1685,10 @@ async fn streaming_pull_strict_message_credit_waits_for_real_ack() {
             .await
             .unwrap()
             .into_inner();
-        assert!(after_ack.received_messages.is_empty());
+        assert_eq!(
+            after_ack.received_messages,
+            [] as [fireemu_proto_pubsub::google::pubsub::v1::ReceivedMessage; 0]
+        );
         drop(responses);
         h.shutdown().await;
     }
@@ -2186,7 +2205,10 @@ async fn streaming_pull_delivers_and_acks() {
             .await
             .unwrap()
             .into_inner();
-        assert!(after_ack.received_messages.is_empty());
+        assert_eq!(
+            after_ack.received_messages,
+            [] as [fireemu_proto_pubsub::google::pubsub::v1::ReceivedMessage; 0]
+        );
         drop(responses);
         h.shutdown().await;
     }
@@ -2439,7 +2461,10 @@ async fn push_subscription_delivers_json_and_acknowledges_the_message() {
         .unwrap()
         .into_inner()
         .received_messages;
-    assert!(pulled.is_empty());
+    assert_eq!(
+        pulled,
+        [] as [fireemu_proto_pubsub::google::pubsub::v1::ReceivedMessage; 0]
+    );
     stop.store(true, Ordering::Release);
     worker.join().unwrap();
 }
@@ -2497,7 +2522,10 @@ async fn push_subscription_retries_after_failures_without_a_new_publish() {
         .unwrap()
         .into_inner()
         .received_messages;
-    assert!(pulled.is_empty());
+    assert_eq!(
+        pulled,
+        [] as [fireemu_proto_pubsub::google::pubsub::v1::ReceivedMessage; 0]
+    );
     h.shutdown().await;
     stop.store(true, Ordering::Release);
     worker.join().unwrap();
@@ -3337,7 +3365,10 @@ async fn deleting_and_recreating_a_subscription_invalidates_the_old_push_generat
         .unwrap()
         .into_inner()
         .received_messages;
-    assert!(pulled.is_empty());
+    assert_eq!(
+        pulled,
+        [] as [fireemu_proto_pubsub::google::pubsub::v1::ReceivedMessage; 0]
+    );
     stop_old.store(true, Ordering::Release);
     stop_new.store(true, Ordering::Release);
     worker_old.join().unwrap();
@@ -3473,7 +3504,10 @@ async fn unary_pull_exhaustion_forwards_to_an_idle_destination_push_subscriber()
         .unwrap()
         .into_inner()
         .received_messages;
-    assert!(forwarded.is_empty());
+    assert_eq!(
+        forwarded,
+        [] as [fireemu_proto_pubsub::google::pubsub::v1::ReceivedMessage; 0]
+    );
 
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while bodies.lock().unwrap().is_empty() {
@@ -3499,7 +3533,10 @@ async fn unary_pull_exhaustion_forwards_to_an_idle_destination_push_subscriber()
         .unwrap()
         .into_inner()
         .received_messages;
-    assert!(after.is_empty());
+    assert_eq!(
+        after,
+        [] as [fireemu_proto_pubsub::google::pubsub::v1::ReceivedMessage; 0]
+    );
 
     h.shutdown().await;
     stop.store(true, Ordering::Release);
@@ -3822,7 +3859,10 @@ async fn strict_deleted_destination_requires_a_fresh_grant_before_transfer() {
         .unwrap()
         .get_resource_policy(&destination)
         .unwrap();
-    assert!(fresh.bindings.is_empty());
+    assert_eq!(
+        fresh.bindings,
+        [] as [fireemu_core_pubsub::PolicyBinding; 0]
+    );
     assert_ne!(fresh.etag, original_policy.etag);
     assert_eq!(
         recorder
@@ -3870,17 +3910,19 @@ async fn strict_deleted_destination_requires_a_fresh_grant_before_transfer() {
             }],
         )
         .unwrap();
-    assert!(subscriber
-        .pull(pb::PullRequest {
-            subscription: source.clone(),
-            max_messages: 1,
-            return_immediately: true
-        })
-        .await
-        .unwrap()
-        .into_inner()
-        .received_messages
-        .is_empty());
+    assert_eq!(
+        subscriber
+            .pull(pb::PullRequest {
+                subscription: source.clone(),
+                max_messages: 1,
+                return_immediately: true
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .received_messages,
+        [] as [fireemu_proto_pubsub::google::pubsub::v1::ReceivedMessage; 0]
+    );
     assert_eq!(
         recorder
             .0
@@ -3891,17 +3933,19 @@ async fn strict_deleted_destination_requires_a_fresh_grant_before_transfer() {
             .count(),
         1
     );
-    assert!(subscriber
-        .pull(pb::PullRequest {
-            subscription: source,
-            max_messages: 1,
-            return_immediately: true
-        })
-        .await
-        .unwrap()
-        .into_inner()
-        .received_messages
-        .is_empty());
+    assert_eq!(
+        subscriber
+            .pull(pb::PullRequest {
+                subscription: source,
+                max_messages: 1,
+                return_immediately: true
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .received_messages,
+        [] as [fireemu_proto_pubsub::google::pubsub::v1::ReceivedMessage; 0]
+    );
     h.shutdown().await;
 }
 
@@ -5055,7 +5099,10 @@ async fn emulator_ordered_pull_keeps_mixed_n13_response() {
         .await;
         assert_eq!(first.len(), 8, "return_immediately={return_immediately}");
         assert_eq!(first[7].message.as_ref().unwrap().ordering_key, "k1");
-        assert!(second.is_empty());
+        assert_eq!(
+            second,
+            [] as [fireemu_proto_pubsub::google::pubsub::v1::ReceivedMessage; 0]
+        );
     }
 }
 
@@ -5262,7 +5309,10 @@ async fn streaming_pull_oversized_aggregate_keeps_the_original_codec_failure_and
         "{error}"
     );
     let name = SubscriptionName::parse(&subscription).unwrap();
-    assert!(h.handle.pull(&name, 100).unwrap().is_empty());
+    assert_eq!(
+        h.handle.pull(&name, 100).unwrap(),
+        [] as [fireemu_core_pubsub::ReceivedMessage; 0]
+    );
     h.clock
         .lock()
         .unwrap()

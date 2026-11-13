@@ -947,7 +947,7 @@ fn strict_answers_create_auth_uri_for_an_oidc_provider_as_production_does() {
     assert_eq!(keys, ["authUri", "kind", "providerId", "sessionId"]);
     assert_eq!(answer.body["kind"], "identitytoolkit#CreateAuthUriResponse");
     assert_eq!(answer.body["providerId"], PROVIDER);
-    assert!(!answer.body["sessionId"].as_str().unwrap().is_empty());
+    assert_ne!(answer.body["sessionId"].as_str().unwrap(), "");
     let uri = answer.body["authUri"].as_str().unwrap();
     let prefix = format!(
         "{AUTHORIZE}?response_type=id_token&client_id={CLIENT}&redirect_uri={CONTINUE}&state="

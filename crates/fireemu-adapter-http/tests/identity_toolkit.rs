@@ -1373,7 +1373,10 @@ fn sign_up_sign_in_lookup_and_refresh() {
     );
     assert_eq!(status, 200, "{refreshed}");
     assert_eq!(refreshed["project_id"], "demo-app");
-    assert!(refreshed["id_token"].as_str().unwrap().split('.').count() == 3);
+    assert_eq!(
+        refreshed["id_token"].as_str().unwrap().split('.').count(),
+        3
+    );
     let (status, bad) = post(
         &s,
         "/securetoken.googleapis.com/v1/token",
@@ -16800,7 +16803,7 @@ fn expression_count_and_utf8_byte_limits_are_local_and_fail_closed() {
         );
         assert_eq!(status, if accepted { 200 } else { 400 }, "{page}");
         if accepted {
-            assert!(query_result_ids(&page).is_empty());
+            assert_eq!(query_result_ids(&page), [] as [&str; 0]);
         }
     }
 }
@@ -16843,7 +16846,7 @@ fn account_expression_is_namespace_scoped_and_keeps_management_authorization() {
         &json!({"expression":[{"email":"tenant@example.com"}]}),
     );
     assert_eq!(status, 200, "{page}");
-    assert!(query_result_ids(&page).is_empty());
+    assert_eq!(query_result_ids(&page), [] as [&str; 0]);
     assert_eq!(
         admin(
             &s,
@@ -18109,7 +18112,7 @@ fn emulator_batch_import_request_refusal_precedes_row_decode() {
     ] {
         let s = state();
         let (_, seeded) = batch_import(&s, &json!({"users": [{"localId": "kept"}]}));
-        assert!(row_errors(&seeded).is_empty());
+        assert_eq!(row_errors(&seeded), [] as [serde_json::Value; 0]);
         let before = looked_up(&s, "kept");
         let mut request = json!({"users": [
             {"localId": "new-before"}, malformed, {},
@@ -18508,7 +18511,10 @@ fn admin_email_link_generation_needs_email_link_sign_in_in_strict() {
                 (status, answer["error"]["message"].as_str()),
                 (400, Some("OPERATION_NOT_ALLOWED"))
             );
-            assert!(s.store.lock().unwrap().oob_codes().is_empty());
+            assert_eq!(
+                s.store.lock().unwrap().oob_codes(),
+                [] as [&fireemu_core_auth::store::OobCode; 0]
+            );
         } else {
             assert_eq!(status, 200, "{answer}");
             assert!(answer["oobCode"].is_string(), "{answer}");
@@ -18692,7 +18698,10 @@ fn strict_link_generation_follows_the_sandbox() {
         &json!({"requestType": "PASSWORD_RESET", "email": "nobody@example.com", "continueUrl": "https://unauthorized.example.com/x"}),
     );
     assert_eq!(status, 200, "{body}");
-    assert!(s.store.lock().unwrap().oob_codes().is_empty());
+    assert_eq!(
+        s.store.lock().unwrap().oob_codes(),
+        [] as [&fireemu_core_auth::store::OobCode; 0]
+    );
 }
 
 /// Both profiles: generation answers production and the official emulator share.
@@ -23049,7 +23058,10 @@ fn a_bulk_delete_that_skips_rows_announces_nothing_for_them_either() {
         Some(1),
         "the enabled account is refused without force: {body}"
     );
-    assert!(delivered_kinds(&delivered).is_empty());
+    assert_eq!(
+        delivered_kinds(&delivered),
+        [] as [(&str, std::string::String); 0]
+    );
     let (_, lookup) = admin(
         &s,
         "POST",

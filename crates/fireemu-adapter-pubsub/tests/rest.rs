@@ -410,7 +410,10 @@ async fn native_push_create_version_and_unary_pull_are_profile_scoped() {
             assert_eq!(status, 400);
             assert_eq!(body["error"]["message"], error.message());
         } else {
-            assert!(native.unwrap().into_inner().received_messages.is_empty());
+            assert_eq!(
+                native.unwrap().into_inner().received_messages,
+                [] as [fireemu_proto_pubsub::google::pubsub::v1::ReceivedMessage; 0]
+            );
             assert_eq!(status, 200);
             assert_eq!(body, json!({}));
         }
@@ -2191,10 +2194,13 @@ async fn a_supported_topic_round_trips_through_get_and_list_on_both_transports()
     );
     assert!(grpc_get.schema_settings.is_none());
     assert!(grpc_get.message_retention_duration.is_none());
-    assert!(grpc_get.kms_key_name.is_empty());
+    assert_eq!(grpc_get.kms_key_name, "");
     assert!(grpc_get.message_storage_policy.is_none());
     assert!(grpc_get.ingestion_data_source_settings.is_none());
-    assert!(grpc_get.message_transforms.is_empty());
+    assert_eq!(
+        grpc_get.message_transforms,
+        [] as [fireemu_proto_pubsub::google::pubsub::v1::MessageTransform; 0]
+    );
     assert!(grpc_get.tags.is_empty());
 }
 
@@ -2714,7 +2720,7 @@ async fn recorded_rest_topic_subscriptions_share_cursor_with_grpc_project_list()
         second.subscriptions[0].name,
         "projects/demo-app/subscriptions/paging-c"
     );
-    assert!(second.next_page_token.is_empty());
+    assert_eq!(second.next_page_token, "");
     let (status, all) = rest_request(
         address,
         "GET",
@@ -2826,7 +2832,7 @@ async fn both_profiles_page_all_five_lists_and_preserve_deleted_topic_marker() {
             .unwrap()
             .into_inner();
         assert_eq!(topics.topics.len(), 1);
-        assert!(!topics.next_page_token.is_empty());
+        assert_ne!(topics.next_page_token, "");
         let subscriptions = subscriber
             .list_subscriptions(pb::ListSubscriptionsRequest {
                 project: "projects/demo-app".into(),
@@ -2938,7 +2944,7 @@ async fn both_profiles_page_all_five_lists_and_preserve_deleted_topic_marker() {
             .await
             .unwrap()
             .into_inner();
-        assert!(detached.subscriptions.is_empty());
+        assert_eq!(detached.subscriptions, [] as [std::string::String; 0]);
     }
 }
 
@@ -4851,17 +4857,19 @@ async fn actual_rest_iam_requires_both_grants_before_native_dead_letter_transfer
                 .unwrap();
         }
     }
-    assert!(client
-        .pull(pb::PullRequest {
-            subscription: source.to_owned(),
-            max_messages: 1,
-            return_immediately: true
-        })
-        .await
-        .unwrap()
-        .into_inner()
-        .received_messages
-        .is_empty());
+    assert_eq!(
+        client
+            .pull(pb::PullRequest {
+                subscription: source.to_owned(),
+                max_messages: 1,
+                return_immediately: true
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .received_messages,
+        [] as [fireemu_proto_pubsub::google::pubsub::v1::ReceivedMessage; 0]
+    );
     let (_, received) = rest_request(
         address,
         "POST",

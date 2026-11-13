@@ -183,7 +183,7 @@ fn help_does_not_start_anything_or_write_anything() {
 fn an_unknown_command_in_help_is_a_usage_error_that_lists_the_commands() {
     let out = run(&["help", "frobnicate"]);
     assert_eq!(out.status.code(), Some(2), "{out:?}");
-    assert!(out.stdout.is_empty());
+    assert_eq!(out.stdout, [] as [u8; 0]);
     let message = stderr(&out);
     assert!(message.contains("unknown command frobnicate"), "{message}");
     for command in COMMANDS {
@@ -195,7 +195,7 @@ fn an_unknown_command_in_help_is_a_usage_error_that_lists_the_commands() {
 fn help_with_extra_arguments_is_a_usage_error() {
     let out = run(&["help", "up", "exec"]);
     assert_eq!(out.status.code(), Some(2), "{out:?}");
-    assert!(out.stdout.is_empty());
+    assert_eq!(out.stdout, [] as [u8; 0]);
 }
 
 #[test]

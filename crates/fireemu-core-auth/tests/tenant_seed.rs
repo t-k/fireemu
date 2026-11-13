@@ -65,7 +65,7 @@ fn a_name_that_cannot_address_a_tenant_is_refused() {
     for id in ["", "a/b", "a\\b"] {
         assert!(!create(&registry, id, "acme"), "{id:?}");
     }
-    assert!(registry.tenants("demo-app").is_empty());
+    assert_eq!(registry.tenants("demo-app"), [] as [std::string::String; 0]);
 }
 
 #[test]

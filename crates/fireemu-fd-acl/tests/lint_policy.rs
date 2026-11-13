@@ -576,9 +576,9 @@ fn unsafe_in_the_ffi_file_counts_only_inside_the_ffi_module() {
         1,
     );
     assert_ne!(fourth, macos);
-    assert!(!with_file(fourth).is_empty());
+    assert_ne!(with_file(fourth), [] as [std::string::String; 0]);
     let outside = format!("{macos}\nfn extra() {{ unsafe {{ }} }}\n");
-    assert!(!with_file(outside).is_empty());
+    assert_ne!(with_file(outside), [] as [std::string::String; 0]);
 }
 
 #[test]

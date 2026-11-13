@@ -440,7 +440,10 @@ fn a_federated_identity_carrying_a_control_character_is_refused_by_every_writer(
             Err(AuthError::ControlCharacterInText(field)),
             "{field}"
         );
-        assert!(store.user(&uid).expect("the user").federated.is_empty());
+        assert_eq!(
+            store.user(&uid).expect("the user").federated,
+            [] as [fireemu_core_auth::store::FederatedIdentity; 0]
+        );
 
         // The sign-in boundary, which creates an account before it links: it must refuse
         // before creating anything.

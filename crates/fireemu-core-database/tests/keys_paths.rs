@@ -133,7 +133,7 @@ fn production_limits_are_the_documented_values() {
 fn errors_display_their_message() {
     let err = validate_key("").unwrap_err();
     assert_eq!(err.to_string(), err.message);
-    assert!(!err.message.is_empty());
+    assert_ne!(err.message, "");
 }
 
 #[test]

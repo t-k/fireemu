@@ -216,7 +216,10 @@ fn event_admission_refusal_keeps_storage_mutations_private() {
         ))
     );
     assert!(store.get(&b, &destination).is_none());
-    assert!(store.drain_events().is_empty());
+    assert_eq!(
+        store.drain_events(),
+        [] as [fireemu_core_storage::store::StorageEvent; 0]
+    );
 
     let patch = MetadataPatch {
         content_type: Some(Some("text/plain".to_owned())),
@@ -260,7 +263,10 @@ fn event_admission_refusal_keeps_storage_mutations_private() {
     ));
     assert_eq!(store.get(&b, &source), Some(&source_meta));
     assert_eq!(store.bytes(&source_meta), b"source bytes");
-    assert!(store.drain_events().is_empty());
+    assert_eq!(
+        store.drain_events(),
+        [] as [fireemu_core_storage::store::StorageEvent; 0]
+    );
 
     let accepted = store
         .put(
@@ -490,7 +496,7 @@ fn pagination_counts_items_and_prefixes_once_across_pages() {
             .collect::<Vec<_>>(),
         ["a", "b"]
     );
-    assert!(first.prefixes.is_empty());
+    assert_eq!(first.prefixes, [] as [std::string::String; 0]);
 
     let second = store.list(
         &bucket,
@@ -499,7 +505,10 @@ fn pagination_counts_items_and_prefixes_once_across_pages() {
         first.next_page_token.as_deref(),
         Some(2),
     );
-    assert!(second.items.is_empty());
+    assert_eq!(
+        second.items,
+        [] as [fireemu_core_storage::store::ObjectMetadata; 0]
+    );
     assert_eq!(second.prefixes, ["dir/", "dir2/"]);
 
     let third = store.list(
@@ -517,7 +526,7 @@ fn pagination_counts_items_and_prefixes_once_across_pages() {
             .collect::<Vec<_>>(),
         ["zz"]
     );
-    assert!(third.prefixes.is_empty());
+    assert_eq!(third.prefixes, [] as [std::string::String; 0]);
     assert!(third.next_page_token.is_none());
 }
 
@@ -569,18 +578,27 @@ fn pagination_restarts_for_unknown_tokens() {
     }
     let page1 = s.list(&b, "", Some("/"), None, Some(1));
     assert_eq!(page1.prefixes, ["dir/"]);
-    assert!(page1.items.is_empty());
+    assert_eq!(
+        page1.items,
+        [] as [fireemu_core_storage::store::ObjectMetadata; 0]
+    );
     assert_eq!(page1.next_page_token.as_deref(), Some("other/"));
     let page2 = s.list(&b, "", Some("/"), page1.next_page_token.as_deref(), Some(1));
     assert_eq!(page2.prefixes, ["other/"]);
-    assert!(page2.items.is_empty());
+    assert_eq!(
+        page2.items,
+        [] as [fireemu_core_storage::store::ObjectMetadata; 0]
+    );
     assert_eq!(page2.next_page_token.as_deref(), Some("root"));
     // A token that names no visible entry restarts from the beginning.
     let restarted = s.list(&b, "", Some("/"), Some("no-such-item"), None);
     assert_eq!(restarted.items.len(), 2);
     assert_eq!(restarted.prefixes, ["dir/", "other/"]);
     let zero = s.list(&b, "", Some("/"), None, Some(0));
-    assert!(zero.items.is_empty());
+    assert_eq!(
+        zero.items,
+        [] as [fireemu_core_storage::store::ObjectMetadata; 0]
+    );
     assert_eq!(zero.prefixes, ["dir/", "other/"]);
     assert_eq!(zero.next_page_token.as_deref(), Some("root"));
 }
@@ -612,10 +630,13 @@ fn folded_object_names_are_not_valid_page_tokens() {
     let page = s.list(&b, "", Some("/"), Some("z/folded"), Some(1));
     assert_eq!(page.items.len(), 1);
     assert_eq!(page.items[0], item);
-    assert!(page.prefixes.is_empty());
+    assert_eq!(page.prefixes, [] as [std::string::String; 0]);
     assert_eq!(page.next_page_token.as_deref(), Some("z/"));
     let continuation = s.list(&b, "", Some("/"), page.next_page_token.as_deref(), Some(1));
-    assert!(continuation.items.is_empty());
+    assert_eq!(
+        continuation.items,
+        [] as [fireemu_core_storage::store::ObjectMetadata; 0]
+    );
     assert_eq!(continuation.prefixes, ["z/"]);
 
     let first = s.shared_bytes(&item);
@@ -747,7 +768,10 @@ fn resumable_event_admission_refusal_keeps_bytes_and_session_retryable() {
     ));
     assert!(store.get(&b, &n).is_none());
     assert_eq!(store.pending_upload(&id, t(2)).unwrap().bytes, b"abc");
-    assert!(store.drain_events().is_empty());
+    assert_eq!(
+        store.drain_events(),
+        [] as [fireemu_core_storage::store::StorageEvent; 0]
+    );
 
     let committed = store.finalize_upload(&id, t(3)).unwrap();
     assert_eq!(committed.generation, 1);
@@ -961,7 +985,10 @@ fn hashes_etag_tokens_and_bucket_scans() {
     );
     s.clear();
     assert!(s.objects(&b).is_empty() && s.objects(&other).is_empty());
-    assert!(s.drain_events().is_empty());
+    assert_eq!(
+        s.drain_events(),
+        [] as [fireemu_core_storage::store::StorageEvent; 0]
+    );
 }
 
 #[test]
@@ -1251,7 +1278,10 @@ fn list_tokens_outside_the_prefix_restart_and_an_empty_page_names_the_first_item
     assert_eq!(names, ["p/a", "p/b", "p/c"]);
     // `maxResults=0` answers no items and names the first item as the next page, not the last.
     let empty = s.list(&b, "p/", None, None, Some(0));
-    assert!(empty.items.is_empty());
+    assert_eq!(
+        empty.items,
+        [] as [fireemu_core_storage::store::ObjectMetadata; 0]
+    );
     assert_eq!(empty.next_page_token.as_deref(), Some("p/a"));
     // A token from that page keeps naming the item it points at.
     let again = s.list(&b, "p/", None, Some("p/b"), Some(0));
@@ -1312,22 +1342,28 @@ fn list_after_pages_one_merged_order_and_names_the_last_entry_returned() {
     let first = page(None);
     let names: Vec<&str> = first.items.iter().map(|m| m.name.as_str()).collect();
     assert_eq!(names, ["p/a.txt", "p/b.txt"]);
-    assert!(first.prefixes.is_empty());
+    assert_eq!(first.prefixes, [] as [std::string::String; 0]);
     assert_eq!(first.next_page_token.as_deref(), Some("p/b.txt"));
     // The second page holds only prefixes, each once, and names the last of them.
     let second = page(first.next_page_token.as_deref());
-    assert!(second.items.is_empty());
+    assert_eq!(
+        second.items,
+        [] as [fireemu_core_storage::store::ObjectMetadata; 0]
+    );
     assert_eq!(second.prefixes, ["p/dir/", "p/dir2/"]);
     assert_eq!(second.next_page_token.as_deref(), Some("p/dir2/"));
     let third = page(second.next_page_token.as_deref());
     let names: Vec<&str> = third.items.iter().map(|m| m.name.as_str()).collect();
     assert_eq!(names, ["p/zz.txt"]);
-    assert!(third.prefixes.is_empty());
+    assert_eq!(third.prefixes, [] as [std::string::String; 0]);
     assert_eq!(third.next_page_token, None);
     // A point that names no entry skips everything up to it; one past the end is an empty page.
     let skipped = page(Some("p/c"));
     assert_eq!(skipped.prefixes, ["p/dir/", "p/dir2/"]);
-    assert!(page(Some("p/zzz")).items.is_empty());
+    assert_eq!(
+        page(Some("p/zzz")).items,
+        [] as [fireemu_core_storage::store::ObjectMetadata; 0]
+    );
     // The scan seeks to `after`: a point below the prefix lists from its start, a point inside a
     // folded directory skips the rest of that directory, a point outside the prefix is empty.
     // A name sits between the point and the prefix: the scan must not stop there.
@@ -1343,7 +1379,7 @@ fn list_after_pages_one_merged_order_and_names_the_last_entry_returned() {
     // Without a delimiter every object is an entry, and one page can hold them all.
     let flat = s.list_after(&b, "p/", None, None, 10);
     assert_eq!(flat.items.len(), 6);
-    assert!(flat.prefixes.is_empty());
+    assert_eq!(flat.prefixes, [] as [std::string::String; 0]);
     assert_eq!(flat.next_page_token, None);
 }
 
@@ -1398,7 +1434,7 @@ fn a_replace_patch_swaps_the_custom_map_and_drops_the_download_tokens() {
         swapped.custom,
         BTreeMap::from([("only".to_owned(), "2".to_owned())])
     );
-    assert!(swapped.download_tokens.is_empty());
+    assert_eq!(swapped.download_tokens, [] as [std::string::String; 0]);
     assert!(swapped.custom_defined);
     assert_eq!(swapped.metageneration, before.metageneration + 1);
     let emptied = s

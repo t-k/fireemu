@@ -213,7 +213,10 @@ fn ready_search_sees_updates_inserts_and_deletes_and_preserves_source_metadata()
         source.body["updateTime"]
     );
     put(&state, "a", "blue", "one");
-    assert!(results(&request(&state, "POST", &path, search_query("\"red fox\"")).body).is_empty());
+    assert_eq!(
+        results(&request(&state, "POST", &path, search_query("\"red fox\"")).body),
+        [] as [&serde_json::Value; 0]
+    );
     put(&state, "c", "red fox", "inserted");
     assert_eq!(
         ids(&request(&state, "POST", &path, search_query("\"red fox\"")).body),
@@ -229,7 +232,10 @@ fn ready_search_sees_updates_inserts_and_deletes_and_preserves_source_metadata()
         .status,
         200
     );
-    assert!(results(&request(&state, "POST", &path, search_query("\"red fox\"")).body).is_empty());
+    assert_eq!(
+        results(&request(&state, "POST", &path, search_query("\"red fox\"")).body),
+        [] as [&serde_json::Value; 0]
+    );
 }
 #[test]
 fn score_projection_paging_and_downstream_select_keep_unprojected_search_fields() {

@@ -100,7 +100,10 @@ fn an_overwrite_in_an_unversioned_bucket_keeps_nothing() {
     let first = put(&mut store, &b, "o.txt", "before", 1);
     let _ = store.drain_events();
     let second = put(&mut store, &b, "o.txt", "updated", 2);
-    assert!(store.noncurrent_versions(&b, &name("o.txt")).is_empty());
+    assert_eq!(
+        store.noncurrent_versions(&b, &name("o.txt")),
+        [] as [&fireemu_core_storage::store::NoncurrentVersion; 0]
+    );
     // RECORDED (FE v5, both passes): production announces the replaced generation as deleted
     // ("This includes objects that are overwritten",
     // https://firebase.google.com/docs/functions/gcp-storage-events), and delivered Deleted before
@@ -154,7 +157,10 @@ fn deleting_a_generation_removes_it_for_good_and_announces_a_delete() {
         )
         .unwrap();
     assert_eq!(deleted.generation, first.generation);
-    assert!(store.noncurrent_versions(&b, &name("o.txt")).is_empty());
+    assert_eq!(
+        store.noncurrent_versions(&b, &name("o.txt")),
+        [] as [&fireemu_core_storage::store::NoncurrentVersion; 0]
+    );
     assert_eq!(
         kinds(&store.drain_events()),
         vec![("deleted", first.generation)]
@@ -170,7 +176,10 @@ fn deleting_a_generation_removes_it_for_good_and_announces_a_delete() {
         )
         .unwrap();
     assert!(store.get(&b, &name("o.txt")).is_none());
-    assert!(store.noncurrent_versions(&b, &name("o.txt")).is_empty());
+    assert_eq!(
+        store.noncurrent_versions(&b, &name("o.txt")),
+        [] as [&fireemu_core_storage::store::NoncurrentVersion; 0]
+    );
     assert_eq!(
         kinds(&store.drain_events()),
         vec![("deleted", second.generation)]
@@ -181,7 +190,10 @@ fn deleting_a_generation_removes_it_for_good_and_announces_a_delete() {
         store.delete_generation(&b, &name("o.txt"), 999, Precondition::default()),
         Err(StorageError::NotFound)
     );
-    assert!(store.drain_events().is_empty());
+    assert_eq!(
+        store.drain_events(),
+        [] as [fireemu_core_storage::store::StorageEvent; 0]
+    );
 }
 
 #[test]
@@ -296,7 +308,10 @@ fn noncurrent_bytes_count_toward_the_stored_bytes_limit() {
                 6,
                 "a refused write changes nothing"
             );
-            assert!(store.noncurrent_versions(&b, &name("o.txt")).is_empty());
+            assert_eq!(
+                store.noncurrent_versions(&b, &name("o.txt")),
+                [] as [&fireemu_core_storage::store::NoncurrentVersion; 0]
+            );
         } else {
             overwrite.unwrap();
             assert_eq!(
@@ -393,8 +408,14 @@ fn a_refused_admission_leaves_the_store_and_its_versions_untouched() {
         store.get(&b, &name("o.txt")).unwrap().generation,
         first.generation
     );
-    assert!(store.noncurrent_versions(&b, &name("o.txt")).is_empty());
-    assert!(store.drain_events().is_empty());
+    assert_eq!(
+        store.noncurrent_versions(&b, &name("o.txt")),
+        [] as [&fireemu_core_storage::store::NoncurrentVersion; 0]
+    );
+    assert_eq!(
+        store.drain_events(),
+        [] as [fireemu_core_storage::store::StorageEvent; 0]
+    );
     assert_eq!(store.retained_blob_bytes(), 3);
 }
 
@@ -412,7 +433,10 @@ fn a_bucket_reset_drops_versions_and_configuration_and_a_snapshot_restores_them(
     assert_eq!(snapshot.noncurrent_versions(&b, &name("o.txt")).len(), 1);
     assert!(snapshot.versioning(&b));
     assert_eq!(store.remove_bucket(&b), 1);
-    assert!(store.noncurrent_versions(&b, &name("o.txt")).is_empty());
+    assert_eq!(
+        store.noncurrent_versions(&b, &name("o.txt")),
+        [] as [&fireemu_core_storage::store::NoncurrentVersion; 0]
+    );
     assert!(
         !store.versioning(&b),
         "a reset forgets the configuration too"
@@ -430,7 +454,10 @@ fn a_bucket_reset_drops_versions_and_configuration_and_a_snapshot_restores_them(
         ("keep".len() + "one".len() + "two".len()) as u64
     );
     store.clear();
-    assert!(store.noncurrent_versions(&b, &name("o.txt")).is_empty());
+    assert_eq!(
+        store.noncurrent_versions(&b, &name("o.txt")),
+        [] as [&fireemu_core_storage::store::NoncurrentVersion; 0]
+    );
     assert!(!store.versioning(&b) && !store.versioning(&other));
     assert_eq!(store.retained_blob_bytes(), 0);
 }
@@ -701,7 +728,10 @@ fn patching_a_noncurrent_generation_leaves_the_live_object_and_announces_nothing
         Some(t(2)),
         "it stopped being live at the overwrite"
     );
-    assert!(store.drain_events().is_empty());
+    assert_eq!(
+        store.drain_events(),
+        [] as [fireemu_core_storage::store::StorageEvent; 0]
+    );
     // A precondition on the noncurrent generation is checked against it.
     let stale = store.update_generation_metadata_with_admission(
         &b,
@@ -896,10 +926,10 @@ fn a_versions_page_resumes_at_its_cursor_through_prefixes_and_generations() {
         name: "zzz".to_owned(),
         generation: 1,
     };
-    assert!(store
-        .list_versions_page(&b, "", "", Some(&past), 5)
-        .items
-        .is_empty());
+    assert_eq!(
+        store.list_versions_page(&b, "", "", Some(&past), 5).items,
+        [] as [fireemu_core_storage::store::VersionEntry<'_>; 0]
+    );
 }
 
 proptest! {

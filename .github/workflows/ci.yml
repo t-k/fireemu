@@ -530,6 +530,10 @@ jobs:
         run: pnpm -C ui install --frozen-lockfile
       - name: install Functions fixture dependencies
         run: npm ci --prefix tools/sdk-smoke --ignore-scripts
+      # The browser specs run the generated SDK reproduction scripts against the daemon with
+      # conformance's firebase-admin, @google-cloud/firestore and @grpc/grpc-js.
+      - name: install the SDK dependencies of the reproduction-script specs
+        run: pnpm -C conformance install --frozen-lockfile
       - name: lint
         run: pnpm -C ui lint
       - name: format

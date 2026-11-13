@@ -321,109 +321,111 @@ fn evidence_validation_without_repository_inventory_fails_closed() {
     assert!(error.contains("repository root is required"), "{error}");
 }
 
+const TEST_ONLY_PROBE_CASES: [(&str, &str, &str, bool); 20] = [
+    ("", "", "tests/binding_probe.rs", false),
+    ("", "", "benches/binding_probe.rs", false),
+    ("", "", "examples/binding_probe.rs", false),
+    (
+        "#[cfg(test)]\nmod binding_probe;\n",
+        "",
+        "src/binding_probe.rs",
+        false,
+    ),
+    (
+        "#[cfg(test)]\n#[allow(dead_code)]\n/// Test module.\nmod binding_probe;\n",
+        "",
+        "src/binding_probe.rs",
+        false,
+    ),
+    (
+        "#[cfg(test)]\nmod binding_probe;\n",
+        "",
+        "src/binding_probe/mod.rs",
+        false,
+    ),
+    (
+        "#[cfg(test)]\nmod binding_probe;\n#[cfg(test)]\nmod binding_probe;\n",
+        "",
+        "src/binding_probe.rs",
+        false,
+    ),
+    (
+        "#[cfg(test)]\nmod binding_probe;\nmod binding_probe;\n",
+        "",
+        "src/binding_probe.rs",
+        true,
+    ),
+    (
+        "#[cfg(test)]\n#[path = \"binding_probe.rs\"]\nmod redirected;\n",
+        "",
+        "src/binding_probe.rs",
+        true,
+    ),
+    (
+        "#[cfg(test)]\nmod binding_probe;\n#[path = \"binding_probe.rs\"]\nmod redirected;\n",
+        "",
+        "src/binding_probe.rs",
+        true,
+    ),
+    (
+        "#[cfg(test)]\nmod binding_probe;\n",
+        "#[path = \"binding_probe.rs\"]\nmod redirected;\n",
+        "src/binding_probe.rs",
+        true,
+    ),
+    (
+        "#[cfg(test)]\nmod binding_probe;\ninclude!(\"binding_probe.rs\");\n",
+        "",
+        "src/binding_probe.rs",
+        true,
+    ),
+    (
+        "#[cfg(test)]\nmod binding_probe;\n",
+        "include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/binding_probe.rs\"));\n",
+        "src/binding_probe.rs",
+        true,
+    ),
+    (
+        "#[cfg(test)]\nmod binding_probe;\n",
+        "include!(env!(\"GENERATED_SOURCE\"));\n",
+        "src/binding_probe.rs",
+        true,
+    ),
+    (
+        "#[path = \"elsewhere.rs\"]\n#[cfg(test)]\nmod binding_probe;\n",
+        "",
+        "src/binding_probe.rs",
+        true,
+    ),
+    (
+        "#[cfg(all(test))]\nmod binding_probe;\n",
+        "",
+        "src/binding_probe.rs",
+        true,
+    ),
+    (
+        "/*\n#[cfg(test)]\nmod binding_probe;\n*/\n",
+        "",
+        "src/binding_probe.rs",
+        true,
+    ),
+    (
+        "const TEXT: &str = r#\"\n#[cfg(test)]\nmod binding_probe;\n\"#;\n",
+        "",
+        "src/binding_probe.rs",
+        true,
+    ),
+    ("mod binding_probe;\n", "", "src/binding_probe.rs", true),
+    ("", "", "src/state.rs", true),
+];
+
 #[test]
 fn test_only_file_edits_preserve_evidence_and_other_references_remain_bound() {
     let root = repository_root();
     let descriptor = descriptor();
     let inputs = expected_bound_inputs(&root, descriptor, None).expect("current inputs");
     let inputs: Vec<_> = inputs.iter().map(String::as_str).collect();
-    for (declaration, other_source, relative, bound) in [
-        ("", "", "tests/binding_probe.rs", false),
-        ("", "", "benches/binding_probe.rs", false),
-        ("", "", "examples/binding_probe.rs", false),
-        (
-            "#[cfg(test)]\nmod binding_probe;\n",
-            "",
-            "src/binding_probe.rs",
-            false,
-        ),
-        (
-            "#[cfg(test)]\n#[allow(dead_code)]\n/// Test module.\nmod binding_probe;\n",
-            "",
-            "src/binding_probe.rs",
-            false,
-        ),
-        (
-            "#[cfg(test)]\nmod binding_probe;\n",
-            "",
-            "src/binding_probe/mod.rs",
-            false,
-        ),
-        (
-            "#[cfg(test)]\nmod binding_probe;\n#[cfg(test)]\nmod binding_probe;\n",
-            "",
-            "src/binding_probe.rs",
-            false,
-        ),
-        (
-            "#[cfg(test)]\nmod binding_probe;\nmod binding_probe;\n",
-            "",
-            "src/binding_probe.rs",
-            true,
-        ),
-        (
-            "#[cfg(test)]\n#[path = \"binding_probe.rs\"]\nmod redirected;\n",
-            "",
-            "src/binding_probe.rs",
-            true,
-        ),
-        (
-            "#[cfg(test)]\nmod binding_probe;\n#[path = \"binding_probe.rs\"]\nmod redirected;\n",
-            "",
-            "src/binding_probe.rs",
-            true,
-        ),
-        (
-            "#[cfg(test)]\nmod binding_probe;\n",
-            "#[path = \"binding_probe.rs\"]\nmod redirected;\n",
-            "src/binding_probe.rs",
-            true,
-        ),
-        (
-            "#[cfg(test)]\nmod binding_probe;\ninclude!(\"binding_probe.rs\");\n",
-            "",
-            "src/binding_probe.rs",
-            true,
-        ),
-        (
-            "#[cfg(test)]\nmod binding_probe;\n",
-            "include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/binding_probe.rs\"));\n",
-            "src/binding_probe.rs",
-            true,
-        ),
-        (
-            "#[cfg(test)]\nmod binding_probe;\n",
-            "include!(env!(\"GENERATED_SOURCE\"));\n",
-            "src/binding_probe.rs",
-            true,
-        ),
-        (
-            "#[path = \"elsewhere.rs\"]\n#[cfg(test)]\nmod binding_probe;\n",
-            "",
-            "src/binding_probe.rs",
-            true,
-        ),
-        (
-            "#[cfg(all(test))]\nmod binding_probe;\n",
-            "",
-            "src/binding_probe.rs",
-            true,
-        ),
-        (
-            "/*\n#[cfg(test)]\nmod binding_probe;\n*/\n",
-            "",
-            "src/binding_probe.rs",
-            true,
-        ),
-        (
-            "const TEXT: &str = r#\"\n#[cfg(test)]\nmod binding_probe;\n\"#;\n",
-            "",
-            "src/binding_probe.rs",
-            true,
-        ),
-        ("mod binding_probe;\n", "", "src/binding_probe.rs", true),
-        ("", "", "src/state.rs", true),
-    ] {
+    for (declaration, other_source, relative, bound) in TEST_ONLY_PROBE_CASES {
         let fixture = OwnedTestRepository::copy_inputs(&inputs).expect("copy current inputs");
         let parent = fixture.path.join("crates/fireemu-core-events/src/lib.rs");
         let mut source = fs::read_to_string(&parent).expect("parent module");

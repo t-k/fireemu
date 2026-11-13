@@ -499,7 +499,7 @@ pub fn expected_bound_inputs(
     let mut sources = BTreeMap::new();
     let mut unparsed = BTreeSet::new();
     for input in &inputs {
-        if input.ends_with(".rs") {
+        if input.strip_suffix(".rs").is_some() || has_extension(input, "rs") {
             source_closure::checked_path(repository_root, input, false)?;
             let bytes = fs::read(repository_root.join(input))
                 .map_err(|error| format!("cannot read source inventory {input}: {error}"))?;
@@ -511,99 +511,121 @@ pub fn expected_bound_inputs(
         }
     }
     let mut syntax = BTreeMap::new();
-    'source: for (&path, source) in &sources {
-        let bytes = source.as_bytes();
-        let mut tokens = Vec::new();
-        let mut i = 0;
-        while i < bytes.len() {
-            let start = i;
-            if bytes[i].is_ascii_whitespace() {
-                i += 1;
-                continue;
-            }
-            if bytes[i..].starts_with(b"//") {
-                while i < bytes.len() && bytes[i] != b'\n' {
-                    i += 1;
-                }
-                continue;
-            }
-            if bytes[i..].starts_with(b"/*") {
-                let mut depth = 1;
-                i += 2;
-                while i < bytes.len() && depth > 0 {
-                    if bytes[i..].starts_with(b"/*") {
-                        depth += 1;
-                        i += 2;
-                    } else if bytes[i..].starts_with(b"*/") {
-                        depth -= 1;
-                        i += 2;
-                    } else {
-                        i += 1;
-                    }
-                }
-                if depth != 0 {
-                    unparsed.insert(path);
-                    continue 'source;
-                }
-                continue;
-            }
-            let raw_prefix = if bytes[i..].starts_with(b"br") || bytes[i..].starts_with(b"cr") {
-                2
-            } else if bytes[i] == b'r' {
-                1
-            } else {
-                0
-            };
-            let mut raw_quote = i + raw_prefix;
-            if raw_prefix != 0 {
-                while raw_quote < bytes.len() && bytes[raw_quote] == b'#' {
-                    raw_quote += 1;
-                }
-            }
-            if raw_prefix != 0 && bytes.get(raw_quote) == Some(&b'"') {
-                let terminator = format!("\"{}", "#".repeat(raw_quote - i - raw_prefix));
-                let Some(end) = source[raw_quote + 1..].find(&terminator) else {
-                    unparsed.insert(path);
-                    continue 'source;
-                };
-                i = raw_quote + 1 + end + terminator.len();
-            } else if bytes[i] == b'"'
-                || (bytes[i] == b'\''
-                    && (bytes.get(i + 1) == Some(&b'\\')
-                        || source[i + 1..]
-                            .chars()
-                            .next()
-                            .is_some_and(|ch| bytes.get(i + 1 + ch.len_utf8()) == Some(&b'\''))))
-            {
-                let quote = bytes[i];
-                i += 1;
-                while i < bytes.len() && bytes[i] != quote {
-                    if bytes[i] == b'\\' {
-                        i += 1;
-                    }
-                    i += 1;
-                }
-                if i >= bytes.len() {
-                    unparsed.insert(path);
-                    continue 'source;
-                }
-                i += 1;
-            } else if bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] >= 128 {
-                i += 1;
-                while i < bytes.len()
-                    && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] >= 128)
-                {
-                    i += 1;
-                }
-            } else {
-                i += 1;
-            }
-            tokens.push((start, &source[start..i]));
+    for (&path, source) in &sources {
+        if let Some(tokens) = tokenize_source(source) {
+            syntax.insert(path, tokens);
+        } else {
+            unparsed.insert(path);
         }
-        syntax.insert(path, tokens);
     }
-    let mut candidates: BTreeMap<String, (String, BTreeSet<(&str, usize)>)> = BTreeMap::new();
-    for (&parent, tokens) in &syntax {
+    let mut candidates =
+        test_module_candidates(&syntax, &sources, &authority, &inputs, &explicit_inputs);
+    if !retain_referenced_candidates(&syntax, &unparsed, &mut candidates) {
+        return Ok(inputs.iter().cloned().collect());
+    }
+    let excluded: BTreeSet<_> = candidates.into_keys().collect();
+    Ok(inputs
+        .into_iter()
+        .filter(|input| !excluded.contains(input))
+        .collect())
+}
+
+fn tokenize_source(source: &str) -> Option<Vec<(usize, &str)>> {
+    let bytes = source.as_bytes();
+    let mut tokens = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let start = i;
+        if bytes[i].is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+        if bytes[i..].starts_with(b"//") {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if bytes[i..].starts_with(b"/*") {
+            let mut depth = 1;
+            i += 2;
+            while i < bytes.len() && depth > 0 {
+                if bytes[i..].starts_with(b"/*") {
+                    depth += 1;
+                    i += 2;
+                } else if bytes[i..].starts_with(b"*/") {
+                    depth -= 1;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            if depth != 0 {
+                return None;
+            }
+            continue;
+        }
+        let raw_prefix = if bytes[i..].starts_with(b"br") || bytes[i..].starts_with(b"cr") {
+            2
+        } else {
+            usize::from(bytes[i] == b'r')
+        };
+        let mut raw_quote = i + raw_prefix;
+        if raw_prefix != 0 {
+            while raw_quote < bytes.len() && bytes[raw_quote] == b'#' {
+                raw_quote += 1;
+            }
+        }
+        if raw_prefix != 0 && bytes.get(raw_quote) == Some(&b'"') {
+            let terminator = format!("\"{}", "#".repeat(raw_quote - i - raw_prefix));
+            let end = source[raw_quote + 1..].find(&terminator)?;
+            i = raw_quote + 1 + end + terminator.len();
+        } else if bytes[i] == b'"'
+            || (bytes[i] == b'\''
+                && (bytes.get(i + 1) == Some(&b'\\')
+                    || source[i + 1..]
+                        .chars()
+                        .next()
+                        .is_some_and(|ch| bytes.get(i + 1 + ch.len_utf8()) == Some(&b'\''))))
+        {
+            let quote = bytes[i];
+            i += 1;
+            while i < bytes.len() && bytes[i] != quote {
+                if bytes[i] == b'\\' {
+                    i += 1;
+                }
+                i += 1;
+            }
+            if i >= bytes.len() {
+                return None;
+            }
+            i += 1;
+        } else if bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] >= 128 {
+            i += 1;
+            while i < bytes.len()
+                && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] >= 128)
+            {
+                i += 1;
+            }
+        } else {
+            i += 1;
+        }
+        tokens.push((start, &source[start..i]));
+    }
+    Some(tokens)
+}
+
+type TestModuleCandidates<'a> = BTreeMap<String, (String, BTreeSet<(&'a str, usize)>)>;
+
+fn test_module_candidates<'a>(
+    syntax: &BTreeMap<&'a str, Vec<(usize, &'a str)>>,
+    sources: &BTreeMap<&str, String>,
+    authority: &CargoAuthority,
+    inputs: &BTreeSet<String>,
+    explicit_inputs: &BTreeSet<String>,
+) -> TestModuleCandidates<'a> {
+    let mut candidates: TestModuleCandidates<'_> = BTreeMap::new();
+    for (&parent, tokens) in syntax {
         let path = Path::new(parent);
         if !authority
             .packages
@@ -698,13 +720,21 @@ pub fn expected_bound_inputs(
                 .insert((parent, name_offset));
         }
     }
+    candidates
+}
+
+fn retain_referenced_candidates(
+    syntax: &BTreeMap<&str, Vec<(usize, &str)>>,
+    unparsed: &BTreeSet<&str>,
+    candidates: &mut TestModuleCandidates<'_>,
+) -> bool {
     // Iterate because a retained candidate can itself refer to another candidate.
     loop {
         let mut retained = BTreeSet::new();
         if unparsed.iter().any(|path| !candidates.contains_key(*path)) {
-            return Ok(inputs.iter().cloned().collect());
+            return false;
         }
-        for (&parent, tokens) in &syntax {
+        for (&parent, tokens) in syntax {
             if candidates.contains_key(parent) {
                 continue;
             }
@@ -755,7 +785,7 @@ pub fn expected_bound_inputs(
                 {
                     retained.extend(candidates.keys().cloned());
                 }
-                for (candidate, (name, declarations)) in &candidates {
+                for (candidate, (name, declarations)) in candidates.iter() {
                     if (token == name
                         && Path::new(candidate).starts_with(&module_directory)
                         && !declarations.contains(&(parent, offset))
@@ -778,11 +808,7 @@ pub fn expected_bound_inputs(
             candidates.remove(&path);
         }
     }
-    let excluded: BTreeSet<_> = candidates.into_keys().collect();
-    Ok(inputs
-        .into_iter()
-        .filter(|input| !excluded.contains(input))
-        .collect())
+    true
 }
 
 fn expected_bounds(descriptor: &ModelDescriptor) -> Result<BTreeMap<String, String>, String> {

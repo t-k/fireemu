@@ -8604,6 +8604,28 @@ mod tests {
     }
 
     #[test]
+    fn effective_value_reports_each_undeclared_buckets_mode() {
+        for (input, expected) in [
+            (json!({"schemaVersion": 1}), "warn"),
+            (
+                json!({"schemaVersion": 1, "storage": {"undeclaredBuckets": "create"}}),
+                "create",
+            ),
+            (
+                json!({"schemaVersion": 1, "storage": {"undeclaredBuckets": "refuse"}}),
+                "refuse",
+            ),
+        ] {
+            let cfg = RuntimeConfig::from_json(&input).unwrap();
+            assert_eq!(
+                cfg.effective_value("storage.undeclaredBuckets", &input),
+                Some(json!(expected)),
+                "{expected}"
+            );
+        }
+    }
+
+    #[test]
     fn config_show_reports_an_explicit_undeclared_buckets_mode_as_explicit() {
         let input = json!({"schemaVersion": 1, "storage": {"undeclaredBuckets": "refuse"}});
         let cfg = RuntimeConfig::from_json(&input).unwrap();

@@ -294,17 +294,15 @@ pub(crate) fn group_document_count(
     database: &str,
     group: &str,
 ) -> u64 {
-    documents_of(state, project, database)
-        .map(|all| {
-            all.iter()
-                .filter(|d| {
-                    d.path
-                        .last()
-                        .is_some_and(|(collection, _)| collection == group)
-                })
-                .count() as u64
-        })
-        .unwrap_or(0)
+    documents_of(state, project, database).map_or(0, |all| {
+        all.iter()
+            .filter(|d| {
+                d.path
+                    .last()
+                    .is_some_and(|(collection, _)| collection == group)
+            })
+            .count() as u64
+    })
 }
 
 /// `databases/{d}:exportDocuments`.

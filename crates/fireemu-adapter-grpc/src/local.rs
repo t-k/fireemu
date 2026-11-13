@@ -2761,10 +2761,10 @@ impl LocalBackend {
             (None, DatabaseId::DEFAULT.to_owned()),
             gateway.indexes.clone(),
         )]));
-        let created_at = clock
-            .lock()
-            .map(|clock| clock.now())
-            .unwrap_or(fireemu_core_types::time::LogicalInstant::UNIX_EPOCH);
+        let created_at = clock.lock().map_or(
+            fireemu_core_types::time::LogicalInstant::UNIX_EPOCH,
+            |clock| clock.now(),
+        );
         let configured_edition = match gateway.ctx.edition {
             fireemu_core_types::edition::FirestoreEdition::Standard => {
                 crate::admin::catalog::DatabaseEdition::Standard
@@ -5399,8 +5399,9 @@ impl LocalBackend {
     pub fn now(&self) -> fireemu_core_types::time::LogicalInstant {
         self.clock
             .lock()
-            .map(|c| c.now())
-            .unwrap_or(fireemu_core_types::time::LogicalInstant::UNIX_EPOCH)
+            .map_or(fireemu_core_types::time::LogicalInstant::UNIX_EPOCH, |c| {
+                c.now()
+            })
     }
 
     /// Makes `project` the only project that exists: a request naming another is refused
@@ -5533,8 +5534,7 @@ impl LocalBackend {
                     let offset = self
                         .transaction_ids
                         .lock()
-                        .map(|mut ids| ids.next_u64() >> 2)
-                        .unwrap_or(0);
+                        .map_or(0, |mut ids| ids.next_u64() >> 2);
                     Arc::new(DatabaseEntry::restored(
                         FirestoreState::with_limit_scope(scope)
                             .with_retained_version_limit(self.history_version_limit)

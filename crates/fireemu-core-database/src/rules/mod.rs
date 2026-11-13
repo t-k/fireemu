@@ -735,7 +735,7 @@ mod java_chars_tests {
         assert_eq!(java_chars::decimal_digit('\u{1d7cf}'), None);
     }
 
-    /// Java's case mappings of every BMP code unit that has one, from the fixture.
+    /// Java's case mappings of every Unicode scalar that changes, from the fixture.
     fn case_map(name: &str) -> std::collections::BTreeMap<char, String> {
         let fixture = include_str!("../../tests/fixtures/java21-chars.txt");
         let line = fixture
@@ -758,43 +758,38 @@ mod java_chars_tests {
 
     #[test]
     fn every_code_point_changes_case_as_java_21_changes_it() {
-        for (name, lower) in [("lower_map", true), ("upper_map", false)] {
-            let java = case_map(name);
-            let mut differ = Vec::new();
-            for code in 0..=0x10_FFFF_u32 {
-                let Some(c) = char::from_u32(code) else {
-                    continue;
-                };
-                let expected = java.get(&c).cloned().unwrap_or_else(|| c.to_string());
-                match super::eval::java_case(&c.to_string(), lower) {
-                    Some(got) => assert_eq!(got, expected, "{name} U+{code:04X}"),
-                    None => differ.push(c),
-                }
-            }
-            // The code points refused are those Rust's tables and Java 21's map differently,
-            // and `Σ` in a lowercase, whose result depends on its neighbours.
-            for c in differ.into_iter().filter(|&c| !(lower && c == '\u{03A3}')) {
+        let lower_map = case_map("lower_map");
+        let upper_map = case_map("upper_map");
+        for code in 0..=0x10_FFFF_u32 {
+            let Some(c) = char::from_u32(code) else {
+                continue;
+            };
+            let identity = c.to_string();
+            let mut differs = false;
+            for (name, lower, java) in [
+                ("lower_map", true, &lower_map),
+                ("upper_map", false, &upper_map),
+            ] {
+                let expected = java.get(&c).unwrap_or(&identity);
+                assert_eq!(
+                    super::eval::java_case(&identity, lower).as_ref(),
+                    Some(expected),
+                    "{name} U+{code:04X}"
+                );
                 let rust = if lower {
                     c.to_lowercase().collect::<String>()
                 } else {
                     c.to_uppercase().collect::<String>()
                 };
-                let expected = java.get(&c).cloned().unwrap_or_else(|| c.to_string());
-                let other = if lower {
-                    c.to_uppercase().collect::<String>()
-                } else {
-                    c.to_lowercase().collect::<String>()
-                };
-                let other_java = case_map(if lower { "upper_map" } else { "lower_map" })
-                    .get(&c)
-                    .cloned()
-                    .unwrap_or_else(|| c.to_string());
-                assert!(
-                    rust != expected || other != other_java,
-                    "{name} refuses U+{:04X}, which both map alike",
-                    u32::from(c)
-                );
+                differs |= rust != *expected;
             }
+            assert_eq!(
+                super::eval::JAVA21_CASE_UNCHANGED
+                    .iter()
+                    .any(|&(lo, hi)| (lo..=hi).contains(&c)),
+                differs,
+                "Java 21 override table drift at U+{code:04X}"
+            );
         }
     }
 
@@ -825,16 +820,12 @@ mod java_chars_tests {
             "\u{0391}\u{03A3}.",
             "\u{0391}\u{0301}\u{03A3}",
             "1\u{03A3}",
+            "\u{019B}\u{03A3}",
+            "\u{03A3}\u{019B}",
             "\u{0391}\u{03A3}\u{0345}",
         ] {
             assert_eq!(super::eval::java_case(text, true), None, "{text}");
-            // Garay maps differently in both directions, so only the others uppercase.
-            let garay = text.contains('\u{10D50}');
-            assert_eq!(
-                super::eval::java_case(text, false).is_some(),
-                !garay,
-                "{text}"
-            );
+            assert!(super::eval::java_case(text, false).is_some(), "{text}");
         }
     }
 

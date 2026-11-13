@@ -18,7 +18,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Changed
 
-- Toolchain: the pinned Rust is 1.100.0 (MSRV stays 1.85). Rust 1.100's Unicode tables case-map about 45 more code points than Java 21 does (U+0277, U+027C, U+A7DD, U+A7E2, U+AB4B-AB4C, U+AB6C-AB6D and Latin Extended-G letters in U+1DF40-1DF95). In Realtime Database rules, `toLowerCase()` and `toUpperCase()` of a string that holds one of them is now an error, so the rule is false, in both profiles. This is the same as for the code points already listed. The official emulator maps them by Java 21. The list is checked against the Java 21 case maps in `crates/fireemu-core-database/tests/fixtures/java21-chars.txt`.
+- Toolchain: the pinned Rust is 1.100.0 (MSRV stays 1.85).
+- Realtime Database rules: `toLowerCase()` and `toUpperCase()` now apply Java 21 mappings to code points where Rust's Unicode tables differ instead of refusing them, in both profiles. An exhaustive fixture test detects toolchain Unicode drift; the existing ambiguous-sigma and output-size refusals remain.
 
 ### Fixed
 

@@ -18,6 +18,9 @@ def _parse(argv):
     parser = argparse.ArgumentParser(prog="runner.py")
     parser.add_argument("--source", required=True)
     parser.add_argument("--codebase", default="default")
+    # One function's instance (`functions.isolation = "function"`): the daemon fixed the function's identity and secrets
+    # in the environment at spawn, so this runner serves that function only and rewrites nothing per call.
+    parser.add_argument("--function", default=None)
     return parser.parse_args(argv)
 
 
@@ -30,16 +33,32 @@ def load_codebase(source: str) -> dict:
 
 
 def serve(
-    functions: dict, codebase: str, secret: str, stdin, writer: FrameWriter, gate: EnvironmentGate | None = None, app_check_verified: bool = False, blocking_verified: bool = False
+    functions: dict,
+    codebase: str,
+    secret: str,
+    stdin,
+    writer: FrameWriter,
+    gate: EnvironmentGate | None = None,
+    app_check_verified: bool = False,
+    blocking_verified: bool = False,
+    function: str | None = None,
 ) -> int:
-    """Says hello, then serves frames from `stdin` until `shutdown` or the end of the stream."""
+    """Says hello, then serves frames from `stdin` until `shutdown` or the end of the stream.
+
+    With `function`, the runner is that function's instance: only it is announced and served.
+    """
     manifest = build_manifest(functions, app_check_verified)
+    if function is not None:
+        if not any(spec["name"] == function for spec in manifest["functions"]):
+            sys.stderr.write(f"[functions] the function {function} is not exported by the codebase\n")
+            return 1
+        manifest = {**manifest, "functions": [spec for spec in manifest["functions"] if spec["name"] == function]}
     if not blocking_verified and any(spec["trigger"]["type"] == "blockingAuth" for spec in manifest["functions"]):
         blocking.announce_default_note(sys.stderr)
     server = None
     port = None
     if any(spec["trigger"]["type"] in HTTP_TRIGGERS for spec in manifest["functions"]):
-        server, port = start_server(functions, manifest, secret, gate)
+        server, port = start_server(functions, manifest, secret, gate, function is not None)
     writer.write(
         {
             "type": "hello",
@@ -50,7 +69,7 @@ def serve(
             "manifest": manifest,
         }
     )
-    dispatcher = Dispatcher(functions, manifest, writer, gate)
+    dispatcher = Dispatcher(functions, manifest, writer, gate, fixed_identity=function is not None)
     try:
         while True:
             message = read_frame(stdin)
@@ -96,6 +115,8 @@ def run(argv) -> int:
     except BaseException:  # a failing import in user code is reported with its traceback
         traceback.print_exc()
         return 1
+    # A dedicated runner (`--function`) names its function; otherwise the call is the one the daemon has always seen.
+    options = {} if args.function is None else {"function": args.function}
     if blocking_verified:
-        return serve(functions, args.codebase, secret, sys.stdin.buffer, writer, gate, app_check_verified, blocking_verified=True)
-    return serve(functions, args.codebase, secret, sys.stdin.buffer, writer, gate, app_check_verified)
+        return serve(functions, args.codebase, secret, sys.stdin.buffer, writer, gate, app_check_verified, blocking_verified=True, **options)
+    return serve(functions, args.codebase, secret, sys.stdin.buffer, writer, gate, app_check_verified, **options)

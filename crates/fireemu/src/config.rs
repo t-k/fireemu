@@ -1326,6 +1326,9 @@ pub struct RuntimeConfig {
     /// What to do with an exported trigger that belongs to a product fireemu does not serve
     /// (`functions.unservedTriggers`): `refuse` (default) or `report`.
     pub functions_unserved_triggers: String,
+    /// Which processes serve a codebase (`functions.isolation`): one runner for the whole codebase,
+    /// or one dedicated runner per function, as a production instance serves one function.
+    pub functions_isolation: FunctionsIsolation,
     /// The `.firebaserc` alias `--project` resolved through, when the project was named by an
     /// alias. It is the only reason a codebase may carry a `.env.<alias>` file, and having
     /// both that and `.env.<projectId>` is refused, as `loadUserEnvs` refuses it.
@@ -1721,6 +1724,44 @@ impl TaskRetryBackoff {
     }
 }
 
+/// `functions.isolation`: how many runner processes serve one codebase.
+///
+/// Production gives every function its own instance, with its own environment, secrets and module
+/// graph, and an instance serves `concurrency` requests of that one function at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FunctionsIsolation {
+    /// One runner process serves every function of the codebase, which keeps startup cheap. The
+    /// functions share one module graph and one process environment: `FUNCTION_TARGET`,
+    /// `FUNCTION_SIGNATURE_TYPE` and `K_SERVICE` name the call that started last, and a call that
+    /// uses a local secret runs alone.
+    #[default]
+    Codebase,
+    /// One dedicated runner process per function, started with that function's identity and
+    /// secrets in its environment. The functions share nothing.
+    Function,
+}
+
+impl FunctionsIsolation {
+    /// Parses the configuration spelling.
+    #[must_use]
+    pub fn parse_config(text: &str) -> Option<Self> {
+        match text {
+            "codebase" => Some(Self::Codebase),
+            "function" => Some(Self::Function),
+            _ => None,
+        }
+    }
+
+    /// The configuration spelling.
+    #[must_use]
+    pub const fn as_config_str(self) -> &'static str {
+        match self {
+            Self::Codebase => "codebase",
+            Self::Function => "function",
+        }
+    }
+}
+
 /// A rules file of the `database` section of `firebase.json`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DatabaseRulesEntry {
@@ -2084,6 +2125,7 @@ impl Default for RuntimeConfig {
             functions_manifest: None,
             functions_max_running: 8,
             functions_unserved_triggers: "refuse".to_owned(),
+            functions_isolation: FunctionsIsolation::Codebase,
             functions_project_alias: None,
             events_max_attempts: 4,
             pubsub_project_numbers: BTreeMap::new(),
@@ -2585,6 +2627,7 @@ impl RuntimeConfig {
             "functions.runner" => Some(json!(self.functions_runner)),
             "functions.maxGlobalConcurrency" => Some(json!(self.functions_max_running)),
             "functions.unservedTriggers" => Some(json!(self.functions_unserved_triggers)),
+            "functions.isolation" => Some(json!(self.functions_isolation.as_config_str())),
             "functions.clock.date" => Some(json!(if self.functions_clock.date_virtual { "virtual" } else { "real" })),
             "functions.clock.timers" => Some(json!(if self.functions_clock.timers_virtual { "virtual" } else { "real" })),
             "functions.clock.tasks" => Some(json!(if self.functions_clock.tasks_virtual { "virtual" } else { "real" })),
@@ -2695,12 +2738,13 @@ pub(crate) const SCHEDULER_KEYS: [&str; 5] = [
 ];
 
 /// The keys of the `functions` section.
-pub(crate) const FUNCTIONS_KEYS: [&str; 11] = [
+pub(crate) const FUNCTIONS_KEYS: [&str; 12] = [
     "manifest",
     "source",
     "runner",
     "maxGlobalConcurrency",
     "unservedTriggers",
+    "isolation",
     "authBlockingToken",
     "taskNameReuse",
     "taskDispatchDeadlineSeconds",
@@ -3322,6 +3366,28 @@ impl RuntimeConfig {
                 seeding
             },
         )
+    }
+
+    /// The isolation the run uses. `"function"` that only `productionExact` selected gives way to
+    /// `"codebase"` where it cannot apply (a custom `functions.runner`, a fixed `--inspect-functions`
+    /// port): the developer asked for production's behaviour, not for a refusal. The same
+    /// `"function"` written in the configuration is never softened and is refused there.
+    #[must_use]
+    pub fn effective_functions_isolation(&self) -> FunctionsIsolation {
+        let is = |entry: &Value, pointer: &str, text: &str| {
+            entry.pointer(pointer).and_then(Value::as_str) == Some(text)
+        };
+        let explicit = self.development_defaults.iter().any(|entry| {
+            is(entry, "/key", "functions.isolation") && is(entry, "/source", "explicit")
+        });
+        if self.functions_isolation == FunctionsIsolation::Function
+            && !explicit
+            && (self.functions_runner.is_some() || self.functions_inspect_port.is_some())
+        {
+            FunctionsIsolation::Codebase
+        } else {
+            self.functions_isolation
+        }
     }
 
     /// Whether the strict profile's setup-free defaults for the project's console and Admin API
@@ -4450,16 +4516,12 @@ impl RuntimeConfig {
         // `functions.source` stays the first codebase's directory, which is what every
         // single-codebase project has and what the banner prints.
         self.functions_source = chosen.first().map(|c| c.source.clone());
-        if chosen.len() > 1 {
-            report.notices.push(format!(
-                "functions: {} codebases are loaded ({}), one runner process each",
-                chosen.len(),
-                chosen
-                    .iter()
-                    .map(|c| c.codebase.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
+        let names: Vec<&str> = chosen.iter().map(|c| c.codebase.as_str()).collect();
+        if let Some(notice) = crate::functions::process_notice(
+            self.functions_isolation == FunctionsIsolation::Function,
+            &names,
+        ) {
+            report.notices.push(notice);
         }
         self.functions_loaded = chosen;
         Ok(())
@@ -4909,6 +4971,11 @@ impl RuntimeConfig {
         } else {
             TaskRetryBackoff::Declared
         };
+        self.functions_isolation = if exact {
+            FunctionsIsolation::Function
+        } else {
+            FunctionsIsolation::Codebase
+        };
         self.hosting_cache_control = if exact {
             HostingCacheControl::Production
         } else {
@@ -5013,6 +5080,10 @@ impl RuntimeConfig {
             (
                 "functions.authBlockingToken",
                 self.functions_auth_blocking_token.as_config_str(),
+            ),
+            (
+                "functions.isolation",
+                self.functions_isolation.as_config_str(),
             ),
             (
                 "hosting.cacheControl",
@@ -5759,6 +5830,30 @@ impl RuntimeConfig {
         Ok(())
     }
 
+    /// `functions.isolation`: which processes serve a codebase.
+    fn parse_functions_isolation(
+        f: &serde_json::Map<String, Value>,
+        cfg: &mut Self,
+    ) -> Result<(), ConfigError> {
+        if let Some(v) = f.get("isolation") {
+            cfg.functions_isolation = v
+                .as_str()
+                .and_then(FunctionsIsolation::parse_config)
+                .ok_or_else(|| {
+                    ConfigError("functions.isolation must be \"codebase\" or \"function\"".into())
+                })?;
+            if cfg.functions_isolation == FunctionsIsolation::Function
+                && cfg.functions_runner.is_some()
+            {
+                return Err(ConfigError(
+                    "functions.isolation \"function\" cannot be combined with functions.runner: a custom runner command is started once per codebase"
+                        .into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn parse_functions(
         f: &serde_json::Map<String, Value>,
         cfg: &mut Self,
@@ -5850,6 +5945,7 @@ impl RuntimeConfig {
             }
             text.clone_into(&mut cfg.functions_unserved_triggers);
         }
+        Self::parse_functions_isolation(f, cfg)?;
         Ok(())
     }
 
@@ -7238,6 +7334,7 @@ mod tests {
             ("functions.runner", json!(null), "unset"),
             ("functions.maxGlobalConcurrency", json!(8), "default"),
             ("functions.unservedTriggers", json!("refuse"), "default"),
+            ("functions.isolation", json!("codebase"), "default"),
         ];
         for (key, expected, source) in cases {
             let row = rows.iter().find(|row| row["key"] == key).unwrap();
@@ -7759,6 +7856,10 @@ mod tests {
                     json!(cfg.functions_task_retry_backoff.as_config_str()),
                 ),
                 (
+                    "functions.isolation",
+                    json!(cfg.functions_isolation.as_config_str()),
+                ),
+                (
                     "functions.clock.date",
                     json!(if cfg.functions_clock.date_virtual {
                         "virtual"
@@ -7822,6 +7923,7 @@ mod tests {
                     ("functions.authBlockingToken" | "eventarc.authentication", true) => {
                         json!("production")
                     }
+                    ("functions.isolation", true) => json!("function"),
                     // The key only matters to the strict profile; the emulator profile
                     // runs the query (Report is its inert value).
                     ("firestore.missingIndexes", _) if profile == "emulator" => json!("report"),
@@ -11012,6 +11114,61 @@ mod tests {
     }
 
     #[test]
+    fn the_start_up_notice_says_how_many_processes_serve_a_codebase_under_each_isolation() {
+        let two = json!({
+            "functions": [
+                {"source": "fn/api", "codebase": "api"},
+                {"source": "fn/workers", "codebase": "workers"}
+            ]
+        });
+        let one = json!({"functions": {"source": "fn/api", "codebase": "api"}});
+        let base = std::path::Path::new("/proj");
+        let notices = |isolation: FunctionsIsolation, json: &Value| {
+            let mut cfg = RuntimeConfig {
+                functions_isolation: isolation,
+                ..RuntimeConfig::default()
+            };
+            cfg.apply_firebase_json(json, base, &Selection::default())
+                .unwrap()
+                .notices
+        };
+        let shared_two = notices(FunctionsIsolation::Codebase, &two);
+        assert!(
+            shared_two
+                .iter()
+                .any(|n| n
+                    .contains("2 codebases are loaded (api, workers), one runner process each")),
+            "{shared_two:?}"
+        );
+        assert!(
+            !shared_two.iter().any(|n| n.contains("functions.isolation")),
+            "{shared_two:?}"
+        );
+        // One codebase served by one process needs no notice.
+        assert!(notices(FunctionsIsolation::Codebase, &one).is_empty());
+        // One dedicated process per function says so, for one codebase and for several, once.
+        for (json, named) in [(&one, "api"), (&two, "api, workers")] {
+            let dedicated = notices(FunctionsIsolation::Function, json);
+            assert_eq!(
+                dedicated
+                    .iter()
+                    .filter(|n| n.contains(&format!(
+                        "functions.isolation is \"function\": every function of {named} runs in its own runner process"
+                    )))
+                    .count(),
+                1,
+                "{dedicated:?}"
+            );
+            assert!(
+                !dedicated
+                    .iter()
+                    .any(|n| n.contains("one runner process each")),
+                "{dedicated:?}"
+            );
+        }
+    }
+
+    #[test]
     fn every_declared_codebase_is_loaded_and_only_functions_picks_one() {
         let json = json!({
             "functions": [
@@ -11789,6 +11946,134 @@ mod tests {
     }
 
     #[test]
+    fn functions_isolation_follows_profile_exact_and_explicit_precedence() {
+        for profile in ["emulator", "strict"] {
+            for exact in [None, Some(false), Some(true)] {
+                for key in [None, Some("codebase"), Some("function")] {
+                    let mut input = json!({"schemaVersion": 1, "profile": profile});
+                    if let Some(exact) = exact {
+                        input["productionExact"] = json!(exact);
+                    }
+                    if let Some(key) = key {
+                        input["functions"] = json!({"isolation": key});
+                    }
+                    let parsed = RuntimeConfig::from_json(&input);
+                    if profile == "emulator" && exact == Some(true) {
+                        assert!(parsed.is_err(), "productionExact needs strict: {input}");
+                        continue;
+                    }
+                    let cfg = parsed.unwrap_or_else(|e| panic!("{input}: {e:?}"));
+                    let value = key.unwrap_or(if exact == Some(true) {
+                        "function"
+                    } else {
+                        "codebase"
+                    });
+                    let source = if key.is_some() {
+                        "explicit"
+                    } else if exact == Some(true) {
+                        "productionExact"
+                    } else {
+                        "default"
+                    };
+                    let entry = cfg
+                        .development_defaults
+                        .iter()
+                        .find(|entry| entry["key"] == "functions.isolation")
+                        .unwrap();
+                    assert_eq!(cfg.functions_isolation.as_config_str(), value, "{input}");
+                    assert_eq!(entry["value"], value, "{input}");
+                    assert_eq!(entry["source"], source, "{input}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_function_isolation_that_only_production_exact_chose_gives_way_where_it_cannot_apply() {
+        let exact = json!({"schemaVersion": 1, "productionExact": true});
+        let mut cfg = RuntimeConfig::from_json(&exact).unwrap();
+        assert_eq!(
+            cfg.effective_functions_isolation(),
+            FunctionsIsolation::Function
+        );
+        cfg.functions_inspect_port = Some(9229);
+        assert_eq!(
+            cfg.effective_functions_isolation(),
+            FunctionsIsolation::Codebase
+        );
+        cfg.functions_inspect_port = None;
+        cfg.functions_runner = Some(vec!["node".to_owned(), "runner.mjs".to_owned()]);
+        assert_eq!(
+            cfg.effective_functions_isolation(),
+            FunctionsIsolation::Codebase
+        );
+        // Written in the configuration, "function" is the developer's request and is not softened.
+        let mut cfg = RuntimeConfig::from_json(
+            &json!({"schemaVersion": 1, "functions": {"isolation": "function"}}),
+        )
+        .unwrap();
+        cfg.functions_inspect_port = Some(9229);
+        assert_eq!(
+            cfg.effective_functions_isolation(),
+            FunctionsIsolation::Function
+        );
+        // An explicit "codebase" wins under productionExact whatever else is set.
+        let cfg = RuntimeConfig::from_json(
+            &json!({"schemaVersion": 1, "productionExact": true, "functions": {"isolation": "codebase"}}),
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.effective_functions_isolation(),
+            FunctionsIsolation::Codebase
+        );
+    }
+
+    #[test]
+    fn functions_isolation_defaults_to_the_shared_codebase_runner_and_parses_both_spellings() {
+        let cfg = RuntimeConfig::from_json(&json!({"schemaVersion": 1})).unwrap();
+        assert_eq!(cfg.functions_isolation, FunctionsIsolation::Codebase);
+        for (text, expected) in [
+            ("codebase", FunctionsIsolation::Codebase),
+            ("function", FunctionsIsolation::Function),
+        ] {
+            let input = json!({"schemaVersion": 1, "functions": {"isolation": text}});
+            let cfg = RuntimeConfig::from_json(&input).unwrap();
+            assert_eq!(cfg.functions_isolation, expected, "{text}");
+            assert_eq!(expected.as_config_str(), text);
+            assert_eq!(
+                cfg.effective_value("functions.isolation", &input),
+                Some(json!(text))
+            );
+        }
+    }
+
+    #[test]
+    fn functions_isolation_rejects_other_values_and_a_custom_runner() {
+        for value in [
+            json!("Function"),
+            json!("process"),
+            json!(""),
+            json!(1),
+            json!(null),
+            json!(true),
+        ] {
+            let input = json!({"schemaVersion": 1, "functions": {"isolation": value}});
+            assert_eq!(
+                RuntimeConfig::from_json(&input).unwrap_err().0,
+                "functions.isolation must be \"codebase\" or \"function\""
+            );
+        }
+        let input = json!({"schemaVersion": 1, "functions": {"isolation": "function", "runner": ["node", "x.mjs"]}});
+        assert!(RuntimeConfig::from_json(&input)
+            .unwrap_err()
+            .0
+            .contains("cannot be combined with functions.runner"));
+        // The shared runner keeps accepting a custom command.
+        let input = json!({"schemaVersion": 1, "functions": {"isolation": "codebase", "runner": ["node", "x.mjs"]}});
+        assert!(RuntimeConfig::from_json(&input).is_ok());
+    }
+
+    #[test]
     fn auth_blocking_token_rejects_invalid_values() {
         for value in [
             json!("unknown"),
@@ -12086,6 +12371,7 @@ mod tests {
             "pubsub.deadLetterAuthorization",
             "appCheck.debugTokens",
             "functions.authBlockingToken",
+            "functions.isolation",
             "functions.taskNameReuse",
             "functions.taskRetryDefaults",
             "functions.taskRetryBackoff",
@@ -12100,6 +12386,7 @@ mod tests {
             "implicit",
             "any",
             "emulated",
+            "codebase",
             "immediate",
             "emulated",
             "declared",
@@ -12114,6 +12401,7 @@ mod tests {
             "iam",
             "registered",
             "production",
+            "function",
             "production",
             "production",
             "production",

@@ -23,7 +23,14 @@ use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::ids::SessionId;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
-use crate::config::{CompatibilityProfile, FunctionsCodebase, RuntimeConfig, RuntimeLanguage};
+use crate::config::{
+    CompatibilityProfile, FunctionsCodebase, FunctionsIsolation, RuntimeConfig, RuntimeLanguage,
+};
+
+mod isolation;
+mod runner_checks;
+
+pub(crate) use runner_checks::{process_notice, retain_current_cursors};
 
 /// One Pub/Sub topic and emulator subscription required by a loaded function manifest.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1782,7 +1789,7 @@ async fn snapshot_consistent_reload_source(
     Some(snapshot)
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn supervise_codebase_reloads(
     weak_runtime: std::sync::Weak<FunctionsRuntime>,
     cfg: RuntimeConfig,
@@ -1849,7 +1856,7 @@ async fn supervise_codebase_reloads(
         };
         let mut staged = codebase.clone();
         staged.source = snapshot.to_string_lossy().into_owned();
-        match start_codebase(
+        match start_codebase_units(
             &cfg,
             &staged,
             &hosts,
@@ -1860,10 +1867,13 @@ async fn supervise_codebase_reloads(
         )
         .await
         {
-            Ok(mut spec) => {
-                spec.cleanup_dir = Some(snapshot.into_path());
+            Ok(mut specs) => {
+                let snapshot_path = snapshot.into_path();
+                for spec in &mut specs {
+                    spec.cleanup_dir = Some(snapshot_path.clone());
+                }
                 report_reload_install(
-                    runtime.reload_codebase(spec),
+                    runtime.reload_codebase_units(specs),
                     cfg.functions_inspect_port.is_some(),
                     &codebase.codebase,
                     stable_stamp,
@@ -3306,6 +3316,10 @@ pub(crate) fn default_node() -> Result<Option<DefaultNode>, String> {
     }
 }
 
+/// A codebase's runners being started: one for the codebase, or one per function it serves.
+type CodebaseStart =
+    tokio::task::JoinHandle<Result<Vec<fireemu_adapter_functions::runtime::CodebaseSpec>, String>>;
+
 fn launch_codebases(
     cfg: &RuntimeConfig,
     codebases: &[crate::config::FunctionsCodebase],
@@ -3314,10 +3328,7 @@ fn launch_codebases(
     callable_trusted_protocol: bool,
     node_probe_cache: &Arc<NodeProbeCache>,
     clock_snapshot: fireemu_core_session::clock::ClockSnapshot,
-) -> Vec<(
-    String,
-    tokio::task::JoinHandle<Result<fireemu_adapter_functions::runtime::CodebaseSpec, String>>,
-)> {
+) -> Vec<(String, CodebaseStart)> {
     codebases
         .iter()
         .map(|codebase| {
@@ -3328,7 +3339,7 @@ fn launch_codebases(
             let runner_secret = runner_secret.to_owned();
             let node_probe_cache = node_probe_cache.clone();
             let start = tokio::spawn(async move {
-                start_codebase(
+                start_codebase_units(
                     &cfg,
                     &codebase,
                     &hosts,
@@ -3504,6 +3515,14 @@ pub async fn start(
                 .to_owned(),
         );
     }
+    if cfg.effective_functions_isolation() == FunctionsIsolation::Function
+        && cfg.functions_inspect_port.is_some()
+    {
+        return Err(
+            "functions.isolation \"function\" starts several runner processes per codebase, which cannot share one fixed debugger port. Use --inspect-functions=true to assign a dynamic port to each"
+                .to_owned(),
+        );
+    }
     if codebases.len() > 1 && cfg.functions_manifest.is_some() {
         return Err(format!(
             "functions.manifest replaces discovery for one codebase, and this run loads {} \
@@ -3547,13 +3566,20 @@ pub async fn start(
     );
     let outcomes = join_codebase_starts(starts).await;
     if let Some(error) = outcomes.iter().find_map(|outcome| outcome.as_ref().err()) {
-        for spec in outcomes.iter().filter_map(|outcome| outcome.as_ref().ok()) {
+        for spec in outcomes
+            .iter()
+            .filter_map(|outcome| outcome.as_ref().ok())
+            .flatten()
+        {
             spec.runner.kill_now();
         }
         return Err(error.clone());
     }
-    let started: Vec<fireemu_adapter_functions::runtime::CodebaseSpec> =
-        outcomes.into_iter().filter_map(Result::ok).collect();
+    let started: Vec<fireemu_adapter_functions::runtime::CodebaseSpec> = outcomes
+        .into_iter()
+        .filter_map(Result::ok)
+        .flatten()
+        .collect();
     let config = functions_config(cfg, hosts.functions.clone(), runner_secret);
     // A function name two codebases both export is fatal here. The runners it collided
     // between are killed rather than left behind a daemon that refuses to serve them.
@@ -4157,6 +4183,85 @@ fn validate_functions_codebase_budget(codebases: &[FunctionsCodebase]) -> Result
     Ok(())
 }
 
+/// What every started runner of a codebase must satisfy before it serves: the virtual clock it was
+/// asked for (and the clock it is synced to), and a live inspector endpoint when one was requested.
+/// A runner that fails is killed here.
+async fn check_started_runner(
+    cfg: &RuntimeConfig,
+    label: &str,
+    python: bool,
+    runner: &Arc<Runner>,
+    clock_snapshot: fireemu_core_session::clock::ClockSnapshot,
+) -> Result<(), String> {
+    let inspecting = cfg.functions_inspect_dynamic || cfg.functions_inspect_port.is_some();
+    if cfg.functions_clock.date_virtual {
+        if !runner_checks::supports_virtual_clock(
+            runner.hello().clock.as_ref(),
+            cfg.functions_clock.timers_virtual,
+        ) {
+            runner.kill_now();
+            return Err(runner_checks::virtual_clock_refusal(label, python));
+        }
+        if let Err(error) = runner.sync_clock(clock_snapshot).await {
+            runner.kill_now();
+            return Err(error);
+        }
+    }
+    if inspecting && !python {
+        let reported = runner.hello().inspector_port;
+        let endpoint_active = match reported {
+            Some(port) => inspector_endpoint_is_active(port).await,
+            None => false,
+        };
+        if !runner_checks::debugger_port_is_usable(
+            reported,
+            cfg.functions_inspect_port,
+            endpoint_active,
+        ) {
+            runner.kill_now();
+            return Err(runner_checks::debugger_port_refusal(
+                label,
+                cfg.functions_inspect_port,
+            ));
+        }
+        eprintln!(
+            "functions[{label}]: using debug port {}",
+            reported.expect("the active inspector port was checked above")
+        );
+    }
+    Ok(())
+}
+
+/// Starts the runners of one codebase: the codebase runner, or with `functions.isolation =
+/// "function"` one dedicated runner per function it discovered (see `isolation`).
+async fn start_codebase_units(
+    cfg: &RuntimeConfig,
+    codebase: &crate::config::FunctionsCodebase,
+    hosts: &EmulatorHosts,
+    runner_secret: &str,
+    callable_trusted_protocol: bool,
+    node_probe_cache: &Arc<NodeProbeCache>,
+    clock_snapshot: fireemu_core_session::clock::ClockSnapshot,
+) -> Result<Vec<fireemu_adapter_functions::runtime::CodebaseSpec>, String> {
+    let discovery = start_codebase(
+        cfg,
+        codebase,
+        hosts,
+        runner_secret,
+        callable_trusted_protocol,
+        node_probe_cache,
+        clock_snapshot,
+    )
+    .await?;
+    if cfg.effective_functions_isolation() != FunctionsIsolation::Function
+        || discovery.manifest.functions.is_empty()
+    {
+        return Ok(vec![discovery]);
+    }
+    let python = crate::python_functions::codebase_language(codebase) == RuntimeLanguage::Python;
+    isolation::isolate_functions(cfg, hosts, python, discovery, clock_snapshot).await
+}
+
 /// How one codebase's runner is launched. Start-up and `up --plan` both decide it here, so the
 /// plan names the interpreter a start would use.
 pub(crate) struct RunnerSelection {
@@ -4361,7 +4466,6 @@ async fn start_codebase(
     }
     let python_environment = selection.python_environment;
     let mut command = selection.command;
-    let inspecting = cfg.functions_inspect_dynamic || cfg.functions_inspect_port.is_some();
     let inspector = inspector_arguments(
         python,
         cfg.functions_inspect_dynamic,
@@ -4553,54 +4657,7 @@ async fn start_codebase(
             eprintln!("note: {note}");
         }
     }
-    if cfg.functions_clock.date_virtual {
-        let capability = runner.hello().clock.as_ref();
-        let supports = capability.is_some_and(|c| {
-            c["version"] == 1
-                && c["date"] == true
-                && (!cfg.functions_clock.timers_virtual || c["timers"] == true)
-        });
-        if !supports {
-            runner.kill_now();
-            let why = if python {
-                " (Python code runs on real time)"
-            } else {
-                ""
-            };
-            return Err(format!(
-                "the Functions codebase {label:?}: runner does not support the requested virtual clock{why}"
-            ));
-        }
-        if let Err(error) = runner.sync_clock(clock_snapshot).await {
-            runner.kill_now();
-            return Err(error);
-        }
-    }
-    if inspecting && !python {
-        let actual = runner.hello().inspector_port;
-        let port_matches = cfg
-            .functions_inspect_port
-            .is_none_or(|expected| actual == Some(expected));
-        let endpoint_active = match actual {
-            Some(port) => inspector_endpoint_is_active(port).await,
-            None => false,
-        };
-        if !endpoint_active || !port_matches {
-            runner.kill_now();
-            return Err(match cfg.functions_inspect_port {
-                Some(expected) => format!(
-                    "the Functions codebase {label:?}: requested debugger port {expected} is not active"
-                ),
-                None => format!(
-                    "the Functions codebase {label:?}: the dynamically assigned debugger port is not active"
-                ),
-            });
-        }
-        eprintln!(
-            "functions[{label}]: using debug port {}",
-            actual.expect("the active inspector port was checked above")
-        );
-    }
+    check_started_runner(cfg, label, python, &runner, clock_snapshot).await?;
     let configured = (|| {
         check_declared_params(
             runner.hello().params.as_ref(),
@@ -4700,6 +4757,7 @@ async fn start_codebase(
             eprintln!("note: {note}");
         }
         Ok(fireemu_adapter_functions::runtime::CodebaseSpec {
+            function: None,
             name: label.clone(),
             manifest,
             runner: runner.clone(),
@@ -13887,6 +13945,7 @@ sys.stdin.buffer.read()
         let runtime = FunctionsRuntime::with_codebases(
             vec![
                 CodebaseSpec {
+                    function: None,
                     name: "default".to_owned(),
                     manifest,
                     runner: initial,
@@ -13894,6 +13953,7 @@ sys.stdin.buffer.read()
                     cleanup_dir: None,
                 },
                 CodebaseSpec {
+                    function: None,
                     name: "unrelated".to_owned(),
                     manifest: fireemu_core_functions::manifest::FunctionManifest::default(),
                     runner: unrelated.clone(),
@@ -13918,6 +13978,7 @@ sys.stdin.buffer.read()
             .unwrap();
         runtime
             .reload_codebase(CodebaseSpec {
+                function: None,
                 name: "default".to_owned(),
                 manifest: runtime.manifest().clone(),
                 runner: replacement,
@@ -16961,6 +17022,7 @@ module.exports = { tick, observer };
         )));
         let runtime = FunctionsRuntime::with_codebases(
             vec![CodebaseSpec {
+                function: None,
                 name: "default".into(),
                 manifest,
                 runner,

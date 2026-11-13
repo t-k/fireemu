@@ -91,6 +91,22 @@ pub const INHERITED_ENV: &[&str] = &[
 /// Variable prefixes inherited by a runner (Node version managers only).
 pub const INHERITED_ENV_PREFIXES: &[&str] = &["VOLTA_", "MISE_", "ASDF_", "FNM_"];
 
+/// Internal spawn metadata listing secret names to exclude from inherited environment variables.
+pub const LOCAL_SECRET_NAMES_VARIABLE: &str = "FIREEMU_LOCAL_SECRET_NAMES_JSON";
+
+/// Removes secret names from an environment before declared secrets are added.
+pub fn remove_local_secrets(env: &mut Vec<(String, String)>, names: &[String]) {
+    env.retain(|(key, _)| {
+        !names.iter().any(|name| {
+            if cfg!(windows) {
+                key.eq_ignore_ascii_case(name)
+            } else {
+                key == name
+            }
+        })
+    });
+}
+
 const LOG_CAPACITY: usize = 1_000;
 const LOG_ENTRY_BYTE_LIMIT: usize = 1024 * 1024;
 const LOG_BUFFER_BYTE_LIMIT: usize = 8 * 1024 * 1024;
@@ -453,7 +469,9 @@ pub struct Runner {
     diagnostic_id: u64,
     child: AsyncMutex<Option<RunnerChild>>,
     #[cfg(unix)]
-    _lifetime_guard: RunnerLifetimeGuard,
+    _lifetime_guard: Option<RunnerLifetimeGuard>,
+    /// A placeholder for a runner that has not been started yet (see [`Runner::unstarted`]).
+    unstarted: bool,
     stdin: Arc<AsyncMutex<Option<ChildStdin>>>,
     hello: Hello,
     pub(crate) waiters: Arc<Mutex<HashMap<String, oneshot::Sender<InvokeOutcome>>>>,
@@ -539,6 +557,14 @@ fn child_env(extra: &[(String, String)]) -> Result<(Vec<(String, String)>, PathB
                 || INHERITED_ENV_PREFIXES.iter().any(|p| k.starts_with(p))
         })
         .collect();
+    if let Some(names) = extra
+        .iter()
+        .rev()
+        .find(|(key, _)| key == LOCAL_SECRET_NAMES_VARIABLE)
+        .and_then(|(_, value)| serde_json::from_str::<Vec<String>>(value).ok())
+    {
+        remove_local_secrets(&mut env, &names);
+    }
     let isolated = create_credential_sandbox()?;
     // `HOME` has to stay (the version-manager shims need it), so Application Default
     // Credentials are blocked explicitly: the well-known file lookup goes through
@@ -548,7 +574,8 @@ fn child_env(extra: &[(String, String)]) -> Result<(Vec<(String, String)>, PathB
         extra
             .iter()
             .filter(|(key, _)| {
-                key != "FIREBASE_TOKEN"
+                key != LOCAL_SECRET_NAMES_VARIABLE
+                    && key != "FIREBASE_TOKEN"
                     && key != "GOOGLE_APPLICATION_CREDENTIALS"
                     && !key.starts_with("CLOUDSDK_")
             })
@@ -966,7 +993,8 @@ impl Runner {
             diagnostic_id: RUNNER_DIAGNOSTIC_SEQUENCE.fetch_add(1, Ordering::Relaxed),
             child: AsyncMutex::new(Some(child)),
             #[cfg(unix)]
-            _lifetime_guard: lifetime_guard,
+            _lifetime_guard: Some(lifetime_guard),
+            unstarted: false,
             stdin: stdin_shared,
             hello,
             waiters,
@@ -978,6 +1006,37 @@ impl Runner {
             clock_sequence: AtomicU64::new(0),
             clock_status,
         })
+    }
+
+    /// A runner that has not been started: dead, with no process, no `hello` and no logs. A function
+    /// whose runner starts on its first trigger holds one until then; the runtime replaces it with a
+    /// started runner the way it replaces a crashed one, while the work that needs it waits.
+    #[must_use]
+    pub fn unstarted(label: &str) -> Self {
+        Self {
+            diagnostic_id: RUNNER_DIAGNOSTIC_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+            child: AsyncMutex::new(None),
+            #[cfg(unix)]
+            _lifetime_guard: None,
+            unstarted: true,
+            stdin: Arc::new(AsyncMutex::new(None)),
+            hello: Hello::default(),
+            waiters: Arc::new(Mutex::new(HashMap::new())),
+            logs: Arc::new(Mutex::new(LogBuffer::default())),
+            label: label.to_owned(),
+            alive: Arc::new(AtomicBool::new(false)),
+            credential_sandbox: Mutex::new(None),
+            clock_revision: AsyncMutex::new(None),
+            clock_sequence: AtomicU64::new(0),
+            clock_status: Arc::new(Mutex::new(Value::Null)),
+        }
+    }
+
+    /// Whether this is a placeholder that was never started: down because nobody has needed it yet,
+    /// not because it died.
+    #[must_use]
+    pub const fn never_started(&self) -> bool {
+        self.unstarted
     }
 
     /// Process-local identity for diagnostic cursors; a replacement never reuses its predecessor's cursor.
@@ -1129,6 +1188,10 @@ impl Runner {
         &self,
         snapshot: fireemu_core_session::clock::ClockSnapshot,
     ) -> Result<(), String> {
+        if self.unstarted {
+            // It starts with the clock of the moment it is started.
+            return Ok(());
+        }
         let mut revision = self.clock_revision.lock().await;
         if revision.is_some_and(|previous| previous >= snapshot.revision) {
             return Ok(());
@@ -1158,6 +1221,9 @@ impl Runner {
 
     /// Drain one bounded batch of application timers using native protocol deadlines.
     pub async fn run_due(&self, budget: usize) -> Result<Value, String> {
+        if self.unstarted {
+            return Ok(Value::Null);
+        }
         let _revision = self.clock_revision.lock().await;
         let id = format!(
             "clock-{}",
@@ -1207,7 +1273,9 @@ impl Runner {
             kill_process_group(pid);
             let _ = tokio::time::timeout(Duration::from_secs(2), wait_child(&mut child)).await;
         }
-        eprintln!("{} stopped", self.label);
+        if !self.unstarted {
+            eprintln!("{} stopped", self.label);
+        }
         remove_credential_sandbox(&self.credential_sandbox);
     }
 }
@@ -1340,7 +1408,7 @@ mod tests {
     /// was a child that had not run a line of JS yet.
     const NODE_HELLO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
-    use super::{child_env, LogBuffer, RunnerLog, LOG_CAPACITY};
+    use super::{child_env, LogBuffer, RunnerLog, LOCAL_SECRET_NAMES_VARIABLE, LOG_CAPACITY};
 
     #[test]
     fn node_paths_preserve_drive_unc_and_non_verbatim_paths() {
@@ -1722,6 +1790,52 @@ mod tests {
             .find(|(key, _)| key == name)
             .map(|(_, value)| value.as_str())
             .expect("environment variable")
+    }
+
+    #[test]
+    fn child_env_excludes_inherited_local_secrets_before_adding_declared_values() {
+        const PROBE: &str = "FIREEMU_SECRET_EXCLUSION_PROBE";
+        if std::env::var(PROBE).as_deref() == Ok("1") {
+            let (environment, sandbox) = child_env(&[
+                (
+                    LOCAL_SECRET_NAMES_VARIABLE.to_owned(),
+                    r#"["VOLTA_ALPHA_KEY","VOLTA_BETA_KEY","VOLTA_MISSING_KEY"]"#.to_owned(),
+                ),
+                ("VOLTA_ALPHA_KEY".to_owned(), "local-alpha".to_owned()),
+            ])
+            .unwrap();
+            assert_eq!(
+                environment_value(&environment, "VOLTA_ALPHA_KEY"),
+                "local-alpha"
+            );
+            for name in [
+                "VOLTA_BETA_KEY",
+                "VOLTA_MISSING_KEY",
+                LOCAL_SECRET_NAMES_VARIABLE,
+            ] {
+                assert!(environment.iter().all(|(key, _)| key != name), "{name}");
+            }
+            assert_eq!(
+                environment_value(&environment, "VOLTA_UNRELATED"),
+                "retained"
+            );
+            std::fs::remove_dir_all(sandbox).unwrap();
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "runner::tests::child_env_excludes_inherited_local_secrets_before_adding_declared_values"])
+            .env(PROBE, "1")
+            .env("VOLTA_ALPHA_KEY", "inherited-alpha")
+            .env("VOLTA_BETA_KEY", "inherited-beta")
+            .env("VOLTA_MISSING_KEY", "inherited-missing")
+            .env("VOLTA_UNRELATED", "retained")
+            .output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]

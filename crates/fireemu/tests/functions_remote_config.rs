@@ -201,6 +201,7 @@ async fn remote_config_control_delivers_real_sdk_events_in_both_profiles() {
         )));
         let runtime = FunctionsRuntime::with_codebases(
             vec![CodebaseSpec {
+                function: None,
                 name: "default".into(),
                 manifest,
                 runner,

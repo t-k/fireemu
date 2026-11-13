@@ -148,6 +148,32 @@ Node codebases reload source changes automatically. Already-admitted invocations
 
 On Windows, reload snapshots are created with a protected DACL before source or local secret files are copied. Fireemu checks the snapshot directory, temporary parent and ancestors for unsafe permissions or reparse points, and refuses the snapshot if it cannot verify them. This requires Windows PowerShell; see [Troubleshooting](../../guides/troubleshooting/).
 
+## Process isolation (`functions.isolation`)
+
+Production runs every function in its own instance: the function's identity (`FUNCTION_TARGET`, `FUNCTION_SIGNATURE_TYPE`, `K_SERVICE`) and the secrets it declares are in its environment from the start, it has its own module graph, a second-generation instance serves up to `concurrency` calls of that one function at a time (the first generation serves one), and an instance starts on the first request. `functions.isolation` chooses how closely a run follows that.
+
+| `functions.isolation` | Processes | What it means |
+|---|---|---|
+| `"codebase"` (the default; `productionExact` is the exception) | One runner process per codebase | Cheapest to start. The functions share one module graph: module-level state, caches and singletons are visible to every function. They share one process environment too: `FUNCTION_TARGET`, `FUNCTION_SIGNATURE_TYPE` and `K_SERVICE` name the call that started most recently, so a function that reads one after an `await` while another function was called sees the other function. A call that uses a local secret from `.secret.local` runs alone, so it also hides concurrency a deployed function would have. Secrets are hidden from every function that does not declare them, while user code loads and while a call runs. |
+| `"function"` (the default under `productionExact`) | One runner process per function of each codebase | The shape of production. Each process loads the codebase on its own, starts with its function's identity and with the local secrets that function declares already in its environment (so module-level code that reads them sees them), and serves only that function, at the concurrency the function is configured for. Nothing is rewritten, hidden or queued per call. One function's process crashing or restarting does not touch the others. |
+
+```json
+{ "schemaVersion": 1, "functions": { "isolation": "function" } }
+```
+
+With `"function"`, Fireemu first starts a discovery process to read the codebase's exports and stops it again. A function's own process then starts on the first request, event or task for that function, as a production instance does. Work that arrives meanwhile waits for the process and is delivered once, in order: an event is never dropped or reordered by a cold start. Two kinds of function start with the codebase instead: Blocking Auth functions, because a sign-up must not pay for a cold start inside its short deadline, and every function when `--inspect-functions` is given, so each process reports its debugger port up front. A process stays up once started; stopping idle processes is not done yet. A function whose process exits is started again on its next use, as a codebase process is, and a source reload replaces every process of the codebase together: if the reload changes which functions the codebase serves, it is rejected and the previous processes keep running. The log lines of every process are forwarded as for the codebase process, and the status of the control API lists one entry per process with its `function` and whether it has `started`. It applies to Python codebases too.
+
+**What it costs.** One process, and one copy of the loaded codebase, per function that is used. Measured on a laptop with Node 24 and `firebase-functions` 7 (resident memory counts shared pages in each process, so it overstates the real total):
+
+| Codebase | `"codebase"` | `"function"`, every function started |
+|---|---|---|
+| 10 functions | 1.3 s to start and stop, 121 MiB, 1 process | 2.5 s, 1.2 GiB, 10 processes |
+| 22 functions | 1.0 s, 126 MiB, 1 process | 3.0 s, 2.7 GiB, 22 processes |
+
+Because a process starts on first use, a run that touches few functions pays for those only, and the first call of each pays a cold start (about one second). A test suite that calls every function ends up at the right-hand column. For that reason `"codebase"` stays the default for development and CI; `productionExact` selects `"function"`.
+
+`"function"` is refused with more than 64 served functions in a codebase (set `functions.isolation` to `"codebase"`, the default, to serve it from one process). Written explicitly it is also refused with `functions.runner` (a custom runner command is started once per codebase) and with a fixed `--inspect-functions <port>` (processes cannot share a port; `--inspect-functions` without a port gives each process its own). When only `productionExact` chose `"function"`, those two cases use `"codebase"` instead of refusing; an explicit `functions.isolation = "codebase"` always wins.
+
 ## Debugging
 
 Run the Functions runner under the Node inspector with `--inspect-functions`:

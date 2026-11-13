@@ -948,9 +948,15 @@ mod tests {
             manifest["developmentDefaults"][1],
             json!({"key":"auth.allowUnsignedIdTokens", "value":"true", "source":"explicit"})
         );
+        let undeclared = manifest["developmentDefaults"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["key"] == "storage.undeclaredBuckets")
+            .expect("storage.undeclaredBuckets is reported");
         assert_eq!(
-            manifest["developmentDefaults"][14],
-            json!({"key":"storage.undeclaredBuckets", "value":"refuse", "source":"productionExact"})
+            undeclared,
+            &json!({"key":"storage.undeclaredBuckets", "value":"refuse", "source":"productionExact"})
         );
         assert_eq!(
             manifest["developmentDefaults"][2],

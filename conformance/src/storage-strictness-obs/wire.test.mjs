@@ -101,15 +101,18 @@ test("unreadable and cancelled bodies are unknown and never retried", async () =
 
 test("the whole-run deadline aborts an in-flight request and refuses later cleanup sends", async () => {
   let signal;
+  const deadline = Date.now() + 25;
   const { client } = wire(
     (_r, options) => {
       signal = options.signal;
       return new Promise(() => {});
     },
-    { deadline: Date.now() + 25 },
+    { deadline },
   );
   assert.equal((await client.wire(requests(target).W1)).unknown, true);
   assert.equal(signal.aborted, true);
+  // The abort timer can fire a millisecond before the wall clock reaches the deadline.
+  while (Date.now() <= deadline) await new Promise((resolve) => setTimeout(resolve, 2));
   await assert.rejects(client.wire(requests(target).K3), /deadline/);
 });
 

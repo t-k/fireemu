@@ -691,6 +691,71 @@ async fn emulator_delete_removes_a_pending_task_before_dispatch() {
     h.stop().await;
 }
 
+#[tokio::test]
+async fn emulator_delete_answers_ok_once_for_a_dispatched_task() {
+    let h = start(
+        "emulator-delete-dispatched",
+        FunctionsHttpProfile::Emulator,
+        NameReuse::Retained,
+        60,
+    )
+    .await;
+    let (addr, server) = tasks_listener(&h).await;
+    let queued = body_of(&json!({"name": format!("{BASE}/tasks/dispatched")}));
+    assert_eq!(
+        wire(addr, "POST", TASKS, queued.to_string().as_bytes())
+            .await
+            .0,
+        200
+    );
+    h.idle().await;
+    assert!(!std::fs::read_to_string(&h.probe).unwrap().is_empty());
+    let path = format!("{TASKS}/dispatched");
+    let (status, head, body) = wire(addr, "DELETE", &path, b"").await;
+    assert_eq!((status, body.as_str()), (200, "{\"res\":\"OK\"}"));
+    assert!(head
+        .to_ascii_lowercase()
+        .contains("content-type: application/json; charset=utf-8"));
+    for path in [&path, &format!("{TASKS}/never-enqueued")] {
+        let (status, _, body) = wire(addr, "DELETE", path, b"").await;
+        assert_eq!(
+            (status, body.as_str()),
+            (404, "Tried to remove a task that doesn't exist")
+        );
+    }
+    server.abort();
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn strict_delete_of_a_dispatched_task_is_unchanged() {
+    let h = start(
+        "strict-delete-dispatched",
+        FunctionsHttpProfile::Strict,
+        NameReuse::Immediate,
+        600,
+    )
+    .await;
+    let (addr, server) = tasks_listener(&h).await;
+    let queued = body_of(&json!({"name": format!("{BASE}/tasks/dispatched")}));
+    assert_eq!(
+        wire(addr, "POST", TASKS, queued.to_string().as_bytes())
+            .await
+            .0,
+        200
+    );
+    h.idle().await;
+    assert!(!std::fs::read_to_string(&h.probe).unwrap().is_empty());
+    let path = format!("{TASKS}/dispatched");
+    for path in [&path, &path, &format!("{TASKS}/never-enqueued")] {
+        let (status, _, body) = wire(addr, "DELETE", path, b"").await;
+        assert_eq!(status, 404);
+        assert_eq!(body, "{\n  \"error\": {\n    \"code\": 404,\n    \"message\": \"Requested entity was not found.\",\n    \"status\": \"NOT_FOUND\"\n  }\n}\n");
+    }
+    server.abort();
+    h.stop().await;
+}
+
 // ---- the checks of the queue and of the size, and the pieces of the dispatch that differ in the strict profile ------------
 
 fn refused(

@@ -738,6 +738,8 @@ fn source_name(source: EventSource) -> &'static str {
 struct Inner {
     /// Bounded per-function Cloud Tasks queues and conservative retained-data accounting.
     task_scheduler: crate::task_scheduler::TaskScheduler,
+    /// Emulator task names retained until their first deletion.
+    emulator_task_names: BTreeSet<String>,
     /// Supplies the id of a task that did not name itself.
     next_task: u64,
     outbox: Outbox,
@@ -1693,6 +1695,7 @@ impl FunctionsRuntime {
             dispatch_encoding_probe: Mutex::new(None),
             inner: Mutex::new(Inner {
                 task_scheduler,
+                emulator_task_names: BTreeSet::new(),
                 next_task: 0,
                 outbox: Outbox::new(),
                 payloads: BTreeMap::new(),
@@ -3773,14 +3776,21 @@ impl FunctionsRuntime {
             .saturating_add(project.len())
             .saturating_add(location.len())
             .saturating_add(queue_key_bytes);
-        let admission = self
+        let mut inner = self
             .inner
             .lock()
-            .map_err(|_| refuse(500, "runtime poisoned"))?
-            .task_scheduler
-            .enqueue_at(queue, task.clone(), retry, retained_bytes, self.task_now());
+            .map_err(|_| refuse(500, "runtime poisoned"))?;
+        let admission = inner.task_scheduler.enqueue_at(
+            queue,
+            task.clone(),
+            retry,
+            retained_bytes,
+            self.task_now(),
+        );
         match admission {
-            Ok(()) => {}
+            Ok(()) => {
+                inner.emulator_task_names.insert(task.name.clone());
+            }
             Err(AdmissionError::Duplicate | AdmissionError::QueueFull) => {
                 return Err(refuse(409, "A task with the same name already exists"));
             }
@@ -3791,6 +3801,7 @@ impl FunctionsRuntime {
                 return Err(refuse(503, "the Functions runtime is shutting down"));
             }
         }
+        drop(inner);
         let answer = crate::tasks::accepted_response(&task);
         self.wake.notify_one();
         Ok(answer)
@@ -3992,15 +4003,15 @@ impl FunctionsRuntime {
         }
         let name = format!("projects/{project}/locations/{location}/queues/{queue}/tasks/{id}");
         let now_task = self.task_now();
-        let removed = self
-            .inner
-            .lock()
-            .map_err(|_| EnqueueRefusal {
-                status: 500,
-                body: "runtime poisoned".to_owned(),
-            })?
-            .task_scheduler
-            .delete_pending(queue, &name, now_task);
+        let mut inner = self.inner.lock().map_err(|_| EnqueueRefusal {
+            status: 500,
+            body: "runtime poisoned".to_owned(),
+        })?;
+        let mut removed = inner.task_scheduler.delete_pending(queue, &name, now_task);
+        if !self.is_strict() {
+            removed |= inner.emulator_task_names.remove(&name);
+        }
+        drop(inner);
         if removed {
             self.wake.notify_one();
             Ok(())
@@ -5281,6 +5292,7 @@ impl FunctionsRuntime {
                 inner.schedule_recheck_pending = false;
                 // A task accepted before the reset must not reach the new session's handlers.
                 inner.task_scheduler.reset(self.task_now());
+                inner.emulator_task_names.clear();
                 for job in &mut inner.jobs {
                     job.cursor = now;
                 }

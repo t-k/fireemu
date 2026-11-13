@@ -1887,30 +1887,30 @@
           "row": "allow-and-queue",
           "status": "PASS",
           "tests": [
-            "crates/fireemu-adapter-functions/src/runtime.rs:allow_and_queue_admit_overlapping_scheduler_runs"
+            "crates/fireemu-adapter-functions/src/runtime/schedule_capacity_tests.rs:allow_and_queue_admit_overlapping_scheduler_runs"
           ]
         },
         {
           "row": "skip",
           "status": "PASS",
           "tests": [
-            "crates/fireemu-adapter-functions/src/runtime.rs:skip_drops_a_run_that_overlaps_a_queued_one_for_good",
-            "crates/fireemu-adapter-functions/src/runtime.rs:one_jump_over_several_occurrences_overlaps_itself_under_skip_and_reject"
+            "crates/fireemu-adapter-functions/src/runtime/schedule_capacity_tests.rs:skip_drops_a_run_that_overlaps_a_queued_one_for_good",
+            "crates/fireemu-adapter-functions/src/runtime/schedule_capacity_tests.rs:one_jump_over_several_occurrences_overlaps_itself_under_skip_and_reject"
           ]
         },
         {
           "row": "reject",
           "status": "PASS",
           "tests": [
-            "crates/fireemu-adapter-functions/src/runtime.rs:reject_counts_an_overlapping_scheduler_run_as_a_dead_letter",
-            "crates/fireemu-adapter-functions/src/runtime.rs:one_jump_over_several_occurrences_overlaps_itself_under_skip_and_reject"
+            "crates/fireemu-adapter-functions/src/runtime/schedule_capacity_tests.rs:reject_counts_an_overlapping_scheduler_run_as_a_dead_letter",
+            "crates/fireemu-adapter-functions/src/runtime/schedule_capacity_tests.rs:one_jump_over_several_occurrences_overlaps_itself_under_skip_and_reject"
           ]
         },
         {
           "row": "manual-run-against-scheduler-run",
           "status": "PASS",
           "tests": [
-            "crates/fireemu-adapter-functions/src/runtime.rs:a_manual_run_follows_the_overlap_policy_against_a_scheduler_run",
+            "crates/fireemu-adapter-functions/src/runtime/schedule_capacity_tests.rs:a_manual_run_follows_the_overlap_policy_against_a_scheduler_run",
             "crates/fireemu-adapter-functions/tests/runtime.rs:overlap_policies_skip_queue_or_reject_concurrent_schedule_runs"
           ]
         },
@@ -1919,31 +1919,31 @@
           "status": "PASS",
           "tests": [
             "crates/fireemu/src/functions.rs:the_overlap_policy_defaults_by_profile_and_an_explicit_one_wins",
-            "crates/fireemu-adapter-functions/src/runtime.rs:skip_in_flight_drops_an_occurrence_while_a_handler_is_running",
-            "crates/fireemu-adapter-functions/src/runtime.rs:skip_in_flight_looks_only_at_the_same_function",
-            "crates/fireemu-adapter-functions/src/runtime.rs:skip_in_flight_matches_a_reference_of_the_running_handler"
+            "crates/fireemu-adapter-functions/src/runtime/schedule_capacity_tests.rs:skip_in_flight_drops_an_occurrence_while_a_handler_is_running",
+            "crates/fireemu-adapter-functions/src/runtime/schedule_capacity_tests.rs:skip_in_flight_looks_only_at_the_same_function",
+            "crates/fireemu-adapter-functions/src/runtime/schedule_capacity_tests.rs:skip_in_flight_matches_a_reference_of_the_running_handler"
           ]
         },
         {
           "row": "skip-in-flight-manual-never-refused",
           "status": "PASS",
           "tests": [
-            "crates/fireemu-adapter-functions/src/runtime.rs:skip_in_flight_never_refuses_a_manual_run"
+            "crates/fireemu-adapter-functions/src/runtime/schedule_capacity_tests.rs:skip_in_flight_never_refuses_a_manual_run"
           ]
         },
         {
           "row": "skip-in-flight-one-sweep-not-counted",
           "status": "PASS",
           "tests": [
-            "crates/fireemu-adapter-functions/src/runtime.rs:skip_in_flight_keeps_every_occurrence_of_one_clock_move",
-            "crates/fireemu-adapter-functions/src/runtime.rs:skip_in_flight_does_not_count_a_queued_run"
+            "crates/fireemu-adapter-functions/src/runtime/schedule_capacity_tests.rs:skip_in_flight_keeps_every_occurrence_of_one_clock_move",
+            "crates/fireemu-adapter-functions/src/runtime/schedule_capacity_tests.rs:skip_in_flight_does_not_count_a_queued_run"
           ]
         },
         {
           "row": "long-running-handler",
           "status": "PASS",
           "tests": [
-            "crates/fireemu-adapter-functions/src/runtime.rs:a_handler_that_is_still_running_makes_its_function_busy"
+            "crates/fireemu-adapter-functions/src/runtime/schedule_capacity_tests.rs:a_handler_that_is_still_running_makes_its_function_busy"
           ]
         }
       ],

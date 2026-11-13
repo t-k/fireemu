@@ -823,13 +823,9 @@ impl Automaton {
         let points = graph.points();
         let old_len = graph.states.len();
         let mut gaps = Vec::new();
-        for i in 0..old_len {
+        for (i, state) in graph.states.iter().enumerate() {
             for (n, &lo) in points.iter().enumerate() {
-                if !graph.states[i]
-                    .edges
-                    .iter()
-                    .any(|e| e.lo <= lo && lo <= e.hi)
-                {
+                if !state.edges.iter().any(|e| e.lo <= lo && lo <= e.hi) {
                     gaps.push((i, lo, points.get(n + 1).map_or(u16::MAX, |&p| p - 1)));
                     if gaps.len() > PROTOTYPE_EDGES {
                         return Err(Failure::Inconclusive);

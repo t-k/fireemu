@@ -171,7 +171,7 @@ fn factor_limit_rebinding_and_replay_reset() {
     subset.detach_totp_secrets();
     state.detach_totp_secrets();
     assert_eq!(state.rebind_totp_secrets(&subset), 1);
-    assert!(state.totp_factors().is_empty());
+    assert_eq!(state.totp_factors(), []);
 }
 
 #[test]

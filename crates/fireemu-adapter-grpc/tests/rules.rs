@@ -4664,7 +4664,10 @@ fn a_denied_request_reaches_the_denial_log_with_the_conditions_it_evaluated() {
     let logged = std::mem::take(&mut *denials.lock().unwrap());
     assert_eq!(logged.len(), 1);
     assert_eq!(logged[0].reason, "no match block covers this path");
-    assert!(logged[0].conditions.is_empty());
+    assert_eq!(
+        logged[0].conditions,
+        [] as [fireemu_adapter_grpc::rules::DeniedCondition; 0]
+    );
     assert_eq!(logged[0].uid, None);
 
     // No ruleset for the database: refused, not logged per request.

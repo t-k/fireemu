@@ -180,7 +180,7 @@ fn forgotten_same_pid_directory_is_replaced() {
 #[test]
 fn current_process_is_never_absent() {
     match process_state(std::process::id()) {
-        ProcessState::Running { start } => assert!(!start.is_empty()),
+        ProcessState::Running { start } => assert_ne!(start, ""),
         ProcessState::Unknown => {}
         ProcessState::Absent => panic!("current process is absent"),
     }

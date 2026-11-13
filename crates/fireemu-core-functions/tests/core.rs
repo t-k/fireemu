@@ -126,9 +126,10 @@ fn manifests_match_firestore_and_storage_triggers() {
         DocumentEvent::Deleted,
     );
     assert_eq!(deleted.len(), 1, "created triggers do not fire on delete");
-    assert!(m
-        .firestore_matches("other-db", "todos/t1", DocumentEvent::Created)
-        .is_empty());
+    assert_eq!(
+        m.firestore_matches("other-db", "todos/t1", DocumentEvent::Created),
+        [] as [fireemu_core_functions::manifest::FirestoreMatch<'_>; 0]
+    );
     let finalized = m.storage_matches(
         "demo-app.appspot.com",
         "demo-app.appspot.com",
@@ -140,13 +141,14 @@ fn manifests_match_firestore_and_storage_triggers() {
         m.storage_matches("other", "demo-app.appspot.com", ObjectEvent::Finalized)[0].name,
         "onOther"
     );
-    assert!(m
-        .storage_matches(
+    assert_eq!(
+        m.storage_matches(
             "demo-app.appspot.com",
             "demo-app.appspot.com",
             ObjectEvent::Deleted
-        )
-        .is_empty());
+        ),
+        [] as [&fireemu_core_functions::manifest::FunctionSpec; 0]
+    );
     assert_eq!(
         DocumentEvent::from_event_type(
             "google.cloud.firestore.document.v1.updated.withAuthContext"
@@ -1055,7 +1057,7 @@ mod groc_model {
             if want.is_some_and(|w| w < near_horizon) {
                 prop_assert_eq!(got, want, "{}", text);
             } else {
-                prop_assert!(got.is_none() || got.is_some_and(|g| g >= near_horizon), "{}", text);
+                prop_assert!(got.is_none_or(|g| g >= near_horizon), "{}", text);
             }
         }
     }

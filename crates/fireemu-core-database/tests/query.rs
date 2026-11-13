@@ -182,14 +182,23 @@ fn limits_keep_the_first_or_last_children_of_the_range() {
         keys(&tree, "/", &by_value().limit_to_first(10)),
         ["a", "b", "c", "d"]
     );
-    assert!(keys(&tree, "/", &by_value().limit_to_first(0)).is_empty());
+    assert_eq!(
+        keys(&tree, "/", &by_value().limit_to_first(0)),
+        [] as [std::string::String; 0]
+    );
 }
 
 #[test]
 fn queries_on_leaves_and_absent_locations_select_nothing() {
     let tree = tree_with(json!({"a": 1}));
-    assert!(keys(&tree, "/a", &QueryParams::default()).is_empty());
-    assert!(keys(&tree, "/missing", &QueryParams::default()).is_empty());
+    assert_eq!(
+        keys(&tree, "/a", &QueryParams::default()),
+        [] as [std::string::String; 0]
+    );
+    assert_eq!(
+        keys(&tree, "/missing", &QueryParams::default()),
+        [] as [std::string::String; 0]
+    );
 }
 
 #[test]

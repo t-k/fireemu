@@ -122,8 +122,8 @@ fn completion_reconciles_writes_instead_of_publishing_stale_backfill_postings() 
             tokenize,
         )
         .unwrap();
-    assert!(hits(&catalog, "old").is_empty());
-    assert!(hits(&catalog, "removed").is_empty());
+    assert_eq!(hits(&catalog, "old"), [] as [std::string::String; 0]);
+    assert_eq!(hits(&catalog, "removed"), [] as [std::string::String; 0]);
     assert_eq!(hits(&catalog, "updated"), ["products/a"]);
     assert_eq!(hits(&catalog, "inserted"), ["products/c"]);
 }
@@ -307,7 +307,7 @@ fn latin_purpose_lifecycle_keeps_index_analysis_across_batches_and_completion() 
     }
     assert_eq!(hits(&catalog, "iris"), ["products/copper"]);
     assert_eq!(hits(&catalog, "creme"), ["products/silver"]);
-    assert!(hits(&catalog, "İris").is_empty());
+    assert_eq!(hits(&catalog, "İris"), [] as [std::string::String; 0]);
     catalog
         .lifecycle(
             "demo-app",
@@ -322,5 +322,5 @@ fn latin_purpose_lifecycle_keeps_index_analysis_across_batches_and_completion() 
         )
         .unwrap();
     assert_eq!(hits(&catalog, "iris"), ["products/copper"]);
-    assert!(hits(&catalog, "İris").is_empty());
+    assert_eq!(hits(&catalog, "İris"), [] as [std::string::String; 0]);
 }

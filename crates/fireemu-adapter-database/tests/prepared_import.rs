@@ -212,7 +212,10 @@ fn an_import_checked_against_other_limits_is_not_installed() {
     let import = prepare_import("p", r#"{"a":1}"#.to_owned(), &limits).unwrap();
     let mut db = Database::new(RestOptions::default(), 1);
     assert!(db.install_import(import, NOW).is_err());
-    assert!(db.export_texts().is_empty());
+    assert_eq!(
+        db.export_texts(),
+        [] as [(std::string::String, std::string::String); 0]
+    );
 }
 
 #[test]

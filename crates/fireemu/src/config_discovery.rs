@@ -753,10 +753,10 @@ mod tests {
         let discovery = discover(Path::new("/p/app"), &USER, tree.stat(), |path: &Path| {
             opens.borrow_mut().push(path.to_path_buf());
             let n = opens.borrow().len();
-            Some(Opened::new(file(ME, 0o644), move || {
-                Ok(format!("open #{n}"))
-            }))
-            .filter(|_| path.ends_with("firebase.json"))
+            path.ends_with("firebase.json")
+                .then_some(Opened::new(file(ME, 0o644), move || {
+                    Ok(format!("open #{n}"))
+                }))
         });
         let candidates = opens
             .borrow()

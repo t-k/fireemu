@@ -81,7 +81,10 @@ fn a_stream_starts_with_the_value_and_follows_changes_below_it() {
         )]
     );
     // Writing the value it already has sends nothing.
-    assert!(write(&mut db, "PUT", "/s/a/b.json?ns=e1", "5").is_empty());
+    assert_eq!(
+        write(&mut db, "PUT", "/s/a/b.json?ns=e1", "5"),
+        [] as [(u64, fireemu_adapter_database::rest::SseEvent); 0]
+    );
     // Not observed: the official emulator dropped this event when it came within a few
     // milliseconds of the next one; every change is sent here.
     assert_eq!(
@@ -108,8 +111,14 @@ fn a_stream_starts_with_the_value_and_follows_changes_below_it() {
         .1
         .data
         .ends_with(&format!("\"data\":{{\"p\":{NOW}}}}}")));
-    assert!(write(&mut db, "PUT", "/other.json?ns=e1", "1").is_empty());
-    assert!(write(&mut db, "PUT", "/s.json?ns=e2", "1").is_empty());
+    assert_eq!(
+        write(&mut db, "PUT", "/other.json?ns=e1", "1"),
+        [] as [(u64, fireemu_adapter_database::rest::SseEvent); 0]
+    );
+    assert_eq!(
+        write(&mut db, "PUT", "/s.json?ns=e2", "1"),
+        [] as [(u64, fireemu_adapter_database::rest::SseEvent); 0]
+    );
 }
 
 #[test]
@@ -123,7 +132,10 @@ fn a_query_stream_follows_its_window() {
         vec![(id, put("/b", "5"))]
     );
     // A child outside the window changes nothing the stream shows.
-    assert!(write(&mut db, "PATCH", "/s.json?ns=e1", r#"{"c":3,"a/d":4}"#).is_empty());
+    assert_eq!(
+        write(&mut db, "PATCH", "/s.json?ns=e1", r#"{"c":3,"a/d":4}"#),
+        [] as [(u64, fireemu_adapter_database::rest::SseEvent); 0]
+    );
     assert_eq!(
         write(&mut db, "PUT", "/.json?ns=e1", r#"{"s":{"x":1}}"#),
         vec![(id, put("/", "null"))]
@@ -143,7 +155,10 @@ fn closed_streams_receive_nothing() {
     assert_eq!(db.subscription_count(), 1);
     db.unsubscribe(id);
     assert_eq!(db.subscription_count(), 0);
-    assert!(write(&mut db, "PUT", "/s.json?ns=e1", "1").is_empty());
+    assert_eq!(
+        write(&mut db, "PUT", "/s.json?ns=e1", "1"),
+        [] as [(u64, fireemu_adapter_database::rest::SseEvent); 0]
+    );
 }
 
 #[test]
@@ -265,12 +280,18 @@ fn a_write_of_an_equal_number_is_no_write() {
     let mut db = Database::new(RestOptions::default(), 1);
     write(&mut db, "PUT", "/s.json?ns=e9", "1");
     let (id, _) = open(&mut db, "/s.json?ns=e9");
-    assert!(write(&mut db, "PUT", "/s.json?ns=e9", "1.0").is_empty());
+    assert_eq!(
+        write(&mut db, "PUT", "/s.json?ns=e9", "1.0"),
+        [] as [(u64, fireemu_adapter_database::rest::SseEvent); 0]
+    );
     assert_eq!(
         write(&mut db, "PUT", "/s.json?ns=e9", "-0.0"),
         vec![(id, put("/", "-0.0"))]
     );
-    assert!(write(&mut db, "PUT", "/s.json?ns=e9", "0").is_empty());
+    assert_eq!(
+        write(&mut db, "PUT", "/s.json?ns=e9", "0"),
+        [] as [(u64, fireemu_adapter_database::rest::SseEvent); 0]
+    );
     let read = db.handle(&request("GET", "/s.json?ns=e9", false, ""), 0);
     match read {
         fireemu_adapter_database::rest::Handled::Response { response, .. } => {
@@ -299,8 +320,14 @@ fn a_stream_sees_a_number_change_its_form_inside_a_larger_write() {
         vec![(a, put("/", "1.0")), (s, put("/", r#"{"a":1.0,"b":3}"#))]
     );
     // Equal writes keep the stored form and send nothing.
-    assert!(write(&mut db, "PUT", "/s.json?ns=f1", r#"{"a":1.0,"b":3}"#).is_empty());
-    assert!(write(&mut db, "PUT", "/s/a.json?ns=f1", "1").is_empty());
+    assert_eq!(
+        write(&mut db, "PUT", "/s.json?ns=f1", r#"{"a":1.0,"b":3}"#),
+        [] as [(u64, fireemu_adapter_database::rest::SseEvent); 0]
+    );
+    assert_eq!(
+        write(&mut db, "PUT", "/s/a.json?ns=f1", "1"),
+        [] as [(u64, fireemu_adapter_database::rest::SseEvent); 0]
+    );
     assert_eq!(
         write(&mut db, "PATCH", "/s.json?ns=f1", r#"{"a":1,"b":4}"#),
         vec![(s, patch("/", r#"{"b":4}"#))]
@@ -365,7 +392,10 @@ fn a_patch_above_a_stream_sends_the_entries_inside_it() {
             (c, patch("/", r#"{"zz":null}"#))
         ]
     );
-    assert!(write(&mut db, "PATCH", "/.json?ns=f3", r#"{"s/a":1}"#).is_empty());
+    assert_eq!(
+        write(&mut db, "PATCH", "/.json?ns=f3", r#"{"s/a":1}"#),
+        [] as [(u64, fireemu_adapter_database::rest::SseEvent); 0]
+    );
     assert_eq!(
         write(&mut db, "PATCH", "/.json?ns=f3", r#"{"s/a":2,"q":1}"#),
         vec![(s, patch("/", r#"{"a":2}"#))]
@@ -405,7 +435,10 @@ fn a_reset_queues_the_emptied_value_for_streams_until_drained() {
     let (id, _) = open(&mut db, "/s.json?ns=f6");
     db.clear_namespaces_where(|ns| ns == "f6");
     assert_eq!(db.drain_events(), vec![(id, put("/", "null"))]);
-    assert!(db.drain_events().is_empty());
+    assert_eq!(
+        db.drain_events(),
+        [] as [(u64, fireemu_adapter_database::rest::SseEvent); 0]
+    );
 }
 
 #[test]
@@ -417,6 +450,12 @@ fn a_null_write_beside_a_full_limit_window_sends_nothing() {
     write(&mut db, "PUT", "/q.json?ns=f5", r#"{"a":1,"b":2,"c":3}"#);
     let (_, initial) = open(&mut db, "/q.json?ns=f5&orderBy=%22%24key%22&limitToFirst=2");
     assert_eq!(initial, put("/", r#"{"a":1,"b":2}"#));
-    assert!(write(&mut db, "PUT", "/q/zz.json?ns=f5", "null").is_empty());
-    assert!(write(&mut db, "PUT", "/q/a0.json?ns=f5", "null").is_empty());
+    assert_eq!(
+        write(&mut db, "PUT", "/q/zz.json?ns=f5", "null"),
+        [] as [(u64, fireemu_adapter_database::rest::SseEvent); 0]
+    );
+    assert_eq!(
+        write(&mut db, "PUT", "/q/a0.json?ns=f5", "null"),
+        [] as [(u64, fireemu_adapter_database::rest::SseEvent); 0]
+    );
 }

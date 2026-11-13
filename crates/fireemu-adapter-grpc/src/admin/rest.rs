@@ -609,46 +609,38 @@ fn parse_create(
     if !valid_database_id(database) {
         return Err(error(tonic::Code::InvalidArgument, DATABASE_ID_RULE, None));
     }
-    let database_type = match parse_enum(
+    let database_type = parse_enum(
         body,
         "type",
         "database.type",
         "Database.DatabaseType",
         TYPES,
-    ) {
-        Ok(v) => v.flatten(),
-        Err(response) => return Err(response),
-    };
-    let edition = match parse_enum(
+    )?
+    .flatten();
+    let edition = parse_enum(
         body,
         "databaseEdition",
         "database.database_edition",
         "Database.DatabaseEdition",
         EDITIONS,
-    ) {
-        Ok(v) => v.flatten(),
-        Err(response) => return Err(response),
-    };
-    let concurrency = match parse_enum(
+    )?
+    .flatten();
+    let concurrency = parse_enum(
         body,
         "concurrencyMode",
         "database.concurrency_mode",
         "Database.ConcurrencyMode",
         CONCURRENCY,
-    ) {
-        Ok(v) => v.flatten(),
-        Err(response) => return Err(response),
-    };
-    let protection = match parse_enum(
+    )?
+    .flatten();
+    let protection = parse_enum(
         body,
         "deleteProtectionState",
         "database.delete_protection_state",
         "Database.DeleteProtectionState",
         PROTECTION,
-    ) {
-        Ok(v) => v.flatten(),
-        Err(response) => return Err(response),
-    };
+    )?
+    .flatten();
     let Some(location) = body
         .get("locationId")
         .and_then(Value::as_str)

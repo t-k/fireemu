@@ -321,12 +321,15 @@ fn rulesets_are_equal_when_source_and_profile_agree() {
     let a = "service cloud.firestore { match /{p=**} { allow read: if true; } }";
     let b = "service cloud.firestore { match /{p=**} { allow read: if false; } }";
     let parsed = |source: &str| parse_ruleset(source).unwrap();
-    assert!(parsed(a) == parsed(a));
-    assert!(parsed(a) != parsed(b));
-    assert!(parsed(a) != parsed(a).with_lone_surrogates(OFFICIAL));
-    assert!(parsed(a).with_lone_surrogates(OFFICIAL) == parsed(a).with_lone_surrogates(OFFICIAL));
+    assert_eq!(parsed(a), parsed(a));
+    assert_ne!(parsed(a), parsed(b));
+    assert_ne!(parsed(a), parsed(a).with_lone_surrogates(OFFICIAL));
+    assert_eq!(
+        parsed(a).with_lone_surrogates(OFFICIAL),
+        parsed(a).with_lone_surrogates(OFFICIAL)
+    );
     let versioned = format!("rules_version = '2';\n{a}");
-    assert!(parsed(a) != parsed(&versioned));
+    assert_ne!(parsed(a), parsed(&versioned));
 }
 
 // ---- operations on a string that holds a lone surrogate (not recorded, except where noted) ----

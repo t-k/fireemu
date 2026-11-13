@@ -772,14 +772,14 @@ fn descending_name_pages_under_a_parent_seek_the_parent_range() {
         let (rest, rest_stats) = db
             .run_query_after_document_with_stats(&query, None, &second[31].path)
             .unwrap();
-        assert!(rest.is_empty());
+        assert_eq!(rest, [] as [fireemu_core_firestore::store::Document; 0]);
         assert_eq!(rest_stats.index_paths_visited, 0);
 
         // A continuation outside the parent yields nothing and visits nothing.
         let (outside, outside_stats) = db
             .run_query_after_document_with_stats(&query, None, &path("owners/z/items/d0500"))
             .unwrap();
-        assert!(outside.is_empty());
+        assert_eq!(outside, [] as [fireemu_core_firestore::store::Document; 0]);
         assert_eq!(outside_stats.index_paths_visited, 0);
 
         // Ascending scans under the same parent are bounded the same way.
@@ -2124,7 +2124,7 @@ fn document_name_lookups_honor_the_snapshot_version_and_the_scope() {
         value: Value::Reference(path("items/d0005").resource_name()),
     });
     let (live, stats) = db.run_query_with_stats(&query, None).unwrap();
-    assert!(live.is_empty());
+    assert_eq!(live, [] as [fireemu_core_firestore::store::Document; 0]);
     assert!(stats.index_paths_visited <= 1);
     let (snapshot, stats) = db.run_query_with_stats(&query, Some(before)).unwrap();
     assert_eq!(snapshot.len(), 1);

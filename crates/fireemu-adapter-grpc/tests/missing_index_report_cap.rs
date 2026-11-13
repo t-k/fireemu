@@ -98,7 +98,10 @@ fn the_report_list_stops_at_its_bound() {
     assert_eq!(missing_index_dropped(Some("demo-cap")), 4);
     // Clearing makes room again, and a list that fills a second time says so a second time.
     assert_eq!(clear_missing_index_reports(None), 1000);
-    assert!(missing_index_reports().is_empty());
+    assert_eq!(
+        missing_index_reports(),
+        [] as [fireemu_adapter_grpc::gateway::MissingIndexReport; 0]
+    );
     assert_eq!(missing_index_dropped(None), 0);
     for n in 0..1000 {
         assert!(gateway

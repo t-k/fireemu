@@ -366,7 +366,10 @@ fn realtime_admission_refusal_keeps_source_and_listener_events_unpublished() {
         let received = session.receive(&mut db, &frame, 100);
         let reply: serde_json::Value = serde_json::from_str(&received.replies[0]).unwrap();
         assert_eq!(reply["d"]["b"]["s"], "unavailable");
-        assert!(received.events.is_empty());
+        assert_eq!(
+            received.events,
+            [] as [(u64, fireemu_adapter_database::rest::SseEvent); 0]
+        );
     }
     assert!(db.tree("app-second").unwrap().root().is_none());
     assert_eq!(*sink.published.lock().unwrap(), 0);

@@ -702,7 +702,10 @@ fn crossing_each_lifetime_alone_leaves_the_other_objects_usable() {
                     assert_eq!(resume_continuation(&s, &token).0, 200, "{context}");
                 }
             }
-            assert!(s.store.lock().unwrap().verification_codes().is_empty());
+            assert_eq!(
+                s.store.lock().unwrap().verification_codes(),
+                [] as [&fireemu_core_auth::store::VerificationCode; 0]
+            );
         }
     }
 }
@@ -757,15 +760,16 @@ fn an_expired_totp_enrollment_is_session_expired_in_grace_and_unknown_after_it()
             "INVALID_SESSION_INFO"
         };
         assert_refused(&refused, past, "past grace");
-        assert!(s
-            .store
-            .lock()
-            .unwrap()
-            .user_by_id(claims(&id_token)["user_id"].as_str().unwrap())
-            .unwrap()
-            .mfa
-            .totp_factors()
-            .is_empty());
+        assert_eq!(
+            s.store
+                .lock()
+                .unwrap()
+                .user_by_id(claims(&id_token)["user_id"].as_str().unwrap())
+                .unwrap()
+                .mfa
+                .totp_factors(),
+            []
+        );
         // The sign-up token still has 3600 s of life: a fresh enrollment session enrolls (under
         // production's rules with a fresh sign-in).
         let id_token = if strict { fresh_session(&s) } else { id_token };

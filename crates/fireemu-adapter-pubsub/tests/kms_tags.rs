@@ -175,13 +175,14 @@ impl Harness {
         &self,
         id: &str,
         mut topic: pb::Topic,
-    ) -> Result<pb::Topic, tonic::Status> {
+    ) -> Result<pb::Topic, Box<tonic::Status>> {
         topic.name = topic_name(id);
         self.grpc()
             .await
             .create_topic(topic)
             .await
             .map(tonic::Response::into_inner)
+            .map_err(Box::new)
     }
 
     async fn grpc_create(&self, id: &str, kms: &str, tags: &[(&str, &str)]) -> pb::Topic {
@@ -202,7 +203,7 @@ impl Harness {
         id: &str,
         topic: pb::Topic,
         paths: &[&str],
-    ) -> Result<pb::Topic, tonic::Status> {
+    ) -> Result<pb::Topic, Box<tonic::Status>> {
         let mut topic = topic;
         topic.name = topic_name(id);
         self.grpc()
@@ -215,6 +216,7 @@ impl Harness {
             })
             .await
             .map(tonic::Response::into_inner)
+            .map_err(Box::new)
     }
 }
 

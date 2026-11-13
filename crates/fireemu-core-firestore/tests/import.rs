@@ -177,7 +177,10 @@ fn an_empty_import_consumes_no_version() {
         .expect("an empty import succeeds");
     assert!(result.changes.is_empty());
     assert_eq!(state.current_version().value(), 0);
-    assert!(state.documents().is_empty());
+    assert_eq!(
+        state.documents(),
+        [] as [fireemu_core_firestore::store::Document; 0]
+    );
 }
 
 #[test]

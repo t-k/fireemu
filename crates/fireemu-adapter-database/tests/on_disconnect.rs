@@ -125,8 +125,14 @@ fn registering_answers_ok_and_refuses_bad_paths() {
 fn requests_without_a_path_are_not_answered_and_bad_data_is_a_connection_error() {
     let mut db = Database::new(RestOptions::default(), 1);
     let mut session = open(&mut db, "od2");
-    assert!(send(&mut db, &mut session, &request(1, "o", r#"{"d":1}"#)).is_empty());
-    assert!(send(&mut db, &mut session, &request(2, "oc", "{}")).is_empty());
+    assert_eq!(
+        send(&mut db, &mut session, &request(1, "o", r#"{"d":1}"#)),
+        [] as [std::string::String; 0]
+    );
+    assert_eq!(
+        send(&mut db, &mut session, &request(2, "oc", "{}")),
+        [] as [std::string::String; 0]
+    );
     for (r, (action, body)) in (3..).zip([
         ("om", r#"{"p":"/c","d":5}"#),
         ("o", r#"{"p":"/c","d":{"a.b":1}}"#),
@@ -326,7 +332,7 @@ fn an_update_that_fails_writes_nothing_at_all() {
         ],
     );
     assert_eq!(replies, vec![ok(1), ok(2)]);
-    assert!(pushes.is_empty());
+    assert_eq!(pushes, [] as [std::string::String; 0]);
     assert_eq!(value, "null");
 }
 
@@ -362,7 +368,7 @@ fn a_priority_is_checked_only_when_the_connection_ends() {
         ],
     );
     assert_eq!(replies, vec![ok(1), ok(2)]);
-    assert!(pushes.is_empty());
+    assert_eq!(pushes, [] as [std::string::String; 0]);
     assert_eq!(value, r#"{"c40":1}"#);
 }
 
@@ -398,7 +404,7 @@ fn a_request_without_a_path_keeps_the_connection() {
     let mut session = open(&mut db, "np");
     for frame in [request(1, "o", r#"{"d":1}"#), request(2, "oc", "{}")] {
         let received = session.receive(&mut db, &frame, NOW);
-        assert!(received.replies.is_empty());
+        assert_eq!(received.replies, [] as [std::string::String; 0]);
         assert!(!received.drop_connection, "{frame}");
         assert!(received.close.is_none(), "{frame}");
     }
@@ -420,7 +426,7 @@ fn operations_run_once_and_the_ending_connection_receives_nothing() {
     );
     db.drain_pushes();
     db.close_realtime(session.client(), LATER);
-    assert!(db.drain_pushes().is_empty());
+    assert_eq!(db.drain_pushes(), [] as [(u64, std::string::String); 0]);
     assert_eq!(rest(&mut db, "GET", "/.json?ns=once", ""), r#"{"a":1}"#);
     rest(&mut db, "DELETE", "/a.json?ns=once", "");
     db.close_realtime(session.client(), LATER);
@@ -537,7 +543,10 @@ fn a_session_reset_drops_the_registrations_of_the_namespaces_it_clears() {
         rest(&mut db, "GET", "/.json?ns=demo-default-rtdb", ""),
         "null"
     );
-    assert!(db.drain_events().is_empty());
+    assert_eq!(
+        db.drain_events(),
+        [] as [(u64, fireemu_adapter_database::rest::SseEvent); 0]
+    );
     assert_eq!(rest(&mut db, "GET", "/.json?ns=other", ""), r#"{"b":2}"#);
 }
 
@@ -563,6 +572,9 @@ fn a_snapshot_restore_drops_the_registrations_of_the_namespaces_it_restores() {
         rest(&mut db, "GET", "/.json?ns=demo-default-rtdb", ""),
         "null"
     );
-    assert!(db.drain_events().is_empty());
+    assert_eq!(
+        db.drain_events(),
+        [] as [(u64, fireemu_adapter_database::rest::SseEvent); 0]
+    );
     assert_eq!(rest(&mut db, "GET", "/.json?ns=other", ""), r#"{"b":2}"#);
 }

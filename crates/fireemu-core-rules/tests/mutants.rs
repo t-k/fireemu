@@ -365,7 +365,7 @@ fn parser_lexes_numbers_strings_comments_and_enforces_budgets() {
     let err = parse_ruleset("rules_version = '2';\n// comment\nservice cloud.firestore {\n  match /x/{y} { allow read: if ; }\n}").unwrap_err();
     assert_eq!(err.line, 4, "{err}");
     assert!(err.column > 20, "{err}");
-    assert!(!err.to_string().is_empty());
+    assert_ne!(err.to_string(), "");
     // Only `match`, `function` and `allow` may appear in a match body.
     assert!(parse_ruleset(
         "rules_version = '2';\nservice cloud.firestore { match /x/{y} { deny read: if true; } }"

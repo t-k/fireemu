@@ -196,7 +196,7 @@ fn waiting_segments_are_bounded() {
     let used: Vec<Segment> = (0..4).map(|n| seg(n, 1, "YQ..")).collect();
     assert_eq!(r.add(used.clone()).unwrap().len(), 4);
     // Segments already used do not wait again.
-    assert!(r.add(used).unwrap().is_empty());
+    assert_eq!(r.add(used).unwrap(), [] as [std::string::String; 0]);
     assert!(r.add(vec![seg(5, 2, "aaaaaaaa")]).is_ok());
     // Up to the limit may wait; one byte more may not.
     assert!(r.add(vec![seg(7, 1, "aaaaaaaa")]).is_ok());

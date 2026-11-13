@@ -836,7 +836,7 @@ async fn write_stream_first(
     h: &mut Harness,
     authorization: Option<&str>,
     app_check: &[&str],
-) -> Result<pb::WriteResponse, tonic::Status> {
+) -> Result<pb::WriteResponse, Box<tonic::Status>> {
     write_stream_first_on(h, DATABASE, authorization, app_check).await
 }
 
@@ -845,7 +845,7 @@ async fn write_stream_first_on(
     database: &str,
     authorization: Option<&str>,
     app_check: &[&str],
-) -> Result<pb::WriteResponse, tonic::Status> {
+) -> Result<pb::WriteResponse, Box<tonic::Status>> {
     let (tx, rx) = tokio::sync::mpsc::channel(8);
     let mut responses = h
         .client
@@ -867,14 +867,14 @@ async fn write_stream_first_on(
         .await
         .expect("a first response");
     drop(tx);
-    first
+    first.map_err(Box::new)
 }
 
 async fn listen_stream_first(
     h: &mut Harness,
     authorization: Option<&str>,
     app_check: &[&str],
-) -> Result<pb::ListenResponse, tonic::Status> {
+) -> Result<pb::ListenResponse, Box<tonic::Status>> {
     listen_stream_first_on(h, DATABASE, DOCS, authorization, app_check).await
 }
 
@@ -884,7 +884,7 @@ async fn listen_stream_first_on(
     documents: &str,
     authorization: Option<&str>,
     app_check: &[&str],
-) -> Result<pb::ListenResponse, tonic::Status> {
+) -> Result<pb::ListenResponse, Box<tonic::Status>> {
     let (tx, rx) = tokio::sync::mpsc::channel(8);
     let mut responses = h
         .client
@@ -922,7 +922,7 @@ async fn listen_stream_first_on(
         .await
         .expect("a first response");
     drop(tx);
-    first
+    first.map_err(Box::new)
 }
 
 #[tokio::test]
@@ -1003,7 +1003,7 @@ async fn an_admitted_grpc_stream_remains_admitted_after_token_expiry_until_it_re
         .await
         .expect("a handshake response")
         .expect("the stream was admitted");
-    assert!(!handshake.stream_id.is_empty());
+    assert_ne!(handshake.stream_id, "");
 
     h.advance(7200);
 
@@ -1050,7 +1050,7 @@ async fn owner_stream_traffic_follows_the_explicit_app_check_bypass() {
     let ok = write_stream_first(&mut h, Some("Bearer owner"), &[])
         .await
         .expect("the owner credential bypasses App Check");
-    assert!(!ok.stream_id.is_empty());
+    assert_ne!(ok.stream_id, "");
     let err = write_stream_first(&mut h, Some("Bearer ownerx"), &[])
         .await
         .expect_err("an owner-shaped credential is not the owner credential");
@@ -1482,7 +1482,7 @@ async fn app_check_decides_before_a_database_that_does_not_exist_on_both_streams
     // The Listen target is acknowledged before it is served, so the refusal may be the
     // message after it.
     let err = match refused {
-        Err(error) => error,
+        Err(error) => *error,
         Ok(_) => tonic::Status::ok("the target was acknowledged"),
     };
     assert!(

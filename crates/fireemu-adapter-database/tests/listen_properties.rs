@@ -326,8 +326,7 @@ impl WindowClient {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        children
-            .sort_by(|(ka, a), (kb, b)| self.window.order(ka, a).cmp(&self.window.order(kb, b)));
+        children.sort_by_key(|(ka, a)| self.window.order(ka, a));
         children
     }
 
@@ -342,7 +341,7 @@ impl WindowClient {
             .filter(|(k, v)| **v != Json::Null && self.window.in_range(k))
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        kept.sort_by(|(ka, a), (kb, b)| self.window.order(ka, a).cmp(&self.window.order(kb, b)));
+        kept.sort_by_key(|(ka, a)| self.window.order(ka, a));
         if let Some(limit) = self.window.limit() {
             if self.window.reverse() {
                 let skip = kept.len().saturating_sub(limit);

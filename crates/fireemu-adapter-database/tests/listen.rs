@@ -199,8 +199,11 @@ fn a_tagged_query_follows_its_window() {
     );
     // A child outside the window pushes nothing.
     rest(&mut db, "PUT", "/s/z.json?ns=l4", "9");
-    assert!(s.receive(&mut db, "0", NOW).replies.is_empty());
-    assert!(db.drain_pushes().is_empty());
+    assert_eq!(
+        s.receive(&mut db, "0", NOW).replies,
+        [] as [std::string::String; 0]
+    );
+    assert_eq!(db.drain_pushes(), [] as [(u64, std::string::String); 0]);
     // A deletion inside the window: the child that enters and the one that left.
     rest(&mut db, "DELETE", "/s/a.json?ns=l4", "");
     let id = s.client();
@@ -235,7 +238,7 @@ fn a_tagged_query_follows_its_window() {
         vec![reply(2, "ok", r#""""#)]
     );
     rest(&mut db, "PUT", "/s/0.json?ns=l4", "1");
-    assert!(db.drain_pushes().is_empty());
+    assert_eq!(db.drain_pushes(), [] as [(u64, std::string::String); 0]);
 }
 
 #[test]
@@ -300,10 +303,10 @@ fn other_connections_receive_pushes_and_closing_ends_their_listens() {
     );
     // Another namespace pushes nothing.
     rest(&mut db, "PUT", "/a/c.json?ns=other", "2");
-    assert!(db.drain_pushes().is_empty());
+    assert_eq!(db.drain_pushes(), [] as [(u64, std::string::String); 0]);
     db.close_realtime(reader.client(), NOW);
     rest(&mut db, "PUT", "/a/d.json?ns=l6", "3");
-    assert!(db.drain_pushes().is_empty());
+    assert_eq!(db.drain_pushes(), [] as [(u64, std::string::String); 0]);
 }
 
 /// One step of a recorded exchange: who acts (`A` and `B` are realtime connections, `REST`

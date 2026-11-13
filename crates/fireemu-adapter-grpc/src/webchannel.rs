@@ -892,6 +892,8 @@ impl Session {
         usize::try_from(capacity).unwrap_or(usize::MAX)
     }
 
+    // fetch_update is required for MSRV 1.85.
+    #[allow(deprecated)]
     fn trace_event(&self, event: &TraceEvent) {
         if !trace_enabled() {
             return;
@@ -4196,7 +4198,7 @@ mod tests {
         assert_eq!(first.await.unwrap(), "receiver gone");
         assert!(!session.is_terminated());
         assert!(!session.terminal_acknowledged());
-        assert!(session.delivery.lock().unwrap().outbound.len() == 1);
+        assert_eq!(session.delivery.lock().unwrap().outbound.len(), 1);
 
         let (cancel, mut cancelled) = oneshot::channel();
         let generation = session.replace_backchannel(cancel).unwrap();

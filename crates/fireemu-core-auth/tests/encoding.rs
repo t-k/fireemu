@@ -21,9 +21,10 @@ fn json_strings_escape_control_characters_and_lists_use_commas() {
     ])
     .write_canonical_json(&mut list);
     assert_eq!(list, "[1,true,null]");
-    assert!(!CustomClaimsError::ReservedName("sub".into())
-        .to_string()
-        .is_empty());
+    assert_ne!(
+        CustomClaimsError::ReservedName("sub".into()).to_string(),
+        ""
+    );
 }
 
 #[test]
@@ -42,9 +43,9 @@ fn signing_modes_encode_or_refuse_and_secrets_stay_redacted() {
         encode(&claims, SigningMode::SessionRsa),
         Err(JwtError::SigningUnsupported(_))
     ));
-    assert!(!JwtError::Malformed.to_string().is_empty());
+    assert_ne!(JwtError::Malformed.to_string(), "");
     let secret = TotpSecret::new(vec![1, 2, 3]);
     assert_eq!(secret.expose_for_enrollment(), &[1, 2, 3]);
     assert_eq!(format!("{secret:?}"), "TotpSecret([redacted])");
-    assert!(!base32::decode("1").unwrap_err().to_string().is_empty());
+    assert_ne!(base32::decode("1").unwrap_err().to_string(), "");
 }

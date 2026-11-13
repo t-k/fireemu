@@ -269,7 +269,7 @@ fn quantifier_group_escape_and_class_syntax_boundaries() {
     ] {
         assert!(Regex::new(bad).is_err(), "{bad}");
     }
-    assert!(!Regex::new("(?=a)").unwrap_err().to_string().is_empty());
+    assert_ne!(Regex::new("(?=a)").unwrap_err().to_string(), "");
     // A backreference is RE2's other refusal, and the official compiler's too.
     assert!(Regex::new("(a)\\1").is_err());
 }

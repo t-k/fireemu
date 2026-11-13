@@ -4142,7 +4142,7 @@ mod tests {
             .status()
             .unwrap();
         assert!(stopped.success());
-        daemon.join().unwrap();
+        let _ = daemon.join().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
         answer
     }

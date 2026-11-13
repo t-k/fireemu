@@ -599,11 +599,11 @@ mod tests {
             let mut cfg = json!({"profile": "emulator", "productionExact": exact,
                 "auth": {"multiTenant": {"allowTenants": false},
                     "tenants": [{"tenantId": "acme", "displayName": "Acme"}]}});
-            assert!(auth_tenant_problems(&cfg).is_empty());
+            assert_eq!(auth_tenant_problems(&cfg), [] as [std::string::String; 0]);
             cfg["profile"] = json!("strict");
             assert_eq!(auth_tenant_problems(&cfg).len(), 1);
             cfg["auth"]["multiTenant"]["allowTenants"] = json!(true);
-            assert!(auth_tenant_problems(&cfg).is_empty());
+            assert_eq!(auth_tenant_problems(&cfg), [] as [std::string::String; 0]);
         }
     }
 }

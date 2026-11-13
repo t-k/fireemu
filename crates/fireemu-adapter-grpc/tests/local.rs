@@ -1589,10 +1589,15 @@ fn project_index_exemptions_apply_to_writes_and_import_catalog_snapshots_only_in
     let mut indexes = IndexSet::default();
     indexes.set_single_field_indexes(&collection, &field, vec![]);
     backend.replace_project_database_indexes("demo-a", "(default)", indexes);
-    assert!(backend
-        .indexes_for_project_database("demo-a", "(default)")
-        .single_field_modes(&collection, &field)
-        .is_empty());
+    assert_eq!(
+        backend
+            .indexes_for_project_database("demo-a", "(default)")
+            .single_field_modes(&collection, &field),
+        [] as [(
+            fireemu_core_firestore::index::IndexQueryScope,
+            fireemu_core_firestore::index::IndexFieldMode
+        ); 0]
+    );
     assert_eq!(
         backend
             .indexes_for_project_database("demo-b", "(default)")
@@ -2624,7 +2629,7 @@ async fn list_collection_ids_supports_read_time_and_rejects_negative_page_size()
         .unwrap()
         .into_inner()
         .next_page_token;
-    assert!(!token.is_empty());
+    assert_ne!(token, "");
     let cross_parent = client
         .list_collection_ids(pb::ListCollectionIdsRequest {
             parent: "projects/other/databases/(default)/documents".to_owned(),
@@ -3738,7 +3743,7 @@ fn new_transaction_retry_batch_get_and_run_query_return_documents() {
                 .collect();
             (outcome.transaction, documents)
         };
-        assert!(!transaction.is_empty());
+        assert_ne!(transaction, [] as [u8; 0]);
         assert_ne!(transaction, previous);
         assert_eq!(documents.len(), 1);
         assert_eq!(documents[0].name, format!("{DOCS}/retry-snapshot/1"));
@@ -3775,11 +3780,11 @@ async fn new_transaction_queries_and_aggregations_read_the_snapshot() {
         first.document.is_none(),
         "the first response only carries the transaction"
     );
-    assert!(!first.transaction.is_empty());
+    assert_ne!(first.transaction, [] as [u8; 0]);
     let txn = first.transaction.clone();
     let second = stream.next().await.unwrap().unwrap();
     assert!(second.document.is_some());
-    assert!(second.transaction.is_empty());
+    assert_eq!(second.transaction, [] as [u8; 0]);
     assert!(stream.next().await.is_none());
 
     // The queried range is locked: a phantom row cannot be written out of band while the
@@ -3853,7 +3858,7 @@ async fn new_transaction_queries_and_aggregations_read_the_snapshot() {
         .unwrap()
         .into_inner();
     let only = stream.next().await.unwrap().unwrap();
-    assert!(!only.transaction.is_empty());
+    assert_ne!(only.transaction, [] as [u8; 0]);
     assert!(only.result.is_none());
     handle.abort();
 }
@@ -4082,7 +4087,7 @@ async fn run_query_logical_completion_covers_every_page_and_limit() {
             // Production marks no response `done`: the stream's end is the completion.
             while let Some(response) = stream.next().await {
                 let response = response.unwrap();
-                assert!(response.transaction.is_empty());
+                assert_eq!(response.transaction, [] as [u8; 0]);
                 assert_eq!(response.continuation_selector, None);
                 if let Some(document) = response.document {
                     names.push(document.name);
@@ -4232,7 +4237,7 @@ async fn large_read_only_query_pages_preserve_snapshot_completion_and_cleanup() 
         // Production marks no response `done`; the stream's end completes it.
         while let Some(item) = response {
             assert_eq!(item.read_time, read_time);
-            assert!(item.transaction.is_empty());
+            assert_eq!(item.transaction, [] as [u8; 0]);
             assert_eq!(item.continuation_selector, None);
             if let Some(document) = item.document {
                 assert_eq!(document.fields.get("payload"), Some(&s(&payload)));
@@ -4419,7 +4424,7 @@ async fn aggregation_transaction_locks_the_aggregated_range() {
     let result = response.result.unwrap();
     assert_eq!(result.aggregate_fields.get("count"), Some(&i(1)));
     assert_eq!(result.aggregate_fields.get("sum"), Some(&i(1)));
-    assert!(!response.transaction.is_empty());
+    assert_ne!(response.transaction, [] as [u8; 0]);
     assert!(stream.next().await.is_none());
 
     // Giving the missing field a value would change the aggregate, and the range is locked
@@ -4604,7 +4609,7 @@ async fn list_documents_pages_by_name_with_opaque_tokens() {
             .unwrap()
             .into_inner();
         assert_eq!(page.documents.len(), 5);
-        assert!(page.next_page_token.is_empty());
+        assert_eq!(page.next_page_token, "");
     }
     let err = client
         .list_documents(pb::ListDocumentsRequest {
@@ -5865,7 +5870,7 @@ async fn list_page_tokens_are_bound_to_their_listing() {
         .await
         .unwrap()
         .into_inner();
-    assert!(!page.next_page_token.is_empty());
+    assert_ne!(page.next_page_token, "");
     let continued = |token: String, collection: &str, selector| pb::ListDocumentsRequest {
         parent: DOCS.to_owned(),
         collection_id: collection.to_owned(),
@@ -8963,7 +8968,10 @@ async fn execute_pipeline_emulator_profile_answers_the_official_argument_checks(
                     1,
                 )
                 .await;
-                assert!(docs.is_empty());
+                assert_eq!(
+                    docs,
+                    [] as [fireemu_proto_firestore::google::firestore::v1::Document; 0]
+                );
             }
         }
         for (label, stages, text) in &refused {
@@ -9810,7 +9818,10 @@ async fn execute_pipeline_streams_all_pages_and_preserves_finite_limits() {
         1,
     )
     .await;
-    assert!(docs.is_empty());
+    assert_eq!(
+        docs,
+        [] as [fireemu_proto_firestore::google::firestore::v1::Document; 0]
+    );
     let mut empty = request(65);
     let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
         &mut empty.pipeline_type
@@ -10054,7 +10065,10 @@ async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_prese
         .await
         .unwrap()
         .into_inner();
-    assert!(drain_pipeline(too_large, 1).await.is_empty());
+    assert_eq!(
+        drain_pipeline(too_large, 1).await,
+        [] as [fireemu_proto_firestore::google::firestore::v1::Document; 0]
+    );
 
     // The strict client has a separate store; seed a nonempty baseline for O-5 zero.
     strict
@@ -10328,7 +10342,10 @@ async fn execute_pipeline_reads_collection_projects_field_aliases_and_applies_li
         )
         .await;
         match expected {
-            None => assert!(docs.is_empty()),
+            None => assert_eq!(
+                docs,
+                [] as [fireemu_proto_firestore::google::firestore::v1::Document; 0]
+            ),
             Some(name) => {
                 assert_eq!(docs.len(), 1);
                 assert_eq!(
@@ -10428,7 +10445,7 @@ async fn execute_pipeline_reads_collection_projects_field_aliases_and_applies_li
     ));
     let mut stream = client.execute_pipeline(req).await.unwrap().into_inner();
     let first = stream.message().await.unwrap().unwrap();
-    assert!(!first.transaction.is_empty());
+    assert_ne!(first.transaction, [] as [u8; 0]);
     drop(stream);
     let mut req = request(vec![collection("items")]);
     let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
@@ -10549,7 +10566,7 @@ async fn scoped_resets_and_partition_tokens_respect_project_ownership() {
         ..Default::default()
     };
     let first = backend.partition_query(&partition("demo-b", "")).unwrap();
-    assert!(!first.next_page_token.is_empty());
+    assert_ne!(first.next_page_token, "");
     assert!(backend
         .partition_query(&partition("demo-b", &first.next_page_token))
         .is_ok());
@@ -12065,7 +12082,10 @@ async fn native_empty_commit_time_follows_whether_the_transaction_has_read_in_pr
                     .await
                     .unwrap()
                     .into_inner();
-                assert!(response.write_results.is_empty());
+                assert_eq!(
+                    response.write_results,
+                    [] as [fireemu_proto_firestore::google::firestore::v1::WriteResult; 0]
+                );
                 assert_eq!(
                     response.commit_time.is_some(),
                     !strict || has_read,
@@ -12950,7 +12970,7 @@ async fn grpc_list_documents_without_a_collection_id_lists_every_child_collectio
         .unwrap()
         .into_inner();
     assert_eq!(names(&next), ["sub/s2"]);
-    assert!(next.next_page_token.is_empty());
+    assert_eq!(next.next_page_token, "");
     let root = client
         .list_documents(pb::ListDocumentsRequest {
             parent: DOCS.to_owned(),
@@ -13864,7 +13884,10 @@ async fn execute_pipeline_results_carry_document_metadata_without_select() {
         )])
         .await;
         assert_eq!(empty.len(), 1);
-        assert!(empty[0].results.is_empty());
+        assert_eq!(
+            empty[0].results,
+            [] as [fireemu_proto_firestore::google::firestore::v1::Document; 0]
+        );
         assert!(empty[0].execution_time.is_some(), "{policy:?}");
         handle.abort();
     }

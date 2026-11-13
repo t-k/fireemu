@@ -2357,7 +2357,7 @@ mod tests {
             state
                 .modify_ack_deadline(&source, &[received[0].ack_id.clone()], 0, now)
                 .unwrap();
-            assert!(state.pull(&sink, 1, now).unwrap().is_empty());
+            assert_eq!(state.pull(&sink, 1, now).unwrap().len(), 0);
         }
     }
 
@@ -2377,7 +2377,7 @@ mod tests {
             assert_eq!(received[0].delivery_attempt, attempt);
             now = now.checked_add(LogicalDuration::from_seconds(11)).unwrap();
         }
-        assert!(state.pull(&source, 1, now).unwrap().is_empty());
+        assert_eq!(state.pull(&source, 1, now).unwrap().len(), 0);
         let received = state.pull(&sink, 1, now).unwrap();
         assert_eq!(received.len(), 1);
         let attrs = &received[0].message.message.attributes;
@@ -2420,7 +2420,7 @@ mod tests {
                 assert_eq!(received[0].message.publish_time, published_at);
                 now = now.checked_add(LogicalDuration::from_seconds(11)).unwrap();
             }
-            assert!(state.pull(&source, 1, now).unwrap().is_empty());
+            assert_eq!(state.pull(&source, 1, now).unwrap().len(), 0);
             let received = state.pull(&sink, 1, now).unwrap();
             assert_eq!(received.len(), 1);
             assert_eq!(received[0].message.publish_time, now);
@@ -2503,10 +2503,10 @@ mod tests {
                 .modify_ack_deadline(&source, &[received[0].ack_id.clone()], 0, now)
                 .unwrap();
         }
-        assert!(state.pull(&source, 1, now).unwrap().is_empty());
+        assert_eq!(state.pull(&source, 1, now).unwrap().len(), 0);
         let received = state.pull(&sink, 1, now).unwrap();
         assert_eq!(received.len(), 1);
-        assert!(received[0].message.message.attributes.is_empty());
+        assert_eq!(received[0].message.message.attributes.len(), 0);
     }
 
     proptest::proptest! {
@@ -2790,14 +2790,14 @@ mod tests {
         assert_model(&state, retain, nanos, 30);
         state.delete_subscription(&name).unwrap();
         assert!(state.subscription_config(&name).is_err());
-        assert!(state.list_subscriptions("demo-a").is_empty());
+        assert_eq!(state.list_subscriptions("demo-a").len(), 0);
         state
             .create_subscription(sub_cfg("demo-a", "retention", "events", Filter::always()))
             .unwrap();
         assert_model(&state, false, None, 10);
         state.clear_project("demo-a");
         assert!(state.subscription_config(&name).is_err());
-        assert!(state.list_subscriptions("demo-a").is_empty());
+        assert_eq!(state.list_subscriptions("demo-a").len(), 0);
         assert!(state.subscription_config(&other_name).is_ok());
         state.clear();
         assert!(state.subscription_config(&other_name).is_err());
@@ -2956,7 +2956,7 @@ mod tests {
         assert_eq!(pulled.len(), 1);
         assert_eq!(pulled[0].message.message_id, "21339796619509982");
         assert_eq!(pulled[0].message.publish_time, at);
-        assert!(pulled[0].message.message.data.is_empty());
+        assert_eq!(pulled[0].message.message.data.len(), 0);
         assert_eq!(pulled[0].message.message.attributes, attributes);
         // the counter of ordinary publishes did not move
         let ids = s
@@ -3095,7 +3095,7 @@ mod tests {
             .prepare_publish(&topic, vec![data(b"held back")], now)
             .unwrap();
         assert_eq!(prepared.published_messages().len(), 1);
-        assert!(state.pull(&subscription, 10, now).unwrap().is_empty());
+        assert_eq!(state.pull(&subscription, 10, now).unwrap().len(), 0);
 
         let published = state.commit_prepared(prepared, now).unwrap();
         assert_eq!(published.len(), 1);
@@ -3128,7 +3128,7 @@ mod tests {
         state.publish(&topic, vec![data(b"hello")], now).unwrap();
 
         assert!(state.subscription_config(&subscription).is_ok());
-        assert!(state.pull(&subscription, 10, now).unwrap().is_empty());
+        assert_eq!(state.pull(&subscription, 10, now).unwrap().len(), 0);
         state.delete_subscription(&subscription).unwrap();
         assert!(state.subscription_config(&subscription).is_err());
     }
@@ -3173,10 +3173,13 @@ mod tests {
                 LogicalInstant::from_unix_seconds(1),
             )
             .unwrap();
-        assert!(state
-            .pull(&cross_project, 10, LogicalInstant::from_unix_seconds(1))
-            .unwrap()
-            .is_empty());
+        assert_eq!(
+            state
+                .pull(&cross_project, 10, LogicalInstant::from_unix_seconds(1))
+                .unwrap()
+                .len(),
+            0
+        );
     }
 
     #[test]
@@ -3280,10 +3283,12 @@ mod tests {
             LogicalInstant::from_unix_seconds(1),
         )
         .unwrap();
-        assert!(s
-            .pull(&subscription, 10, LogicalInstant::from_unix_seconds(1))
-            .unwrap()
-            .is_empty());
+        assert_eq!(
+            s.pull(&subscription, 10, LogicalInstant::from_unix_seconds(1))
+                .unwrap()
+                .len(),
+            0
+        );
     }
 
     #[test]
@@ -3313,7 +3318,7 @@ mod tests {
             s.expire_all(now);
         }
         // The next pull forwards to the dead-letter topic.
-        assert!(s.pull(&main_sub, 10, now).unwrap().is_empty());
+        assert_eq!(s.pull(&main_sub, 10, now).unwrap().len(), 0);
         let dead = s
             .pull(&SubscriptionName::new("p", "dead-sub").unwrap(), 10, now)
             .unwrap();
@@ -3357,9 +3362,9 @@ mod tests {
             state.expire_all(now);
         }
         state.delete_topic(&dead_topic).unwrap();
-        assert!(state.pull(&source, 10, now).unwrap().is_empty());
+        assert_eq!(state.pull(&source, 10, now).unwrap().len(), 0);
         assert_eq!(state.pending_dead_letters().len(), 1);
-        assert!(state.pull(&source, 10, now).unwrap().is_empty());
+        assert_eq!(state.pull(&source, 10, now).unwrap().len(), 0);
 
         state.delete_subscription(&dead_sub).unwrap();
         state
@@ -3382,7 +3387,7 @@ mod tests {
         assert!(state
             .complete_dead_letter(&forward.source_subscription, &forward.message.message_id)
             .unwrap());
-        assert!(state.pending_dead_letters().is_empty());
+        assert_eq!(state.pending_dead_letters().len(), 0);
         let dead = state.pull(&dead_sub, 10, now).unwrap();
         assert_eq!(dead.len(), 1);
         assert_eq!(dead[0].message.message.data, b"recoverable poison");
@@ -3592,10 +3597,10 @@ mod tests {
             .create_subscription(sub_cfg("p", "target-sub", "events", Filter::always()))
             .unwrap();
 
-        assert!(state
-            .list_topic_snapshots(&topic_name, now)
-            .unwrap()
-            .is_empty());
+        assert_eq!(
+            state.list_topic_snapshots(&topic_name, now).unwrap().len(),
+            0
+        );
         assert_eq!(
             state
                 .seek_to_snapshot(&target, snapshot_name, now)
@@ -3626,7 +3631,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(state.list_snapshots("consumer-project", now).len(), 1);
-        assert!(state.list_snapshots("source-project", now).is_empty());
+        assert_eq!(state.list_snapshots("source-project", now).len(), 0);
         assert_eq!(
             state.list_topic_snapshots(&topic_name, now).unwrap(),
             [snapshot_name.to_owned()]
@@ -3722,7 +3727,7 @@ mod tests {
         assert!(rejected_state
             .create_snapshot("", &source, BTreeMap::new(), now)
             .is_err());
-        assert!(rejected_state.snapshots.is_empty());
+        assert_eq!(rejected_state.snapshots.len(), 0);
         assert_eq!(rejected_state.snapshot_retained_bytes, 0);
         let ack_id = rejected_state.pull(&source, 1, now).unwrap()[0]
             .ack_id
@@ -3813,11 +3818,14 @@ mod tests {
         state
             .update_snapshot("projects/p/snapshots/snapshot-0", BTreeMap::new(), now)
             .unwrap();
-        assert!(state
-            .get_snapshot("projects/p/snapshots/snapshot-0", now)
-            .unwrap()
-            .labels
-            .is_empty());
+        assert_eq!(
+            state
+                .get_snapshot("projects/p/snapshots/snapshot-0", now)
+                .unwrap()
+                .labels
+                .len(),
+            0
+        );
         assert_eq!(state.snapshot_retained_bytes, retained_before_failures);
         for index in 7..1_000 {
             state
@@ -3851,7 +3859,7 @@ mod tests {
         assert_eq!(error.code(), crate::error::Code::ResourceExhausted);
         assert_eq!(state.snapshot_retained_bytes, retained_before_failures);
         for observer in &observers {
-            assert!(state.pull(observer, 10, now).unwrap().is_empty());
+            assert_eq!(state.pull(observer, 10, now).unwrap().len(), 0);
         }
         for index in 0..1_000 {
             state

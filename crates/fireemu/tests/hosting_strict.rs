@@ -1302,7 +1302,7 @@ fn hosting_strict_gzip_answers_as_the_recorded_rows() {
             "gz-head-gzip"
         );
         assert_eq!(head.header("content-length"), Some("93"));
-        assert!(head.bytes.is_empty());
+        assert_eq!(head.bytes, [] as [u8; 0]);
         // gz-png-gzip: two bytes are left alone (the compressed body would be larger)
         let png = send(
             &hosting,
@@ -1365,7 +1365,7 @@ fn hosting_strict_gzip_with_conditions_ranges_and_pages() {
     );
     assert_eq!(not_modified.status, 304);
     assert_eq!(not_modified.header("content-encoding"), None);
-    assert!(not_modified.bytes.is_empty());
+    assert_eq!(not_modified.bytes, [] as [u8; 0]);
     // v15.ae-range: a range is taken over the compressed body: 206, `Content-Encoding: gzip`, the
     // range of the 93 bytes
     let part = send(

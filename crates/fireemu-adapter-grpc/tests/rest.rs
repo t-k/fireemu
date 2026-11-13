@@ -277,7 +277,7 @@ fn document_crud_over_rest() {
     assert_eq!(status, 200, "{created}");
     assert_eq!(
         created["name"],
-        format!("projects/demo-app/databases/(default)/documents/users/alice")
+        "projects/demo-app/databases/(default)/documents/users/alice"
     );
     assert_eq!(created["fields"]["age"]["integerValue"], "30");
     assert!(created["createTime"].as_str().unwrap().ends_with('Z'));
@@ -1591,10 +1591,10 @@ fn commit_query_aggregation_and_transactions_over_rest() {
         "POST",
         &format!("{DOCS}:commit"),
         json!({"writes": [
-            {"update": {"name": format!("projects/demo-app/databases/(default)/documents/n/1"), "fields": {"v": {"integerValue": "1"}, "t": {"stringValue": "x"}}}},
-            {"update": {"name": format!("projects/demo-app/databases/(default)/documents/n/2"), "fields": {"v": {"integerValue": "2"}, "t": {"stringValue": "y"}}}},
-            {"update": {"name": format!("projects/demo-app/databases/(default)/documents/n/3"), "fields": {"t": {"stringValue": "missing-v"}}}},
-            {"transform": {"document": format!("projects/demo-app/databases/(default)/documents/n/1"), "fieldTransforms": [{"fieldPath": "v", "increment": {"integerValue": "10"}}, {"fieldPath": "at", "setToServerValue": "REQUEST_TIME"}]}}
+            {"update": {"name": "projects/demo-app/databases/(default)/documents/n/1", "fields": {"v": {"integerValue": "1"}, "t": {"stringValue": "x"}}}},
+            {"update": {"name": "projects/demo-app/databases/(default)/documents/n/2", "fields": {"v": {"integerValue": "2"}, "t": {"stringValue": "y"}}}},
+            {"update": {"name": "projects/demo-app/databases/(default)/documents/n/3", "fields": {"t": {"stringValue": "missing-v"}}}},
+            {"transform": {"document": "projects/demo-app/databases/(default)/documents/n/1", "fieldTransforms": [{"fieldPath": "v", "increment": {"integerValue": "10"}}, {"fieldPath": "at", "setToServerValue": "REQUEST_TIME"}]}}
         ]}),
     );
     assert_eq!(status, 200, "{committed}");
@@ -1675,7 +1675,7 @@ fn commit_query_aggregation_and_transactions_over_rest() {
         &s,
         "POST",
         &format!("{DOCS}:batchGet"),
-        json!({"documents": [format!("projects/demo-app/databases/(default)/documents/n/1"), format!("projects/demo-app/databases/(default)/documents/n/none")], "transaction": txn}),
+        json!({"documents": ["projects/demo-app/databases/(default)/documents/n/1", "projects/demo-app/databases/(default)/documents/n/none"], "transaction": txn}),
     );
     assert_eq!(status, 200, "{got}");
     assert!(got[0]["found"].is_object());
@@ -1687,7 +1687,7 @@ fn commit_query_aggregation_and_transactions_over_rest() {
         &s,
         "POST",
         &format!("{DOCS}:commit"),
-        json!({"writes": [{"update": {"name": format!("projects/demo-app/databases/(default)/documents/n/1"), "fields": {"v": {"integerValue": "99"}}}}]}),
+        json!({"writes": [{"update": {"name": "projects/demo-app/databases/(default)/documents/n/1", "fields": {"v": {"integerValue": "99"}}}}]}),
     );
     assert_eq!(status, 409, "{contended}");
     assert_eq!(contended["error"]["status"], "ABORTED");
@@ -1699,7 +1699,7 @@ fn commit_query_aggregation_and_transactions_over_rest() {
         &s,
         "POST",
         &format!("{DOCS}:commit"),
-        json!({"transaction": txn, "writes": [{"delete": format!("projects/demo-app/databases/(default)/documents/n/2")}]}),
+        json!({"transaction": txn, "writes": [{"delete": "projects/demo-app/databases/(default)/documents/n/2"}]}),
     );
     assert_eq!(status, 200, "{committed}");
     let (status, _) = call(&s, "GET", &format!("{DOCS}/n/2"), json!({}));
@@ -1708,7 +1708,7 @@ fn commit_query_aggregation_and_transactions_over_rest() {
         &s,
         "POST",
         &format!("{DOCS}:commit"),
-        json!({"writes": [{"update": {"name": format!("projects/demo-app/databases/(default)/documents/n/1"), "fields": {"v": {"integerValue": "99"}}}}]}),
+        json!({"writes": [{"update": {"name": "projects/demo-app/databases/(default)/documents/n/1", "fields": {"v": {"integerValue": "99"}}}}]}),
     );
     assert_eq!(status, 200, "{released}");
 
@@ -1843,7 +1843,7 @@ fn rest_aggregation_refused_commit_preserves_state_and_new_transaction_route() {
         .as_str()
         .expect("REST aggregation announces new transaction")
         .to_owned();
-    assert!(!transaction.is_empty());
+    assert_ne!(transaction, "");
     let (status, committed) = call(
         &s,
         "POST",
@@ -2178,7 +2178,7 @@ fn rest_requests_are_authorized_like_grpc() {
         &s,
         "POST",
         &format!("{DOCS}:batchGet"),
-        json!({"documents": [format!("projects/demo-app/databases/(default)/documents/closed/a")]}),
+        json!({"documents": ["projects/demo-app/databases/(default)/documents/closed/a"]}),
         None,
     );
     assert_eq!(status, 403, "{err}");
@@ -4828,7 +4828,7 @@ fn rest_new_transaction_retry_batch_get_and_run_query_return_documents() {
         let responses = responses.as_array().unwrap();
         assert_eq!(responses.len(), 2);
         let transaction = responses[0]["transaction"].as_str().unwrap();
-        assert!(!transaction.is_empty());
+        assert_ne!(transaction, "");
         assert_ne!(transaction, previous);
         assert_eq!(responses[1][document_field]["name"], name);
         assert_eq!(
@@ -4921,7 +4921,7 @@ fn rest_retry_transaction_starts_fresh_transaction_and_replay_is_refused() {
     );
     assert_eq!(status, 200, "{retried}");
     let fresh = retried["transaction"].as_str().unwrap();
-    assert!(!fresh.is_empty());
+    assert_ne!(fresh, "");
     assert_ne!(fresh, second);
 
     let (status, replay) = call(

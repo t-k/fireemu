@@ -110,9 +110,10 @@ fn len_is_empty_has_active_and_retries_due() {
             .unwrap();
     }
     // Failures happen at 101 / 102 with a 10 s backoff: retry_at = 111 for event 1, 112 for 2.
-    assert!(outbox
-        .retries_due(LogicalInstant::from_unix_seconds(110))
-        .is_empty());
+    assert_eq!(
+        outbox.retries_due(LogicalInstant::from_unix_seconds(110)),
+        [] as [fireemu_core_types::ids::EventId; 0]
+    );
     assert_eq!(
         outbox.retries_due(LogicalInstant::from_unix_seconds(111)),
         vec![EventId::new(1)]
@@ -254,9 +255,10 @@ fn eviction_leaves_dispatch_order_and_retry_eligibility_unchanged() {
     assert_eq!(outbox.discard_stale(Epoch::new(1)), 4);
     assert!(!outbox.has_active());
     assert!(outbox.dispatchable().next().is_none());
-    assert!(outbox
-        .retries_due(LogicalInstant::from_unix_seconds(200))
-        .is_empty());
+    assert_eq!(
+        outbox.retries_due(LogicalInstant::from_unix_seconds(200)),
+        [] as [fireemu_core_types::ids::EventId; 0]
+    );
 }
 
 #[test]

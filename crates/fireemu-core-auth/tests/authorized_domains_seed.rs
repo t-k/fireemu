@@ -41,7 +41,7 @@ fn authorized_domains_seed_is_independent_of_live_config_and_restores_only_its_f
     s.set_authorized_domains_seed(vec![]).unwrap();
     patch(&mut s, domains("live.test"));
     assert!(s.restore_authorized_domains_seed());
-    assert!(s.authorized_domains().is_empty());
+    assert_eq!(s.authorized_domains(), [] as [std::string::String; 0]);
 }
 
 #[test]

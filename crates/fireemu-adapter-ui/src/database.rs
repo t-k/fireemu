@@ -512,7 +512,7 @@ mod tests {
             assert_eq!(plan.project, "demo-a");
             assert_eq!(plan.namespace.as_deref(), Some("demo-a-default-rtdb"));
             assert!(plan.administrator);
-            assert!(plan.body.is_empty());
+            assert_eq!(plan.body, [] as [u8; 0]);
             assert!(
                 !prepare(&endpoint, &sessions, "request", &request)
                     .unwrap()

@@ -186,5 +186,8 @@ fn the_production_shape_fires_nothing_not_even_the_write_beside_it() {
         ("oc".to_owned(), "s/b".to_owned(), None),
         ("o".to_owned(), "t".to_owned(), Some(serde_json::json!(1))),
     ];
-    assert!(after_registrations("production", &listens, &[ops]).is_empty());
+    assert_eq!(
+        after_registrations("production", &listens, &[ops]),
+        [] as [std::string::String; 0]
+    );
 }

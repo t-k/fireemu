@@ -257,7 +257,7 @@ async fn grpc_replays_all_four_recorded_transaction_age_cases_with_a_pinned_cloc
                             state = document.fields["state"].value_type.clone();
                         }
                     }
-                    assert!(!transaction.is_empty());
+                    assert_ne!(transaction, [] as [u8; 0]);
                     (transaction, state.unwrap())
                 }
             };

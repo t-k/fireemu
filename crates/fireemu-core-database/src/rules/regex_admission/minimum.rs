@@ -288,7 +288,7 @@ fn indexed_prefix_crosses_former_two_million_boundary_exactly() {
             tail: vec![],
         };
         let next = current.next(&child, 2 * entries, 97).unwrap();
-        assert!(next.tail.is_empty());
+        assert_eq!(next.tail, [] as [usize; 0]);
         let Prefix::Indexed(pairs) = next.prefix else {
             panic!("indexed prefix kind changed")
         };

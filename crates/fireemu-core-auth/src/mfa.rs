@@ -99,9 +99,7 @@ impl TotpSecret {
 
 impl Drop for TotpSecret {
     fn drop(&mut self) {
-        for byte in &mut self.0 {
-            *byte = 0;
-        }
+        self.0.fill(0);
         std::hint::black_box(&self.0);
     }
 }
@@ -968,6 +966,6 @@ mod critical_mutant_gaps {
         assert!(state.holds_no_inbound_credentials());
         assert_eq!(state.clear_pending(), vec!["signin"]);
         assert_eq!(state.pending_count(), 0);
-        assert!(state.clear_pending().is_empty());
+        assert_eq!(state.clear_pending(), Vec::<String>::new());
     }
 }

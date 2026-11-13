@@ -382,7 +382,14 @@ fn history_over_limit_names_the_databases_a_restore_left_above_a_limit() {
     }
     let snapshot = source.snapshot_databases();
     let scope = fireemu_core_session::tenancy::Scope::AllExcept(std::collections::BTreeSet::new());
-    assert!(source.history_over_limit(&scope).is_empty());
+    assert_eq!(
+        source.history_over_limit(&scope),
+        [] as [(
+            (std::string::String, std::string::String),
+            fireemu_core_firestore::store::HistoryUsage,
+            fireemu_core_firestore::store::HistoryLimits
+        ); 0]
+    );
 
     let (limited, _clock) = backend();
     let limits = HistoryLimits {

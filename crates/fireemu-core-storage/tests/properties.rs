@@ -1261,7 +1261,7 @@ fn object_names_from_lists_one_bucket_in_name_order() {
         store.object_names_from(&other, "dir/", Unbounded, 10),
         ["dir/other", "dir/zzz"]
     );
-    assert!(names("dir", Unbounded, 0).is_empty());
+    assert_eq!(names("dir", Unbounded, 0), [] as [std::string::String; 0]);
 }
 
 proptest! {

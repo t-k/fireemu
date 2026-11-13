@@ -1105,7 +1105,10 @@ fn tenants_create_makes_no_tenant_the_body_names() {
     // Fireemu's own answer to a body tenant on the create route, unchanged.
     assert_eq!(status, 400, "{created}");
     assert!(registry.tenant_store("demo-app", "named-in-body").is_none());
-    assert!(tenant_names(&state, "demo-app").is_empty());
+    assert_eq!(
+        tenant_names(&state, "demo-app"),
+        [] as [std::string::String; 0]
+    );
 }
 
 /// An ID token this daemon cannot verify (another algorithm, another key, a production token) is

@@ -142,11 +142,10 @@ impl StorageBridge {
     }
 
     fn now(&self) -> fireemu_core_types::time::LogicalInstant {
-        self.storage
-            .clock
-            .lock()
-            .map(|clock| clock.now())
-            .unwrap_or(fireemu_core_types::time::LogicalInstant::UNIX_EPOCH)
+        self.storage.clock.lock().map_or(
+            fireemu_core_types::time::LogicalInstant::UNIX_EPOCH,
+            |clock| clock.now(),
+        )
     }
 
     fn read(&self, bucket: &str, name: &str) -> Option<Vec<u8>> {

@@ -251,7 +251,7 @@ fn response_reader_accepts_bodyless_response_after_reset() {
     )
     .expect("bodyless responses are self-delimiting");
     assert_eq!(response.status, 204);
-    assert!(response.body.is_empty());
+    assert_eq!(response.body, [] as [u8; 0]);
 }
 
 #[test]
@@ -1770,13 +1770,10 @@ async fn assert_callable_preflights_reach_the_runner(
             .collect();
         assert_eq!(echoed(&body, "origin"), expected);
     }
-    assert!(h
-        .gate
-        .registry()
-        .read()
-        .unwrap()
-        .observations(PROJECT)
-        .is_empty());
+    assert_eq!(
+        h.gate.registry().read().unwrap().observations(PROJECT),
+        [] as [fireemu_core_app_check::Observation; 0]
+    );
     h.stop().await;
 }
 
@@ -1821,13 +1818,10 @@ async fn callable_preflights_strip_credentials_without_auth_or_app_check_admissi
                 vec!["runner-secret"]
             );
         }
-        assert!(h
-            .gate
-            .registry()
-            .read()
-            .unwrap()
-            .observations(PROJECT)
-            .is_empty());
+        assert_eq!(
+            h.gate.registry().read().unwrap().observations(PROJECT),
+            [] as [fireemu_core_app_check::Observation; 0]
+        );
         h.stop().await;
     }
 }
@@ -1970,7 +1964,7 @@ async fn a_repeated_host_is_still_refused_before_any_function_runs() {
         assert_eq!(response.status, expected, "{hosts:?}");
         if expected == 403 {
             assert_ne!(response.body, b"forbidden origin");
-            assert!(!response.body.is_empty());
+            assert_ne!(response.body, [] as [u8; 0]);
         }
     }
     h.stop().await;
@@ -2106,7 +2100,10 @@ async fn an_unenforced_callable_runs_with_no_app_check_field_at_all() {
     let h = start(true).await;
     let (status, body) = h.call("add", &[]).await;
     assert_eq!(status, 200);
-    assert!(echoed(&body, "x-firebase-appcheck").is_empty());
+    assert_eq!(
+        echoed(&body, "x-firebase-appcheck"),
+        [] as [std::string::String; 0]
+    );
     h.stop().await;
 }
 
@@ -2709,28 +2706,32 @@ async fn strict_tells_the_runner_which_credential_of_a_plain_http_function_it_ve
             "{authorization}"
         );
     }
-    assert!(marker_sent(&h, &[]).await.is_empty());
+    assert_eq!(marker_sent(&h, &[]).await, [] as [std::string::String; 0]);
     // A caller cannot set the marker, in any spelling, with or without a credential.
-    assert!(marker_sent(&h, &[(FIELD, "1")]).await.is_empty());
-    assert!(marker_sent(
-        &h,
-        &[
-            ("X-Fireemu-Credential-Verified", "1"),
-            ("authorization", "Bearer malformed")
-        ]
-    )
-    .await
-    .is_empty());
+    assert_eq!(
+        marker_sent(&h, &[(FIELD, "1")]).await,
+        [] as [std::string::String; 0]
+    );
+    assert_eq!(
+        marker_sent(
+            &h,
+            &[
+                ("X-Fireemu-Credential-Verified", "1"),
+                ("authorization", "Bearer malformed")
+            ]
+        )
+        .await,
+        [] as [std::string::String; 0]
+    );
     assert_eq!(
         marker_sent(&h, &[(FIELD, "0"), ("authorization", &valid)]).await,
         ["1"],
         "only the daemon's own field reaches the runner"
     );
     // Two credentials are never verified, whatever they are.
-    assert!(
-        marker_sent(&h, &[("authorization", &valid), ("Authorization", &valid)])
-            .await
-            .is_empty()
+    assert_eq!(
+        marker_sent(&h, &[("authorization", &valid), ("Authorization", &valid)]).await,
+        [] as [std::string::String; 0]
     );
     h.stop().await;
 
@@ -2740,7 +2741,7 @@ async fn strict_tells_the_runner_which_credential_of_a_plain_http_function_it_ve
     let (_, valid) = h.user("callable@example.com");
     let response = h.request("POST", "add", &[("authorization", &valid)]).await;
     let body: Value = serde_json::from_slice(&response.body).expect("add body");
-    assert!(echoed(&body, FIELD).is_empty());
+    assert_eq!(echoed(&body, FIELD), [] as [std::string::String; 0]);
     h.stop().await;
     let h = start_with_consume_profile(false, "disabled", Emulator).await;
     let (_, valid) = h.user("emulator@example.com");
@@ -3588,14 +3589,20 @@ async fn strict_follows_the_sdk_for_an_empty_authorization_value() {
     let response = h.request("POST", "echo", &[("authorization", "")]).await;
     assert_eq!(response.status, 200);
     let body: Value = serde_json::from_slice(&response.body).expect("echo body");
-    assert!(echoed(&body, VERIFIED_CREDENTIAL_FIELD).is_empty());
+    assert_eq!(
+        echoed(&body, VERIFIED_CREDENTIAL_FIELD),
+        [] as [std::string::String; 0]
+    );
     assert!(echoed(&body, "authorization").iter().all(String::is_empty));
     let response = h
         .request_raw_headers("POST", "echo", b"authorization: \xff\r\n")
         .await;
     assert_eq!(response.status, 200);
     let body: Value = serde_json::from_slice(&response.body).expect("echo body");
-    assert!(echoed(&body, VERIFIED_CREDENTIAL_FIELD).is_empty());
+    assert_eq!(
+        echoed(&body, VERIFIED_CREDENTIAL_FIELD),
+        [] as [std::string::String; 0]
+    );
     assert!(
         echoed(&body, "authorization").is_empty(),
         "a value that is not text never reaches the runner: {body}"

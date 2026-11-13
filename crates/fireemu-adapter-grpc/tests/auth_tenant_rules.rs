@@ -459,7 +459,7 @@ mod listeners {
                 match response.response_type.unwrap() {
                     R::DocumentChange(change) => {
                         assert_eq!(change.target_ids, [target]);
-                        assert!(change.removed_target_ids.is_empty());
+                        assert_eq!(change.removed_target_ids, [] as [i32; 0]);
                         let doc = change.document.unwrap();
                         assert_eq!(doc.name, format!("{DB}/documents/tenantDocs/{tenant}"));
                         for (key, expected) in

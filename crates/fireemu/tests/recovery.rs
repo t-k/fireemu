@@ -523,8 +523,7 @@ fn report_path(run_id: &str) -> std::path::PathBuf {
 fn run_id() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
     format!("{now}-{}", std::process::id())
 }
 
@@ -636,7 +635,7 @@ fn a_missing_measurement_is_reported_and_never_counts_as_a_release() {
         verdict.missing,
         vec!["release: resources: connect refused".to_owned()]
     );
-    assert!(verdict.leaks.is_empty());
+    assert_eq!(verdict.leaks, [] as [std::string::String; 0]);
     let json = report_json(
         "test",
         &Dataset {

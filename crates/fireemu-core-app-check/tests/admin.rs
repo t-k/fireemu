@@ -349,12 +349,10 @@ fn the_gate_records_one_secret_free_observation_and_ignores_other_projects() {
         assert!(!format!("{observation:?}").contains(&token));
     }
     // The other project saw nothing.
-    assert!(gate
-        .registry()
-        .read()
-        .unwrap()
-        .observations("demo-other")
-        .is_empty());
+    assert_eq!(
+        gate.registry().read().unwrap().observations("demo-other"),
+        [] as [fireemu_core_app_check::Observation; 0]
+    );
 }
 
 #[test]

@@ -109,7 +109,10 @@ fn an_imported_namespace_stays_exported_only_while_a_restore_says_so() {
     assert_eq!(db.export_texts(), vec![("p".to_owned(), "null".to_owned())]);
 
     db.restore_namespaces_where(owned_by_p, &empty);
-    assert!(db.export_texts().is_empty());
+    assert_eq!(
+        db.export_texts(),
+        [] as [(std::string::String, std::string::String); 0]
+    );
     db.restore_namespaces_where(owned_by_p, &imported);
     assert_eq!(db.export_texts(), vec![("p".to_owned(), "null".to_owned())]);
 }

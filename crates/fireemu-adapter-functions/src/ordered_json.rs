@@ -449,7 +449,7 @@ mod tests {
             Ordered::Null,
             "an index into a string is null"
         );
-        assert!(value["a"] == "x");
+        assert_eq!(value["a"], "x");
         assert!(value["a"] != "other");
         assert!(Ordered::unsigned(1) != "1");
         assert_eq!(value.members().map(<[(String, Ordered)]>::len), Some(3));

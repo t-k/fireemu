@@ -882,7 +882,7 @@ proptest! {
             .collect();
         let sort_key = SortKey { expr: field("k"), descending: descending_order };
         let got = names(&run(vec![Stage::Sort(vec![sort_key])], rows));
-        let rank = |key: &Option<Option<i64>>| key.flatten().map_or(i64::MIN, |k| k);
+        let rank = |key: &Option<Option<i64>>| key.flatten().unwrap_or(i64::MIN);
         let mut model: Vec<(usize, i64)> = keys.iter().enumerate().map(|(i, k)| (i, rank(k))).collect();
         model.sort_by(|a, b| if descending_order { b.1.cmp(&a.1) } else { a.1.cmp(&b.1) });
         let want: Vec<String> = model.iter().map(|(i, _)| format!("r{i:02}")).collect();
@@ -966,10 +966,10 @@ fn is_unobserved(eval: &Eval) -> bool {
 #[test]
 fn group_keys_compare_by_value_not_by_representation() {
     let key = |v: Value| GroupKey(vec![v]);
-    assert!(key(int(1)) == key(Value::Double(1.0)));
-    assert!(key(Value::Double(-0.0)) == key(int(0)));
-    assert!(key(Value::Double(f64::NAN)) == key(Value::Double(f64::NAN)));
-    assert!(key(int(1)) != key(int(2)));
+    assert_eq!(key(int(1)), key(Value::Double(1.0)));
+    assert_eq!(key(Value::Double(-0.0)), key(int(0)));
+    assert_eq!(key(Value::Double(f64::NAN)), key(Value::Double(f64::NAN)));
+    assert_ne!(key(int(1)), key(int(2)));
     assert_eq!(key(int(1)).partial_cmp(&key(int(2))), Some(Ordering::Less));
     assert_eq!(
         key(Value::Null).partial_cmp(&key(Value::Null)),

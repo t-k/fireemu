@@ -185,8 +185,8 @@ mod tests {
                 Clone::clone,
             )
             .unwrap();
-        assert!(exhausted.resources.is_empty());
-        assert!(exhausted.next_page_token.is_empty());
+        assert_eq!(exhausted.resources, [] as [std::string::String; 0]);
+        assert_eq!(exhausted.next_page_token, "");
         for foreign in [
             "projects/q/subscriptions",
             "projects/p/topics",

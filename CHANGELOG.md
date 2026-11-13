@@ -16,6 +16,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 - Functions: `functions.isolation` chooses between `"codebase"` (the default, unchanged: one runner process serves every function of a codebase) and `"function"` (one dedicated runner process per function, as production gives each function its own instance; `productionExact` selects it). A dedicated process starts with its function's `FUNCTION_TARGET`, `FUNCTION_SIGNATURE_TYPE` and `K_SERVICE` and the local secrets that function declares already in its environment, has its own module graph, serves calls of its one function concurrently, and restarts or reloads without touching another function. It starts on the first request, event or task for its function (work that arrives meanwhile waits and is delivered once, in order); Blocking Auth functions, and every function under `--inspect-functions`, start with the codebase. Node and Python codebases. Measured on 10 to 22 functions: about 120 MiB resident memory per started process and 1.0 to 1.9 s more to start and stop when every function is started. Refused above 64 functions per codebase, and, when written explicitly, with `functions.runner` or a fixed `--inspect-functions` port.
 
+### Changed
+
+- Toolchain: the pinned Rust is 1.100.0 (MSRV stays 1.85). Rust 1.100's Unicode tables case-map about 45 more code points than Java 21 does (U+0277, U+027C, U+A7DD, U+A7E2, U+AB4B-AB4C, U+AB6C-AB6D and Latin Extended-G letters in U+1DF40-1DF95). In Realtime Database rules, `toLowerCase()` and `toUpperCase()` of a string that holds one of them is now an error, so the rule is false, in both profiles. This is the same as for the code points already listed. The official emulator maps them by Java 21. The list is checked against the Java 21 case maps in `crates/fireemu-core-database/tests/fixtures/java21-chars.txt`.
+
 ### Fixed
 
 - Pub/Sub: two v5 REST negative-cache recordings refine the variable window edge and record the recent-200 exemption at seven seconds; the deterministic model remains unchanged and the remaining open cases are documented.

@@ -105,8 +105,7 @@ impl IdTokenSigner for RsaSigner {
 
     fn verify(&self, signing_input: &[u8], signature: &[u8]) -> bool {
         Signature::try_from(signature)
-            .map(|s| self.verifying.verify(signing_input, &s).is_ok())
-            .unwrap_or(false)
+            .is_ok_and(|s| self.verifying.verify(signing_input, &s).is_ok())
     }
 
     fn signature_verification_is_immutable(&self) -> bool {
@@ -315,8 +314,7 @@ impl fireemu_core_app_check::crypto::AppCheckSigner for AppCheckRsaSigner {
             return false;
         };
         Signature::try_from(signature)
-            .map(|s| material.verifying.verify(signing_input, &s).is_ok())
-            .unwrap_or(false)
+            .is_ok_and(|s| material.verifying.verify(signing_input, &s).is_ok())
     }
 
     fn public_jwk_json(&self) -> String {

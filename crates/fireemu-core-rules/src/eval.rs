@@ -4668,7 +4668,7 @@ impl<'a> Evaluator<'a> {
                     Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))) => {
                         return Err(e)
                     }
-                    Err(e) => deferred = Some(deferred.map_or(e, |first| first)),
+                    Err(e) => deferred = Some(deferred.unwrap_or(e)),
                 }
             }
             return match deferred {

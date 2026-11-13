@@ -22,7 +22,10 @@ fn rule(
 #[test]
 fn rules_match_the_nth_occurrence_or_every_one_and_are_counted_per_operation() {
     let mut state = FaultState::default();
-    assert!(state.decide("firestore.commit", None, None).is_empty());
+    assert_eq!(
+        state.decide("firestore.commit", None, None),
+        [] as [fireemu_core_session::fault::FaultAction; 0]
+    );
     assert!(
         state.counters().is_empty(),
         "nothing counted without a plan"
@@ -52,18 +55,25 @@ fn rules_match_the_nth_occurrence_or_every_one_and_are_counted_per_operation() {
             ),
         ],
     });
-    assert!(state.decide("firestore.commit", None, None).is_empty());
+    assert_eq!(
+        state.decide("firestore.commit", None, None),
+        [] as [fireemu_core_session::fault::FaultAction; 0]
+    );
     assert_eq!(
         state.decide("firestore.commit", None, None),
         vec![FaultAction::ReturnError {
             code: "ABORTED".into()
         }]
     );
-    assert!(state.decide("firestore.commit", None, None).is_empty());
+    assert_eq!(
+        state.decide("firestore.commit", None, None),
+        [] as [fireemu_core_session::fault::FaultAction; 0]
+    );
     // Function filter.
-    assert!(state
-        .decide("functions.invoke", Some("steady"), None)
-        .is_empty());
+    assert_eq!(
+        state.decide("functions.invoke", Some("steady"), None),
+        [] as [fireemu_core_session::fault::FaultAction; 0]
+    );
     assert_eq!(
         state.decide("functions.invoke", Some("flaky"), None),
         vec![FaultAction::Timeout]
@@ -77,7 +87,10 @@ fn rules_match_the_nth_occurrence_or_every_one_and_are_counted_per_operation() {
         state.decide("functions.deliver", None, None),
         vec![FaultAction::Duplicate { count: 2 }]
     );
-    assert!(state.decide("functions.deliver", None, None).is_empty());
+    assert_eq!(
+        state.decide("functions.deliver", None, None),
+        [] as [fireemu_core_session::fault::FaultAction; 0]
+    );
     assert_eq!(state.counters()["firestore.commit"], 3);
     assert_eq!(state.counters()["functions.invoke"], 3);
     assert_eq!(state.counters()["functions.invoke|flaky"], 2);
@@ -85,10 +98,17 @@ fn rules_match_the_nth_occurrence_or_every_one_and_are_counted_per_operation() {
     assert_eq!(fired.len(), 4);
     assert_eq!(fired[0].occurrence, 2);
     assert_eq!(fired[1].function.as_deref(), Some("flaky"));
+    check_clearing_and_reinstalling(&mut state);
+}
+
+fn check_clearing_and_reinstalling(state: &mut FaultState) {
     // Clearing forgets the plan, the counters and the history.
     state.clear();
     assert!(state.plan().is_none());
-    assert!(state.decide("firestore.commit", None, None).is_empty());
+    assert_eq!(
+        state.decide("firestore.commit", None, None),
+        [] as [fireemu_core_session::fault::FaultAction; 0]
+    );
     assert!(state.fired().is_empty());
     // Reinstalling restarts the counters.
     state.install(FaultPlan {
@@ -118,12 +138,18 @@ fn rules_match_the_nth_occurrence_or_every_one_and_are_counted_per_operation() {
             FaultAction::CrashRunner,
         )],
     });
-    assert!(state.decide("functions.invoke", Some("a"), None).is_empty());
+    assert_eq!(
+        state.decide("functions.invoke", Some("a"), None),
+        [] as [fireemu_core_session::fault::FaultAction; 0]
+    );
     assert_eq!(
         state.decide("functions.invoke", Some("b"), None),
         vec![FaultAction::CrashRunner]
     );
-    assert!(state.decide("functions.invoke", Some("b"), None).is_empty());
+    assert_eq!(
+        state.decide("functions.invoke", Some("b"), None),
+        [] as [fireemu_core_session::fault::FaultAction; 0]
+    );
 }
 
 /// FAULTH-1: a rule with no `nth` fires on every matching operation, so the history of a plan

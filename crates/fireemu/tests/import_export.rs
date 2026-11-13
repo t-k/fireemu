@@ -929,11 +929,11 @@ fn an_empty_export_still_writes_a_default_section_stamped_with_the_export_time()
         "{before} <= {stamped} <= {after}"
     );
     assert_eq!(partition.end_micros, partition.start_micros);
-    assert!(read_output(
-        &std::fs::read(section.join("all_namespaces/all_kinds/output-0")).unwrap()
-    )
-    .unwrap()
-    .is_empty());
+    assert_eq!(
+        read_output(&std::fs::read(section.join("all_namespaces/all_kinds/output-0")).unwrap())
+            .unwrap(),
+        [] as [fireemu_core_export::firestore::ExportDocument; 0]
+    );
 }
 
 #[test]

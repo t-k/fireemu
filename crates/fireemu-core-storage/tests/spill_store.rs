@@ -225,7 +225,10 @@ fn spill_lifecycle_and_failure() {
     ));
     assert!(store.get(&bucket, &missing).is_none());
     assert_eq!(store.retained_blob_bytes(), before);
-    assert!(store.drain_events().is_empty());
+    assert_eq!(
+        store.drain_events(),
+        [] as [fireemu_core_storage::store::StorageEvent; 0]
+    );
     store
         .put(
             &bucket,
@@ -464,7 +467,7 @@ proptest::proptest! {
                     upload = None;
                     memory.clear();
                     spilled.clear();
-                    assert!(memory.all_objects().is_empty());
+                    assert_eq!(memory.all_objects(), [] as [&fireemu_core_storage::store::ObjectMetadata; 0]);
                     assert_eq!(spill_files(process.path()).len(), 0);
                     memory.set_versioning(&buckets[versioned], true);
                     spilled.set_versioning(&buckets[versioned], true);

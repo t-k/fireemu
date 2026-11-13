@@ -5676,7 +5676,7 @@ fn pending_retry_preserves_sms_after_a_mismatched_pending_credential() {
             &json!({"mfaPendingCredential": a["mfaPendingCredential"], "phoneVerificationInfo": phone}),
         );
         assert_eq!(status, 200, "{signed}");
-        assert!(s.store.lock().unwrap().verification_codes().is_empty());
+        assert_eq!(s.store.lock().unwrap().verification_codes().len(), 0);
         let (status, lookup) = post(
             &s,
             &format!("{V1}/accounts:lookup"),
@@ -5794,7 +5794,7 @@ fn pending_retry_preserves_sms_codes_across_purpose_mismatches() {
         assert_eq!(status, 200, "{phone_user}");
         assert_eq!(phone_user["phoneNumber"], "+15550001111");
         assert_ne!(phone_user["localId"], user["localId"]);
-        assert!(s.store.lock().unwrap().verification_codes().is_empty());
+        assert_eq!(s.store.lock().unwrap().verification_codes().len(), 0);
         assert_ne!(
             post(
                 &s,
@@ -5892,7 +5892,7 @@ fn pending_retry_survives_sms_expiry_while_the_pending_credential_lives() {
         advance_clock(&s, SMS_CODE_TTL_SECONDS);
         let (status, signed) = finalize_phone_step(&s, &pending, &phone);
         assert_eq!(status, 200, "{signed}");
-        assert!(s.store.lock().unwrap().verification_codes().is_empty());
+        assert_eq!(s.store.lock().unwrap().verification_codes().len(), 0);
         // Production keeps the pending credential after success (auth-mfa/sms).
         assert_eq!(
             s.store.lock().unwrap().pending_sign_in_count(),
@@ -5908,7 +5908,7 @@ fn pending_retry_survives_sms_expiry_while_the_pending_credential_lives() {
         assert_eq!(status, 400, "{refused}");
         assert_eq!(refused["error"]["message"], "INVALID_SESSION_INFO");
         assert!(refused.get("idToken").is_none());
-        assert!(s.store.lock().unwrap().verification_codes().is_empty());
+        assert_eq!(s.store.lock().unwrap().verification_codes().len(), 0);
         // The pending credential of the first sign-in above is kept under production's rules.
         assert_eq!(
             s.store.lock().unwrap().pending_sign_in_count(),
@@ -6000,7 +6000,7 @@ fn pending_retry_ends_when_the_pending_credential_expires() {
         assert_eq!(status, 400, "{refused}");
         assert_eq!(refused["error"]["message"], "INVALID_SESSION_INFO");
         assert!(refused.get("idToken").is_none());
-        assert!(s.store.lock().unwrap().verification_codes().is_empty());
+        assert_eq!(s.store.lock().unwrap().verification_codes().len(), 0);
         assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
         let (status, refused) = start_phone_step(&s, &pending);
         assert_eq!(status, 400, "{refused}");
@@ -6084,7 +6084,7 @@ fn pending_and_sms_expiry_matrix_keeps_expiry_causes_separate() {
             assert_eq!(refused["error"]["message"], "INVALID_SESSION_INFO");
             assert!(refused.get("idToken").is_none());
             assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
-            assert!(s.store.lock().unwrap().verification_codes().is_empty());
+            assert_eq!(s.store.lock().unwrap().verification_codes().len(), 0);
         }
 
         let (s, _) = pending_expiry_state(strict, "expiry-matrix-both@example.com");
@@ -6096,7 +6096,7 @@ fn pending_and_sms_expiry_matrix_keeps_expiry_causes_separate() {
         assert_eq!(refused["error"]["message"], "INVALID_SESSION_INFO");
         assert!(refused.get("idToken").is_none());
         assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
-        assert!(s.store.lock().unwrap().verification_codes().is_empty());
+        assert_eq!(s.store.lock().unwrap().verification_codes().len(), 0);
     }
 }
 
@@ -6216,7 +6216,7 @@ fn pending_retry_refuses_finalize_after_the_account_is_disabled() {
         // Production keeps the pending credential after success, and with it the codes it
         // started (auth-mfa/sms#sign-in-finalize-again).
         if !strict {
-            assert!(s.store.lock().unwrap().verification_codes().is_empty());
+            assert_eq!(s.store.lock().unwrap().verification_codes().len(), 0);
         }
         assert_eq!(
             s.store.lock().unwrap().pending_sign_in_count(),
@@ -6338,7 +6338,7 @@ fn pending_retry_refuses_totp_finalize_and_enrollment_after_the_account_is_disab
     );
     let (status, enrolled_again) = phone_finalize(&signed["idToken"]);
     assert_eq!(status, 200, "{enrolled_again}");
-    assert!(s.store.lock().unwrap().verification_codes().is_empty());
+    assert_eq!(s.store.lock().unwrap().verification_codes().len(), 0);
 }
 
 /// A `beforeSignIn` hook during which an administrator disables the account: the live
@@ -6472,7 +6472,7 @@ fn pending_retry_survives_a_rejecting_hook_and_honors_a_disable_during_the_hook(
     let (status, signed) = finalize_phone_step(&s, &pending, &phone);
     assert_eq!(status, 200, "{signed}");
     // Consumption is checked before any further request could sweep for it.
-    assert!(s.store.lock().unwrap().verification_codes().is_empty());
+    assert_eq!(s.store.lock().unwrap().verification_codes().len(), 0);
     assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), count - 1);
     let (status, lookup) = post(
         &s,
@@ -6873,7 +6873,7 @@ fn pending_retry_concurrent_finalizes_of_one_credential_succeed_exactly_once() {
     );
     assert_eq!(status, 200, "{lookup}");
     assert_eq!(lookup["users"][0]["localId"], user["localId"]);
-    assert!(s.store.lock().unwrap().verification_codes().is_empty());
+    assert_eq!(s.store.lock().unwrap().verification_codes().len(), 0);
     assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
 }
 
@@ -7413,7 +7413,7 @@ fn oob_authorization_preserves_delivery_and_authenticated_admin_generation() {
             assert!(response["oobCode"].is_string());
             assert!(response["oobLink"].is_string());
             assert_eq!(response["email"], "oob-other@example.com");
-            assert!(drain(&lines).is_empty());
+            assert_eq!(drain(&lines).len(), 0);
             let result = handle_with(
                 &s,
                 "POST",
@@ -7475,7 +7475,7 @@ fn oob_link_flag_type_errors_are_atomic_on_project_and_tenant_admin_routes() {
         &json!({"email": tenant_email, "password": "hunter22"}),
     );
     assert_eq!(status, 200, "{created}");
-    assert!(drain(&lines).is_empty());
+    assert_eq!(drain(&lines).len(), 0);
 
     for (path, email) in [(project_path, project_email), (tenant_path, tenant_email)] {
         for value in [json!("true"), json!(1), json!([]), json!({})] {
@@ -7529,7 +7529,7 @@ fn email_action_links_are_announced_once_unless_the_link_is_returned() {
     let (s, lines) = recording_state();
     let user = sign_up(&s, "notice@example.com");
     let id_token = user["idToken"].as_str().unwrap().to_owned();
-    assert!(drain(&lines).is_empty(), "sign-up issues no code");
+    assert_eq!(drain(&lines).len(), 0, "sign-up issues no code");
 
     let (status, body) = post(
         &s,
@@ -7547,7 +7547,7 @@ fn email_action_links_are_announced_once_unless_the_link_is_returned() {
     );
     // Reading the inspection route announces nothing, and neither does a second read.
     let _ = get(&s, &format!("{EMU}/oobCodes"));
-    assert!(drain(&lines).is_empty());
+    assert_eq!(drain(&lines).len(), 0);
 
     // The Admin link generators receive the link in the response and print nothing.
     let (status, link) = admin(
@@ -7557,7 +7557,7 @@ fn email_action_links_are_announced_once_unless_the_link_is_returned() {
     );
     assert_eq!(status, 200, "{link}");
     assert!(link["oobLink"].is_string());
-    assert!(drain(&lines).is_empty());
+    assert_eq!(drain(&lines).len(), 0);
 
     let (status, body) = post(
         &s,
@@ -7617,7 +7617,7 @@ fn email_action_links_are_announced_once_unless_the_link_is_returned() {
         &json!({"requestType": "PASSWORD_RESET", "email": "nobody@example.com"}),
     );
     assert_eq!(status, 400);
-    assert!(drain(&lines).is_empty());
+    assert_eq!(drain(&lines).len(), 0);
 }
 
 /// The outstanding SMS code whose `field` (`phoneNumber`, `sessionInfo`) is `value`.
@@ -7704,7 +7704,7 @@ fn sms_codes_are_announced_per_number_for_sign_in_enrollment_and_mfa_sign_in() {
         );
         assert_eq!(status, 200, "{done}");
     }
-    assert!(drain(&lines).is_empty());
+    assert_eq!(drain(&lines).len(), 0);
 
     // The second factor step of a sign-in.
     let (status, pending) = post(
@@ -7713,7 +7713,7 @@ fn sms_codes_are_announced_per_number_for_sign_in_enrollment_and_mfa_sign_in() {
         &json!({"email": "two@example.com", "password": "hunter22"}),
     );
     assert_eq!(status, 200, "{pending}");
-    assert!(drain(&lines).is_empty());
+    assert_eq!(drain(&lines).len(), 0);
     let (status, started) = post(
         &s,
         &format!("{V2}/accounts/mfaSignIn:start"),
@@ -7765,7 +7765,7 @@ fn tenant_action_links_name_the_tenant() {
         admin_link.ends_with("&continueUrl=https%3A%2F%2Fapp.example%2Fx&tenantId=customer-a"),
         "{admin_link}"
     );
-    assert!(drain(&lines).is_empty());
+    assert_eq!(drain(&lines).len(), 0);
 
     let (status, body) = post(
         &s,
@@ -9569,7 +9569,7 @@ fn assert_saml_fixture_cookie_lifecycle(
         attributes,
     );
     if tenant.is_some() {
-        assert!(s.store.lock().unwrap().users_by_creation().is_empty());
+        assert_eq!(s.store.lock().unwrap().users_by_creation().len(), 0);
     }
 }
 

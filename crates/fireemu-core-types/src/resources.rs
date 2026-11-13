@@ -307,8 +307,8 @@ mod tests {
             failure.leaks,
             vec![("firestore".to_owned(), root("transaction", "tx-7", true))]
         );
-        assert!(failure.stale_allowances.is_empty());
-        assert!(failure.truncated_services.is_empty());
+        assert_eq!(failure.stale_allowances.len(), 0);
+        assert_eq!(failure.truncated_services.len(), 0);
 
         // The same identifier under another service or kind allows nothing.
         let wrong_service = assert_quiescent(&services, &[allow("firestore", "event", "ev-1")])
@@ -351,7 +351,7 @@ mod tests {
         let services = [service("pubsub", vec![root("unacked", "s-1", false)])];
         let failure = assert_quiescent(&services, &[allow("pubsub", "unacked", "s-1")])
             .expect_err("the allowance excuses nothing");
-        assert!(failure.leaks.is_empty());
+        assert_eq!(failure.leaks.len(), 0);
         assert_eq!(failure.stale_allowances.len(), 1);
     }
 
@@ -387,7 +387,7 @@ mod tests {
             roots: RootBudget { max_roots: 2 }.bound(roots),
         };
         let failure = assert_quiescent(&[truncated], &[]).expect_err("truncation is reported");
-        assert!(failure.leaks.is_empty());
+        assert_eq!(failure.leaks.len(), 0);
         assert_eq!(failure.truncated_services, vec!["firestore".to_owned()]);
     }
 

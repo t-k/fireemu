@@ -862,7 +862,10 @@ mod tests {
 
     #[test]
     fn signed_header_lists_keep_the_url_order_and_empty_segments() {
-        assert!(signed_header_lists(&pairs(&[])).is_empty());
+        assert_eq!(
+            signed_header_lists(&pairs(&[])),
+            [] as [std::vec::Vec<std::string::String>; 0]
+        );
         assert_eq!(
             signed_header_lists(&pairs(&[(
                 "X-Goog-SignedHeaders",

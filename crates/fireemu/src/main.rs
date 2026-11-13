@@ -4371,8 +4371,9 @@ fn control_state(
 fn logical_system_time(system_time: std::time::SystemTime) -> LogicalInstant {
     let nanos = system_time
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| i128::try_from(duration.as_nanos()).unwrap_or(i128::MAX))
-        .unwrap_or(0);
+        .map_or(0, |duration| {
+            i128::try_from(duration.as_nanos()).unwrap_or(i128::MAX)
+        });
     LogicalInstant::from_nanos(nanos)
 }
 

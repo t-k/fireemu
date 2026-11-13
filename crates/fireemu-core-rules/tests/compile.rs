@@ -78,7 +78,10 @@ fn access_methods_are_case_insensitive_and_unknown_ones_grant_nothing() {
     let Item::Match(block) = &databases.items[0] else {
         panic!("match");
     };
-    assert!(block.allows[0].methods.is_empty());
+    assert_eq!(
+        block.allows[0].methods,
+        [] as [fireemu_core_rules::ast::Method; 0]
+    );
     let parsed = parse_ruleset(&get("Get, list")).unwrap();
     let Item::Match(databases) = &parsed.services[0].items[0] else {
         panic!("match");

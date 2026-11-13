@@ -336,7 +336,7 @@ async fn remote_config_control_delivers_real_sdk_events_in_both_profiles() {
             }
         } else {
             runtime.await_idle(Duration::from_secs(2)).await.unwrap();
-            assert!(observed(&runtime).is_empty());
+            assert_eq!(observed(&runtime), [] as [serde_json::Value; 0]);
         }
         runtime.shutdown().await;
         dispatch.await.unwrap();

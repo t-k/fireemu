@@ -66,7 +66,7 @@ fn call_as(
     path: &str,
     body: Value,
 ) -> (u16, Value) {
-    let (path, query) = path.split_once('?').map_or((path, ""), |parts| parts);
+    let (path, query) = path.split_once('?').unwrap_or((path, ""));
     let response = state.handle(&RestRequest {
         method: method.to_owned(),
         path: path.to_owned(),

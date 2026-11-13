@@ -500,7 +500,7 @@ fn index_on_is_read_per_location() {
     root.children.insert("q".to_owned(), q);
     let rules = Rules::compile(&root).unwrap();
     assert_eq!(rules.index_on(&p("/q")), vec!["n".to_owned()]);
-    assert!(rules.index_on(&p("/r")).is_empty());
+    assert_eq!(rules.index_on(&p("/r")), [] as [std::string::String; 0]);
     let _ = Limit::First(1);
 }
 

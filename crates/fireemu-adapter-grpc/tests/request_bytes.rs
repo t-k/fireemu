@@ -444,7 +444,7 @@ async fn write_stream_case(
     client: &mut FirestoreClient<tonic::transport::Channel>,
     bytes: usize,
     scope: &str,
-) -> Result<(), tonic::Status> {
+) -> Result<(), Box<tonic::Status>> {
     let (tx, rx) = tokio::sync::mpsc::channel(4);
     let mut responses = client
         .write(tonic::Request::new(
@@ -466,16 +466,16 @@ async fn write_stream_case(
     if tx.send(request).await.is_err() {
         // The server closed the stream before the request was queued; read the status.
         return match tokio_stream::StreamExt::next(&mut responses).await {
-            Some(Err(status)) => Err(status),
+            Some(Err(status)) => Err(Box::new(status)),
             other => panic!("the stream closed without a status: {}", other.is_some()),
         };
     }
     match tokio_stream::StreamExt::next(&mut responses).await {
         Some(Ok(_)) => Ok(()),
-        Some(Err(status)) => Err(status),
-        None => Err(tonic::Status::unknown(
+        Some(Err(status)) => Err(Box::new(status)),
+        None => Err(Box::new(tonic::Status::unknown(
             "the stream ended without a response",
-        )),
+        ))),
     }
 }
 

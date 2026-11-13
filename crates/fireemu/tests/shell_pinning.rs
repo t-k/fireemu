@@ -39,8 +39,14 @@ fn the_detector_flags_a_path_resolved_shell_and_not_a_pinned_one() {
         path_resolved_shell_lines("Command::new(\"sh\")\n.args([\"--\", \"sh\", \"-c\"])"),
         [1, 2]
     );
-    assert!(path_resolved_shell_lines("Command::new(\"/bin/sh\")").is_empty());
-    assert!(path_resolved_shell_lines("// run \"sh\" here").is_empty());
+    assert_eq!(
+        path_resolved_shell_lines("Command::new(\"/bin/sh\")"),
+        [] as [usize; 0]
+    );
+    assert_eq!(
+        path_resolved_shell_lines("// run \"sh\" here"),
+        [] as [usize; 0]
+    );
 }
 
 #[test]

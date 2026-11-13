@@ -6521,11 +6521,10 @@ impl BlockingAuthBridge {
         let Ok(settings) = self.settings_snapshot() else {
             return Vec::new();
         };
-        let times = self
-            .trigger_times
-            .read()
-            .map(|times| *times)
-            .unwrap_or([fireemu_core_types::time::LogicalInstant::UNIX_EPOCH; 4]);
+        let times = self.trigger_times.read().map_or(
+            [fireemu_core_types::time::LogicalInstant::UNIX_EPOCH; 4],
+            |times| *times,
+        );
         fireemu_core_functions::manifest::BlockingAuthEvent::ALL
             .into_iter()
             .enumerate()

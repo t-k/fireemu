@@ -1494,7 +1494,7 @@ fn parse_duration(value: &Value) -> Result<LogicalDuration, RestError> {
         .strip_suffix('s')
         .ok_or_else(|| RestError::invalid("duration must end in s"))?;
     let has_fraction = number.contains('.');
-    let (seconds, fraction) = number.split_once('.').map_or((number, ""), |parts| parts);
+    let (seconds, fraction) = number.split_once('.').unwrap_or((number, ""));
     if seconds.is_empty()
         || !seconds.bytes().all(|byte| byte.is_ascii_digit())
         || (has_fraction && fraction.is_empty())

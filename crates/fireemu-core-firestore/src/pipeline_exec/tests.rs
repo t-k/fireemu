@@ -734,9 +734,12 @@ fn where_keeps_true_drops_false_and_absent_and_refuses_errors() {
     }
     // A string condition drops the row too (FS-ENT-ORACLE O-2), and so do a double, NaN, a
     // timestamp, bytes, a geo point and a vector (O-3), in both profiles.
-    assert!(execute(vec![Stage::Where(field("k"))], input.clone())
-        .unwrap()
-        .is_empty());
+    assert_eq!(
+        execute(vec![Stage::Where(field("k"))], input.clone())
+            .unwrap()
+            .len(),
+        0
+    );
     for value in [
         Value::Double(1.5),
         Value::Double(f64::NAN),
@@ -747,10 +750,9 @@ fn where_keeps_true_drops_false_and_absent_and_refuses_errors() {
     ] {
         for unrecorded in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
             let stages = vec![Stage::Where(Expr::Constant(value.clone()))];
-            assert!(
-                execute_in(stages, input.clone(), unrecorded)
-                    .unwrap()
-                    .is_empty(),
+            assert_eq!(
+                execute_in(stages, input.clone(), unrecorded).unwrap().len(),
+                0,
                 "{value:?} {unrecorded:?}"
             );
         }
@@ -823,12 +825,12 @@ fn offset_and_limit_count_rows_once() {
     assert_eq!(ids(&out), [2, 3, 4]);
     let out = execute(vec![Stage::Limit(3), Stage::Offset(2)], rows(10)).unwrap();
     assert_eq!(ids(&out), [2]);
-    assert!(execute(vec![Stage::Limit(0)], rows(3)).unwrap().is_empty());
+    assert_eq!(execute(vec![Stage::Limit(0)], rows(3)).unwrap().len(), 0);
     assert_eq!(
         ids(&execute(vec![Stage::Offset(0)], rows(3)).unwrap()),
         [0, 1, 2]
     );
-    assert!(execute(vec![Stage::Offset(5)], rows(3)).unwrap().is_empty());
+    assert_eq!(execute(vec![Stage::Offset(5)], rows(3)).unwrap().len(), 0);
 }
 
 #[test]
@@ -836,11 +838,11 @@ fn cursor_reports_exhaustion_only_when_a_limit_is_used_up() {
     let mut cursor = Cursor::new(vec![Stage::Offset(1), Stage::Limit(1)]);
     assert!(!cursor.is_exhausted());
     let mut input = rows(3).into_iter();
-    assert!(cursor.push(input.next().unwrap()).unwrap().is_empty());
+    assert_eq!(cursor.push(input.next().unwrap()).unwrap().len(), 0);
     assert!(!cursor.is_exhausted());
     assert_eq!(cursor.push(input.next().unwrap()).unwrap().len(), 1);
     assert!(cursor.is_exhausted());
-    assert!(cursor.push(input.next().unwrap()).unwrap().is_empty());
+    assert_eq!(cursor.push(input.next().unwrap()).unwrap().len(), 0);
     assert!(Cursor::new(vec![Stage::Limit(0)]).is_exhausted());
     assert!(!Cursor::new(vec![Stage::Offset(0)]).is_exhausted());
     assert!(!Cursor::new(vec![]).is_exhausted());

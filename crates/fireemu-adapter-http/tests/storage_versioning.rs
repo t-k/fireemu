@@ -521,7 +521,7 @@ fn deleting_an_unknown_generation_is_not_found_and_changes_nothing() {
         b"",
     );
     assert_eq!(r.status, 404);
-    assert!(drain(&seen).is_empty());
+    assert_eq!(drain(&seen), [] as [(&str, u64); 0]);
     let still = call(
         &s,
         "GET",
@@ -592,7 +592,7 @@ fn copy_and_rewrite_can_read_a_noncurrent_source_generation() {
             b"{}",
         );
         assert_eq!(r.status, 404);
-        assert!(drain(&seen).is_empty());
+        assert_eq!(drain(&seen), [] as [(&str, u64); 0]);
     }
 }
 
@@ -634,7 +634,7 @@ fn patching_a_generation_changes_that_generation_and_never_the_live_object() {
         ));
         assert_eq!(old["metageneration"], "2");
         // UNRECORDED: a metadata change of a noncurrent version announces nothing.
-        assert!(drain(&seen).is_empty());
+        assert_eq!(drain(&seen), [] as [(&str, u64); 0]);
         // The live generation by number patches the live object, as a plain patch does.
         let r = call(
             &s,

@@ -739,7 +739,7 @@ mod tests {
             let bounds = DrainBounds::for_largest_body(largest);
             prop_assert!(bounds.limit_bytes >= MIN_DRAIN_BYTES);
             prop_assert!(bounds.limit_bytes >= largest);
-            prop_assert!(bounds.limit_bytes >= largest.saturating_add(largest / 8).min(usize::MAX));
+            prop_assert!(bounds.limit_bytes >= largest.saturating_add(largest / 8));
             let ceiling = largest.saturating_add(largest / 8).max(MIN_DRAIN_BYTES);
             prop_assert_eq!(bounds.limit_bytes, ceiling);
             prop_assert!(

@@ -2317,7 +2317,10 @@ mod dispatch_tests {
             let outcome = state
                 .pull_with_dead_letters(&source_subscription, 1, current)
                 .unwrap();
-            assert!(outcome.received.is_empty());
+            assert_eq!(
+                outcome.received,
+                [] as [fireemu_core_pubsub::ReceivedMessage; 0]
+            );
             assert_eq!(outcome.dead_lettered.len(), 1);
         }
         (state, destination_topic, source_subscription, now)
@@ -2373,7 +2376,10 @@ mod dispatch_tests {
                 .unwrap();
         }
         handle.retry_pending_dead_letters();
-        assert!(handle.pull(&sink, 1).unwrap().is_empty());
+        assert_eq!(
+            handle.pull(&sink, 1).unwrap(),
+            [] as [fireemu_core_pubsub::ReceivedMessage; 0]
+        );
         assert_eq!(handle.pull(&source, 1).unwrap()[0].delivery_attempt, 6);
     }
 
@@ -2559,7 +2565,7 @@ mod dispatch_tests {
         .await
         .unwrap()
         .unwrap();
-        assert!(received.is_empty());
+        assert_eq!(received, [] as [fireemu_core_pubsub::ReceivedMessage; 0]);
         assert!(started.elapsed() >= std::time::Duration::from_secs(20));
     }
 
@@ -2586,7 +2592,7 @@ mod dispatch_tests {
             .expect("an empty strict unary pull outlived its bound")
             .unwrap();
         let elapsed = started.elapsed();
-        assert!(received.is_empty());
+        assert_eq!(received, [] as [fireemu_core_pubsub::ReceivedMessage; 0]);
         assert!(elapsed >= bound, "returned after {elapsed:?}");
         assert!(
             elapsed <= bound + std::time::Duration::from_millis(25 + 1_000),
@@ -2729,14 +2735,16 @@ mod dispatch_tests {
     async fn unary_pull_immediate_error_emulator_and_dropped_future_controls() {
         for policy in [PagingPolicy::Strict, PagingPolicy::Emulator] {
             let (handle, subscription, topic) = unary_pull_fixture(policy);
-            assert!(tokio::time::timeout(
-                std::time::Duration::from_millis(100),
-                handle.pull_unary(&subscription, 1, true)
-            )
-            .await
-            .unwrap()
-            .unwrap()
-            .is_empty());
+            assert_eq!(
+                tokio::time::timeout(
+                    std::time::Duration::from_millis(100),
+                    handle.pull_unary(&subscription, 1, true)
+                )
+                .await
+                .unwrap()
+                .unwrap(),
+                [] as [fireemu_core_pubsub::ReceivedMessage; 0]
+            );
             let missing = SubscriptionName::new("demo-app", "missing").unwrap();
             assert!(tokio::time::timeout(
                 std::time::Duration::from_millis(100),
@@ -2749,7 +2757,10 @@ mod dispatch_tests {
             let result =
                 tokio::time::timeout(std::time::Duration::from_millis(100), &mut future).await;
             if policy == PagingPolicy::Emulator {
-                assert!(result.unwrap().unwrap().is_empty());
+                assert_eq!(
+                    result.unwrap().unwrap(),
+                    [] as [fireemu_core_pubsub::ReceivedMessage; 0]
+                );
             } else {
                 assert!(result.is_err());
             }
@@ -3175,7 +3186,7 @@ mod publication_gate_tests {
         );
         assert_eq!(reserved.load(Ordering::SeqCst), 2);
         assert_eq!(pulled[0].message.publish_time, at);
-        assert!(pulled[0].message.message.data.is_empty());
+        assert_eq!(pulled[0].message.message.data, [] as [u8; 0]);
         // an unknown topic publishes nothing and reserves nothing more
         let other = TopicName::new("demo-app", "nope").unwrap();
         assert!(handle

@@ -933,7 +933,7 @@ fn config_show_uses_selected_files_and_runtime_normalization() {
     assert!(out.status.success(), "{}", stderr(&out));
     let out = run_in(&dir, &["config", "show"], None);
     assert!(!out.status.success());
-    assert!(out.stdout.is_empty());
+    assert_eq!(out.stdout, [] as [u8; 0]);
     for args in [
         vec!["config"],
         vec!["config", "other"],

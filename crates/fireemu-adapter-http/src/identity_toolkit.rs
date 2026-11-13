@@ -7907,8 +7907,7 @@ fn strict_oidc_create_refusal(
     };
     if store
         .lock()
-        .ok()
-        .is_some_and(|store| store.oidc_config(&id).is_some())
+        .is_ok_and(|store| store.oidc_config(&id).is_some())
     {
         return Some(error(
             409,
@@ -9463,8 +9462,7 @@ fn request_may_create_end_user(
             };
             store
                 .check_phone_code(session, code, at)
-                .ok()
-                .is_some_and(|verified| store.user_by_phone(&verified.phone_number).is_none())
+                .is_ok_and(|verified| store.user_by_phone(&verified.phone_number).is_none())
         }
         routes::Handler::SignInWithIdp => {
             if body.get("idToken").is_some_and(|value| !value.is_null()) {
@@ -16543,7 +16541,10 @@ mod tests {
                     assert_eq!(old, new);
                     assert_eq!(old.status, 403);
                 }
-                assert!(state.store.lock().unwrap().users_by_creation().is_empty());
+                assert_eq!(
+                    state.store.lock().unwrap().users_by_creation(),
+                    [] as [&fireemu_core_auth::store::UserRecord; 0]
+                );
                 assert_eq!(
                     state.registry.as_ref().unwrap().tenants("demo-app").len(),
                     3

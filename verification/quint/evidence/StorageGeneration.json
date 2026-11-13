@@ -116,7 +116,7 @@
     },
     "crates/fireemu-core-types/src/admission.rs": {
       "kind": "sha256",
-      "value": "922b233308f1d5917f2958416297f507eba4dfc89ff308dcfea4290aca85e12c"
+      "value": "88ed81204f32bf9bfe92c93e93844ddb47b8f7c0c43b0e8873198a695885291a"
     },
     "crates/fireemu-core-types/src/codec.rs": {
       "kind": "sha256",
@@ -152,7 +152,7 @@
     },
     "crates/fireemu-core-types/src/resources.rs": {
       "kind": "sha256",
-      "value": "215442894b52451b9cd951d76ed7c9c9f48bb75f43a83064c555e7860d4c6396"
+      "value": "a634bc65f590315e590b507546499e0df78a912f4295794d603686a1c254e76a"
     },
     "crates/fireemu-core-types/src/time.rs": {
       "kind": "sha256",
@@ -160,7 +160,7 @@
     },
     "rust-toolchain.toml": {
       "kind": "sha256",
-      "value": "689fafb1dd9b80ee9a2a9b5e2bbb31e8f7ea4adad403717777689b35d4f861b2"
+      "value": "013444660d92f624c9c8df0afbbff108255b0fd0e35ff5edd08c835f10f9ad7d"
     },
     "verification/quint/apalache.lock.json": {
       "kind": "json-semantic",
@@ -248,7 +248,7 @@
     },
     "verification/quint/src/storage_generation.rs": {
       "kind": "sha256",
-      "value": "a826b06494d1726e0d9c38fdc0dc6dd6faae9046fff65915b2e55bfb829e79dd"
+      "value": "fdfdc95fb481ac9713aab21c631470bb78f530ad365f640017371304c06fb5e5"
     },
     "verification/quint/tests/storage_generation_connect.rs": {
       "kind": "sha256",

@@ -473,20 +473,22 @@ fn control_pings_get_pongs_and_keepalives_are_ignored() {
         send(&mut db, &mut s, r#"{"t":"c","d":{"t":"p","d":{}}}"#),
         vec![r#"{"t":"c","d":{"t":"o","d":null}}"#.to_owned()]
     );
-    assert!(send(&mut db, &mut s, "0").is_empty());
+    assert_eq!(send(&mut db, &mut s, "0"), [] as [std::string::String; 0]);
 }
 
 #[test]
 fn split_frames_reassemble_and_long_answers_split() {
     let mut db = Database::new(RestOptions::default(), 1);
     let (mut s, _) = open(&mut db, "/.ws?v=5&ns=w2");
-    assert!(send(&mut db, &mut s, "2").is_empty());
-    assert!(send(
-        &mut db,
-        &mut s,
-        r#"{"t":"d","d":{"r":4,"a":"p","b":{"p":"/sp"#
-    )
-    .is_empty());
+    assert_eq!(send(&mut db, &mut s, "2"), [] as [std::string::String; 0]);
+    assert_eq!(
+        send(
+            &mut db,
+            &mut s,
+            r#"{"t":"d","d":{"r":4,"a":"p","b":{"p":"/sp"#
+        ),
+        [] as [std::string::String; 0]
+    );
     assert_eq!(
         send(&mut db, &mut s, r#"lit","d":5}}}"#),
         vec![reply(4, "ok", r#""""#)]
@@ -872,7 +874,10 @@ fn edge_messages_follow_the_official_emulator() {
         vec![error(1)]
     );
     // gauth without a credential is not answered.
-    assert!(send(&mut db, &mut s, &request(9, "gauth", "{}")).is_empty());
+    assert_eq!(
+        send(&mut db, &mut s, &request(9, "gauth", "{}")),
+        [] as [std::string::String; 0]
+    );
     // A non-string path is read as its text; a non-string hash never matches.
     assert_eq!(
         send(&mut db, &mut s, &request(11, "g", r#"{"p":5}"#)),
@@ -930,9 +935,12 @@ fn edge_messages_follow_the_official_emulator() {
     // A long all-digit frame is a message, not a frame count.
     assert_eq!(send(&mut db, &mut s, "1234567"), vec![error(2)]);
     // A keepalive does not open a split message.
-    assert!(send(&mut db, &mut s, "0").is_empty());
-    assert!(send(&mut db, &mut s, "2").is_empty());
-    assert!(send(&mut db, &mut s, r#"{"t":"d","d":{"r":14,"a":"echo","#).is_empty());
+    assert_eq!(send(&mut db, &mut s, "0"), [] as [std::string::String; 0]);
+    assert_eq!(send(&mut db, &mut s, "2"), [] as [std::string::String; 0]);
+    assert_eq!(
+        send(&mut db, &mut s, r#"{"t":"d","d":{"r":14,"a":"echo","#),
+        [] as [std::string::String; 0]
+    );
     assert_eq!(
         send(&mut db, &mut s, r#""b":{"d":1}}}"#),
         vec![reply(14, "ok", r#""1""#)]
@@ -945,7 +953,7 @@ fn a_get_without_a_path_drops_the_connection() {
     let mut db = Database::new(RestOptions::default(), 1);
     let (mut s, _) = open(&mut db, "/.ws?v=5&ns=mx");
     let received = s.receive(&mut db, &request(5, "g", "{}"), NOW);
-    assert!(received.replies.is_empty());
+    assert_eq!(received.replies, [] as [std::string::String; 0]);
     assert!(received.drop_connection);
 }
 
@@ -1186,7 +1194,7 @@ fn stats_need_counters_as_the_official_emulator_reads_them() {
     // Stats without counters drop the connection.
     let received = s.receive(&mut db, &request(1, "s", "{}"), NOW);
     assert!(received.drop_connection);
-    assert!(received.replies.is_empty());
+    assert_eq!(received.replies, [] as [std::string::String; 0]);
 }
 
 /// The stale-transaction rows of the production SDK recording RTDB-CV09-SDK-20261025-08

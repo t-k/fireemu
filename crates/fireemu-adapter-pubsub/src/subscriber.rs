@@ -900,7 +900,10 @@ mod ack_wire_tests {
             },
         )
         .unwrap();
-        assert!(handle.pull(&sub, 1).unwrap().is_empty());
+        assert_eq!(
+            handle.pull(&sub, 1).unwrap(),
+            [] as [fireemu_core_pubsub::ReceivedMessage; 0]
+        );
     }
 
     #[test]
@@ -1107,7 +1110,10 @@ mod output_tests {
         tokio::pin!(notified);
         notified.as_mut().enable();
         let seen = handle.delivery_revision.load(Ordering::Acquire);
-        assert!(handle.pull(&name, 1).unwrap().is_empty());
+        assert_eq!(
+            handle.pull(&name, 1).unwrap(),
+            [] as [fireemu_core_pubsub::ReceivedMessage; 0]
+        );
         handle.state().clear();
         tokio::time::timeout(std::time::Duration::from_millis(100), &mut notified)
             .await

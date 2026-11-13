@@ -245,13 +245,13 @@ fn symbolic_bounded_matches_every_small_explicit_partial_dfa() {
                 initial: 0,
                 deterministic: true,
             };
-            for i in 0..2 {
-                graph.states[i].accept = accept & (1 << i) != 0;
+            for (i, state) in graph.states.iter_mut().enumerate() {
+                state.accept = accept & (1 << i) != 0;
                 for unit in [97, 98] {
                     let target = transitions % 3;
                     transitions /= 3;
                     if target != 0 {
-                        graph.states[i].edges.push(Edge {
+                        state.edges.push(Edge {
                             lo: unit,
                             hi: unit,
                             to: target - 1,
@@ -511,7 +511,7 @@ fn ast_compound_nodes_retain_constructor_observations() {
             (node.guard, node.singleton, node.deterministic),
             (guard, singleton, deterministic)
         );
-        assert!(!node.node.is_empty());
+        assert_ne!(node.node, "");
     }
 }
 
@@ -696,13 +696,13 @@ fn minimum_operator_observations_match_every_small_offline_jar_case() {
                 initial: 0,
                 deterministic: true,
             };
-            for i in 0..2 {
-                graph.states[i].accept = accept & (1 << i) != 0;
+            for (i, state) in graph.states.iter_mut().enumerate() {
+                state.accept = accept & (1 << i) != 0;
                 for unit in [97, 98] {
                     let target = transitions % 3;
                     transitions /= 3;
                     if target != 0 {
-                        graph.states[i].edges.push(Edge {
+                        state.edges.push(Edge {
                             lo: unit,
                             hi: unit,
                             to: target - 1,
@@ -866,13 +866,13 @@ fn symbolic_minimum_matches_explicit_algebra_and_all_small_jar_observations() {
                 initial: 0,
                 deterministic: true,
             };
-            for i in 0..2 {
-                child.states[i].accept = accept & (1 << i) != 0;
+            for (i, state) in child.states.iter_mut().enumerate() {
+                state.accept = accept & (1 << i) != 0;
                 for unit in [97, 98] {
                     let target = transitions % 3;
                     transitions /= 3;
                     if target != 0 {
-                        child.states[i].edges.push(Edge {
+                        state.edges.push(Edge {
                             lo: unit,
                             hi: unit,
                             to: target - 1,
@@ -1751,13 +1751,13 @@ fn persistent_primitive_matches_1296_eager_operation_models_and_guards() {
                 deterministic: false,
                 states: vec![State::default(); 2],
             };
-            for q in 0..2 {
-                graph.states[q].accept = accept & (1 << q) != 0;
+            for (q, state) in graph.states.iter_mut().enumerate() {
+                state.accept = accept & (1 << q) != 0;
                 for unit in [97, 98] {
                     let digit = digits % 3;
                     digits /= 3;
                     if digit != 0 {
-                        graph.states[q].edges.push(Edge {
+                        state.edges.push(Edge {
                             lo: unit,
                             hi: unit,
                             to: digit - 1,
@@ -2046,10 +2046,10 @@ fn persistent_varying_histories_match_scalar_snapshots() {
                 }
                 _ => retained.push((store.clone(), eager.states.clone())),
             }
-            for q in 0..4 {
-                assert_eq!(store.accepts(q), eager.states[q].accept);
+            for (q, state) in eager.states.iter().enumerate() {
+                assert_eq!(store.accepts(q), state.accept);
                 let actual: BTreeSet<_> = store.outgoing(q).collect();
-                assert_eq!(actual, eager.states[q].edges.iter().copied().collect());
+                assert_eq!(actual, state.edges.iter().copied().collect());
             }
         }
         for (version, expected) in retained {

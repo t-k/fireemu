@@ -311,7 +311,10 @@ fn compacted_tombstones_are_removed_from_scope_indexes() {
 
     let (documents, query_stats) =
         state.list_documents_page_at_with_stats(None, "gone", None, None, 1);
-    assert!(documents.is_empty());
+    assert_eq!(
+        documents,
+        [] as [fireemu_core_firestore::store::Document; 0]
+    );
     assert_eq!(
         query_stats.scanned, 0,
         "no stale scope-index entry is retained"

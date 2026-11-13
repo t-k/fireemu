@@ -921,12 +921,12 @@ fn is_mount_root(directory: BorrowedFd<'_>, name: &OsStr) -> Result<bool, String
     let parent_device = rustix::fs::fstat(directory)
         .map_err(|error| format!("cannot inspect the export parent: {error}"))?
         .st_dev;
-    if target_device != parent_device {
-        return Ok(true);
-    }
     #[cfg(target_os = "linux")]
     {
         use rustix::fs::{statx, AtFlags, StatxAttributes, StatxFlags};
+        if target_device != parent_device {
+            return Ok(true);
+        }
         if let Ok(status) = statx(
             directory,
             name,
@@ -941,7 +941,7 @@ fn is_mount_root(directory: BorrowedFd<'_>, name: &OsStr) -> Result<bool, String
             }
         }
     }
-    Ok(false)
+    Ok(target_device != parent_device)
 }
 
 /// Moves the entry `name` from one held directory to another (same name on both sides).

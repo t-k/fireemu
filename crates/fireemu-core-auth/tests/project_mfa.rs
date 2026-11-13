@@ -549,7 +549,7 @@ fn the_new_mfa_refusals_describe_themselves() {
     ] {
         assert_eq!(error.to_string(), text);
     }
-    assert!(!MfaError::TooManyEnrollmentAttempts.to_string().is_empty());
+    assert_ne!(MfaError::TooManyEnrollmentAttempts.to_string(), "");
 }
 
 /// Below the cap nothing makes room: an enrollment session older than the observed ages stays

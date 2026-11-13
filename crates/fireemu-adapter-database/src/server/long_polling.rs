@@ -658,7 +658,7 @@ mod tests {
         close(&shared, &mut database, &connection, &mut connection.lock());
         let events = database.drain_events();
         deliver_events(&shared, &mut database, events);
-        assert!(observer.lock().outbox.is_empty());
+        assert_eq!(observer.lock().outbox, [] as [std::string::String; 0]);
         assert_eq!(
             database
                 .tree("o")

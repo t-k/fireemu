@@ -55,7 +55,10 @@ fn oob_and_sms_codes_are_swept_at_their_exact_boundaries() {
     // One second past the SMS lifetime the code is gone and unredeemable; the OOB code is
     // gone one second past its own.
     s.sweep_transient_credentials(after(SMS_CODE_TTL_SECONDS + 1));
-    assert!(s.verification_codes().is_empty());
+    assert_eq!(
+        s.verification_codes(),
+        [] as [&fireemu_core_auth::store::VerificationCode; 0]
+    );
     assert_eq!(
         s.check_phone_code(
             &sms.session_info,
@@ -65,7 +68,7 @@ fn oob_and_sms_codes_are_swept_at_their_exact_boundaries() {
         Err(AuthError::InvalidSessionInfo)
     );
     s.sweep_transient_credentials(after(OOB_CODE_TTL_SECONDS + 1));
-    assert!(s.oob_codes().is_empty());
+    assert_eq!(s.oob_codes(), [] as [&fireemu_core_auth::store::OobCode; 0]);
     assert_eq!(
         s.consume_oob_code(&oob, None, after(OOB_CODE_TTL_SECONDS + 1)),
         Err(AuthError::InvalidOobCode)
@@ -293,7 +296,10 @@ fn a_snapshot_keeps_the_lifecycle_and_refresh_tokens_are_never_swept() {
     snapshot.restore_into(&mut restored);
     assert_eq!(restored.verification_codes().len(), 1);
     restored.sweep_transient_credentials(after(SMS_CODE_TTL_SECONDS + 1));
-    assert!(restored.verification_codes().is_empty());
+    assert_eq!(
+        restored.verification_codes(),
+        [] as [&fireemu_core_auth::store::VerificationCode; 0]
+    );
     // Years later the refresh token still redeems (`AUTH-TRANSIENT-06`).
     restored.sweep_transient_credentials(after(10 * 365 * 24 * 3600));
     assert_eq!(restored.redeem_refresh_token(&refresh), Ok(uid));

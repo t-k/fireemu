@@ -90,9 +90,10 @@ fn empty_partial_wildcard_and_case_changed_uid_are_not_broadened() {
         Expr::PhoneNumber("15550000001".into()),
     ] {
         assert_eq!(store.matching_user_count(std::slice::from_ref(&filter)), 0);
-        assert!(store
-            .users_matching_sorted_page(&[filter], UserSortField::Name, 0, 500, false)
-            .is_empty());
+        assert_eq!(
+            store.users_matching_sorted_page(&[filter], UserSortField::Name, 0, 500, false),
+            [] as [&fireemu_core_auth::store::UserRecord; 0]
+        );
     }
 }
 
@@ -108,9 +109,10 @@ fn filtering_is_read_only_and_huge_offsets_are_safe() {
         UserSortField::LastLoginAt,
         UserSortField::LocalId,
     ] {
-        assert!(store
-            .users_matching_sorted_page(&filter, field, usize::MAX, usize::MAX, false)
-            .is_empty());
+        assert_eq!(
+            store.users_matching_sorted_page(&filter, field, usize::MAX, usize::MAX, false),
+            [] as [&fireemu_core_auth::store::UserRecord; 0]
+        );
         assert_eq!(
             ids(store.users_matching_sorted_page(&filter, field, 0, 1, true)),
             ["a"]

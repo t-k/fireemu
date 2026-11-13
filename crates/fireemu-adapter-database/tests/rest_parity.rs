@@ -1315,7 +1315,7 @@ fn a_put_with_if_none_match_answers_its_etag() {
         );
         assert_eq!(silent.status, 204);
         assert_eq!(header(&silent, "ETag"), Some(ETAG_X1));
-        assert!(silent.body.is_empty());
+        assert_eq!(silent.body, [] as [u8; 0]);
         // A matching tag: 412 with the current value and no ETag, silent or not.
         for query in ["", "&print=silent"] {
             let failed = send(
@@ -1425,7 +1425,7 @@ fn a_not_modified_answer_follows_the_output_options() {
             assert_eq!(header(&response, "Content-Length"), Some("0"));
             assert_eq!(header(&response, "ETag"), None);
             assert_eq!(header(&response, "X-Content-Type-Options"), None);
-            assert!(response.body.is_empty());
+            assert_eq!(response.body, [] as [u8; 0]);
         }
         let missing = send(
             &mut db,

@@ -396,7 +396,10 @@ fn signed_oidc_rejects_fixture_downgrades_and_wrong_trust_scope() {
     config.enabled = false;
     s.store.lock().unwrap().replace_oidc_config(config);
     assert_eq!(signed_post(&s, &trust(), &body).status, 400);
-    assert!(s.store.lock().unwrap().users_by_creation().is_empty());
+    assert_eq!(
+        s.store.lock().unwrap().users_by_creation(),
+        [] as [&fireemu_core_auth::store::UserRecord; 0]
+    );
 }
 
 #[test]
@@ -432,7 +435,10 @@ fn signed_oidc_rejects_untrusted_headers_and_access_token_fallback() {
     ] {
         assert_eq!(signed_post(&s, &trust(), &body).status, 400);
     }
-    assert!(s.store.lock().unwrap().users_by_creation().is_empty());
+    assert_eq!(
+        s.store.lock().unwrap().users_by_creation(),
+        [] as [&fireemu_core_auth::store::UserRecord; 0]
+    );
 }
 
 #[test]
@@ -508,7 +514,10 @@ fn signed_oidc_mixed_access_token_is_refused_before_mutation_or_credential_forwa
     assert_eq!(response.body["error"]["message"], "INVALID_IDP_RESPONSE");
     assert!(response.body.get("oauthAccessToken").is_none());
     assert!(response.body.get("idToken").is_none());
-    assert!(s.store.lock().unwrap().users_by_creation().is_empty());
+    assert_eq!(
+        s.store.lock().unwrap().users_by_creation(),
+        [] as [&fireemu_core_auth::store::UserRecord; 0]
+    );
     assert!(contexts.lock().unwrap().is_empty());
     // The observer is active and receives genuine ID-token credentials on the allowed path.
     let mut allowed = request(&token(&claims()));
@@ -570,27 +579,37 @@ fn signed_oidc_tenant_routing_succeeds_only_with_the_selected_namespace_pin() {
             .len(),
         1
     );
-    assert!(registry
-        .tenant_store("demo-app", "customer-b")
-        .unwrap()
-        .lock()
-        .unwrap()
-        .users_by_creation()
-        .is_empty());
-    assert!(s.store.lock().unwrap().users_by_creation().is_empty());
+    assert_eq!(
+        registry
+            .tenant_store("demo-app", "customer-b")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .users_by_creation(),
+        [] as [&fireemu_core_auth::store::UserRecord; 0]
+    );
+    assert_eq!(
+        s.store.lock().unwrap().users_by_creation(),
+        [] as [&fireemu_core_auth::store::UserRecord; 0]
+    );
     // The same valid assertion cannot use A's pin against either B or the parent namespace.
     body["tenantId"] = json!("customer-b");
     assert_eq!(signed_post(&s, &tenant_pin, &body).status, 400);
     body.as_object_mut().unwrap().remove("tenantId");
     assert_eq!(signed_post(&s, &tenant_pin, &body).status, 400);
-    assert!(registry
-        .tenant_store("demo-app", "customer-b")
-        .unwrap()
-        .lock()
-        .unwrap()
-        .users_by_creation()
-        .is_empty());
-    assert!(s.store.lock().unwrap().users_by_creation().is_empty());
+    assert_eq!(
+        registry
+            .tenant_store("demo-app", "customer-b")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .users_by_creation(),
+        [] as [&fireemu_core_auth::store::UserRecord; 0]
+    );
+    assert_eq!(
+        s.store.lock().unwrap().users_by_creation(),
+        [] as [&fireemu_core_auth::store::UserRecord; 0]
+    );
 }
 
 #[test]
@@ -701,8 +720,14 @@ fn signed_oidc_bad_signature_preserves_populated_sessions_transients_and_allocat
         format!("{:?}", baseline.refresh_session(refresh).unwrap())
     );
     assert_eq!(store.redeem_refresh_token(refresh).unwrap(), uid);
-    assert!(store.take_user_events().is_empty());
-    assert!(store.take_credential_notices().is_empty());
+    assert_eq!(
+        store.take_user_events(),
+        [] as [fireemu_core_auth::store::UserEvent; 0]
+    );
+    assert_eq!(
+        store.take_credential_notices(),
+        [] as [fireemu_core_auth::store::CredentialNotice; 0]
+    );
     // Equal subsequent public outputs constrain the RNG, UID sequence and refresh allocation.
     let allocated = store.create_user(NewUser::anonymous(), later).unwrap();
     let expected = baseline.create_user(NewUser::anonymous(), later).unwrap();

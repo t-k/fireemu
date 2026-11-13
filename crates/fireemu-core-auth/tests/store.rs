@@ -244,8 +244,14 @@ fn explicit_local_ids_are_validated_and_unique() {
         .iter()
         .all(|user| user.local_id != e));
     s.clear();
-    assert!(s.all_user_ids().is_empty());
-    assert!(s.users_by_creation().is_empty());
+    assert_eq!(
+        s.all_user_ids(),
+        [] as [fireemu_core_auth::store::LocalId; 0]
+    );
+    assert_eq!(
+        s.users_by_creation(),
+        [] as [&fireemu_core_auth::store::UserRecord; 0]
+    );
 }
 
 #[test]
@@ -746,7 +752,7 @@ fn refresh_tokens_and_id_tokens_respect_revocation_and_disablement() {
         AuthError::InvalidRefreshToken,
         AuthError::WeakPassword,
     ] {
-        assert!(!e.to_string().is_empty());
+        assert_ne!(e.to_string(), "");
     }
 }
 
@@ -963,9 +969,12 @@ fn an_unverified_provider_email_needs_confirmation_and_changes_nothing() {
         panic!("expected needConfirmation");
     };
     assert_eq!(named, uid);
-    assert!(verified_providers.is_empty());
+    assert_eq!(verified_providers, [] as [std::string::String; 0]);
     // Nothing linked, no second account created.
-    assert!(s.user(&uid).unwrap().federated.is_empty());
+    assert_eq!(
+        s.user(&uid).unwrap().federated,
+        [] as [fireemu_core_auth::store::FederatedIdentity; 0]
+    );
     assert_eq!(s.users_by_creation().len(), 1);
 }
 
@@ -1105,7 +1114,10 @@ fn credential_notice_messages_are_the_official_console_lines() {
 fn credential_notices_are_drained_once_in_issue_order() {
     use fireemu_core_auth::store::{CredentialNotice, PhoneCodeUse};
     let mut s = store();
-    assert!(s.take_credential_notices().is_empty());
+    assert_eq!(
+        s.take_credential_notices(),
+        [] as [fireemu_core_auth::store::CredentialNotice; 0]
+    );
     let first = CredentialNotice::PhoneCode {
         phone_number: "+15551234567".to_owned(),
         code: "000001".to_owned(),
@@ -1125,7 +1137,10 @@ fn credential_notices_are_drained_once_in_issue_order() {
         vec![first.clone(), second.clone()]
     );
     assert_eq!(s.take_credential_notices(), vec![first, second]);
-    assert!(s.take_credential_notices().is_empty());
+    assert_eq!(
+        s.take_credential_notices(),
+        [] as [fireemu_core_auth::store::CredentialNotice; 0]
+    );
 }
 
 /// A temporary proof is a credential of its namespace: restoring a snapshot into another
@@ -1223,7 +1238,13 @@ fn retiring_codes_removes_only_that_kind_for_that_address() {
     )
     .unwrap();
     s.retire_oob_codes(OobRequestType::PasswordReset, "a@example.com");
-    assert!(codes(&s).is_empty());
+    assert_eq!(
+        codes(&s),
+        [] as [(
+            fireemu_core_auth::store::OobRequestType,
+            std::string::String
+        ); 0]
+    );
 }
 
 #[test]

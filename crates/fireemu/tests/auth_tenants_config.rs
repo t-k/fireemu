@@ -896,7 +896,10 @@ fn a_session_can_be_created_over_a_routed_namespace_that_holds_tenants() {
             &json!({"displayName": "routed"}),
         );
         assert_eq!(status, 200, "{declared_tenants}: {made}");
-        assert!(!daemon.tenant_ids_in("demo-b").is_empty());
+        assert_ne!(
+            daemon.tenant_ids_in("demo-b"),
+            [] as [std::string::String; 0]
+        );
         let (status, created) = http(
             daemon.control_port(),
             "POST",

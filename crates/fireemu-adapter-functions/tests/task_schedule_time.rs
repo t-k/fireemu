@@ -215,7 +215,10 @@ async fn strict_refuses_a_schedule_time_that_is_not_rfc_3339() {
             .expect_err(bad);
         assert_eq!(refusal.status, 400, "{bad}");
     }
-    assert!(f.runtime.pending_tasks().is_empty());
+    assert_eq!(
+        f.runtime.pending_tasks(),
+        [] as [fireemu_adapter_functions::runtime::PendingTaskInfo; 0]
+    );
     f.stop().await;
 }
 

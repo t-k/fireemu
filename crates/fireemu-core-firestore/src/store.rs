@@ -2521,7 +2521,7 @@ impl FirestoreState {
 
     /// All live documents (latest versions), in path order.
     fn live_documents(&self, at: Option<CommitVersion>) -> impl Iterator<Item = &Document> {
-        self.history.iter().filter_map(move |(path, _)| match at {
+        self.history.keys().filter_map(move |path| match at {
             Some(v) => self.get_at(path, v),
             None => self.get(path),
         })

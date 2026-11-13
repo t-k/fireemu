@@ -239,7 +239,7 @@ fn crossing_each_lifetime_alone_leaves_the_other_objects_usable() {
                     Err(MfaError::EnrollmentSessionExpired)
                 );
                 assert_eq!(s.user(&uid).unwrap().mfa.pending_count(), 2);
-                assert!(s.user(&uid).unwrap().mfa.totp_factors().is_empty());
+                assert_eq!(s.user(&uid).unwrap().mfa.totp_factors(), []);
             }
             Object::PendingToken => {
                 assert_eq!(
@@ -385,7 +385,10 @@ fn fresh_control(
                 .is_ok());
             s.consume_phone_code(&code.session_info);
             assert_eq!(s.pending_sign_in_count(), 0);
-            assert!(s.verification_codes().is_empty());
+            assert_eq!(
+                s.verification_codes(),
+                [] as [&fireemu_core_auth::store::VerificationCode; 0]
+            );
         }
         Object::TotpEnrollment => {
             let material = s.start_totp_enrollment(uid, now).unwrap();
@@ -515,7 +518,7 @@ fn an_expired_enrollment_is_reaped_after_one_grace_window_and_a_fresh_one_still_
         Err(MfaError::EnrollmentSessionUnknown)
     );
     // A fresh session enrolls: no factor was created by any refusal above.
-    assert!(s.user(&uid).unwrap().mfa.totp_factors().is_empty());
+    assert_eq!(s.user(&uid).unwrap().mfa.totp_factors(), []);
     let third = s.start_totp_enrollment(&uid, past_grace).unwrap();
     assert!(s
         .finalize_totp_enrollment(
@@ -634,7 +637,10 @@ fn replaying_a_consumed_step_after_success_is_refused_for_both_factor_kinds() {
         Err(MfaError::PendingSignInUnknown)
     );
     assert_eq!(s.pending_sign_in_count(), 0);
-    assert!(s.verification_codes().is_empty());
+    assert_eq!(
+        s.verification_codes(),
+        [] as [&fireemu_core_auth::store::VerificationCode; 0]
+    );
     assert_eq!(s.user(&uid).unwrap().mfa.factor_count(), 2);
 }
 

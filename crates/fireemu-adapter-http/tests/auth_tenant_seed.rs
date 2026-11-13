@@ -259,7 +259,7 @@ fn a_seeded_tenant_can_be_applied_again_after_a_reset_wiped_it() {
     prepared[0].apply(&registry, "demo-app").unwrap();
     let reset = registry.prepare_default_scope_reset().unwrap();
     registry.apply_default_scope_reset(&reset).unwrap();
-    assert!(registry.tenants("demo-app").is_empty());
+    assert_eq!(registry.tenants("demo-app"), [] as [std::string::String; 0]);
     prepared[0].apply(&registry, "demo-app").unwrap();
     assert_eq!(registry.tenants("demo-app"), ["acme-x7k2q"]);
 }
@@ -337,14 +337,16 @@ fn a_declared_tenant_an_import_replaced_with_other_settings_is_reported() {
     let (_, registry) = with_registry(emulator_state());
     let declared = TenantSeeding::new(None, seeds(&[acme()], true).unwrap());
     // Nothing there yet: nothing shadows.
-    assert!(declared
-        .shadowed_by_existing(&registry, "demo-app")
-        .is_empty());
+    assert_eq!(
+        declared.shadowed_by_existing(&registry, "demo-app"),
+        [] as [std::string::String; 0]
+    );
     // The same declaration is not a difference.
     declared.apply(&registry, "demo-app").unwrap();
-    assert!(declared
-        .shadowed_by_existing(&registry, "demo-app")
-        .is_empty());
+    assert_eq!(
+        declared.shadowed_by_existing(&registry, "demo-app"),
+        [] as [std::string::String; 0]
+    );
     // Another tenant of the same id, with other settings, is.
     let other = |change: fn(&mut Value)| {
         let (_, registry) = with_registry(emulator_state());
@@ -355,7 +357,7 @@ fn a_declared_tenant_an_import_replaced_with_other_settings_is_reported() {
             .unwrap();
         declared.shadowed_by_existing(&registry, "demo-app")
     };
-    assert!(other(|_| {}).is_empty());
+    assert_eq!(other(|_| {}), [] as [std::string::String; 0]);
     // A tenant of the same id with another display name (an imported one) is a difference too.
     let (_, renamed) = with_registry(emulator_state());
     assert!(renamed

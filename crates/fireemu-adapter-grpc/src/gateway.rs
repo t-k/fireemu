@@ -588,12 +588,9 @@ fn note_missing_index(fragment: &str, refused: bool) {
     let fragment = fireemu_core_types::codec::echo(fragment);
     let fragment = fragment.as_ref();
     let noted = NOTED.get_or_init(|| std::sync::Mutex::new(std::collections::BTreeSet::new()));
-    let first = noted
-        .lock()
-        .map(|mut set| {
-            set.len() < MAX_MISSING_INDEX_REPORTS && set.insert((refused, fragment.to_owned()))
-        })
-        .unwrap_or(false);
+    let first = noted.lock().is_ok_and(|mut set| {
+        set.len() < MAX_MISSING_INDEX_REPORTS && set.insert((refused, fragment.to_owned()))
+    });
     if first {
         let context = if refused {
             "missing composite index (strict profile); production needs"

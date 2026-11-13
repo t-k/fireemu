@@ -1717,7 +1717,7 @@ async fn sse_framing_matches_profile_without_ending_live_streams() {
                     tokio::time::timeout(Duration::from_secs(5), read_sse_chunk(&mut stream))
                         .await
                         .unwrap();
-                assert!(terminal.is_empty());
+                assert_eq!(terminal, [] as [u8; 0]);
                 assert_eq!(raw_terminal, b"0\r\n\r\n");
                 eprintln!("SSE raw profile={strict} patch={raw_patch:?} cancel={raw_cancel:?} terminal={raw_terminal:?}");
                 if strict {

@@ -1339,6 +1339,8 @@ struct QuerySelectionInner {
 }
 
 impl QuerySelection {
+    // fetch_update is required for MSRV 1.85.
+    #[allow(deprecated)]
     fn from_paths(
         paths: Vec<DocumentPath>,
         retained_total: Arc<std::sync::atomic::AtomicU64>,
@@ -1367,6 +1369,8 @@ impl QuerySelection {
 }
 
 impl Drop for QuerySelectionInner {
+    // fetch_update is required for MSRV 1.85.
+    #[allow(deprecated)]
     fn drop(&mut self) {
         let _ = self.retained_total.fetch_update(
             std::sync::atomic::Ordering::AcqRel,
@@ -2757,10 +2761,10 @@ impl LocalBackend {
             (None, DatabaseId::DEFAULT.to_owned()),
             gateway.indexes.clone(),
         )]));
-        let created_at = clock
-            .lock()
-            .map(|clock| clock.now())
-            .unwrap_or(fireemu_core_types::time::LogicalInstant::UNIX_EPOCH);
+        let created_at = clock.lock().map_or(
+            fireemu_core_types::time::LogicalInstant::UNIX_EPOCH,
+            |clock| clock.now(),
+        );
         let configured_edition = match gateway.ctx.edition {
             fireemu_core_types::edition::FirestoreEdition::Standard => {
                 crate::admin::catalog::DatabaseEdition::Standard
@@ -5395,8 +5399,9 @@ impl LocalBackend {
     pub fn now(&self) -> fireemu_core_types::time::LogicalInstant {
         self.clock
             .lock()
-            .map(|c| c.now())
-            .unwrap_or(fireemu_core_types::time::LogicalInstant::UNIX_EPOCH)
+            .map_or(fireemu_core_types::time::LogicalInstant::UNIX_EPOCH, |c| {
+                c.now()
+            })
     }
 
     /// Makes `project` the only project that exists: a request naming another is refused
@@ -5529,8 +5534,7 @@ impl LocalBackend {
                     let offset = self
                         .transaction_ids
                         .lock()
-                        .map(|mut ids| ids.next_u64() >> 2)
-                        .unwrap_or(0);
+                        .map_or(0, |mut ids| ids.next_u64() >> 2);
                     Arc::new(DatabaseEntry::restored(
                         FirestoreState::with_limit_scope(scope)
                             .with_retained_version_limit(self.history_version_limit)
@@ -9014,7 +9018,7 @@ mod lock_tests {
                 ..Default::default()
             })
             .unwrap();
-        assert!(backend.release_count() != seen);
+        assert_ne!(backend.release_count(), seen);
         assert!(backend.await_any_release_until(seen, &deadline).await);
     }
 

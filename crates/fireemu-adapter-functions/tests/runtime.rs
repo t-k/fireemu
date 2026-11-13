@@ -446,7 +446,10 @@ async fn fixed_inspector_reload_wakes_queued_background_work() {
     runtime.publish("jobs", &[json!({"data": "YQ=="})]).unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(!runtime.is_idle());
-    assert!(runtime.history().is_empty());
+    assert_eq!(
+        runtime.history(),
+        [] as [fireemu_adapter_functions::runtime::InvocationRecord; 0]
+    );
     let spec = SpawnSpec {
         command: vec![
             "python3".to_owned(),
@@ -951,7 +954,10 @@ async fn shutdown_closes_the_manual_and_the_clock_driven_schedule_paths() {
         .unwrap();
     runtime.on_clock_changed();
     assert!(runtime.is_idle(), "{}", runtime.status());
-    assert!(runtime.history().is_empty());
+    assert_eq!(
+        runtime.history(),
+        [] as [fireemu_adapter_functions::runtime::InvocationRecord; 0]
+    );
 }
 
 #[tokio::test]
@@ -4063,12 +4069,14 @@ fn http_responses_are_parsed_with_every_body_framing() {
     assert_eq!(parse_response(sized, "GET").unwrap().body, b"nop");
     // HEAD and body-less statuses omit the declared body; a truncated GET is an error.
     let head = b"HTTP/1.1 200 OK\r\ncontent-length: 3\r\n\r\n";
-    assert!(parse_response(head, "HEAD").unwrap().body.is_empty());
+    assert_eq!(parse_response(head, "HEAD").unwrap().body, [] as [u8; 0]);
     assert!(parse_response(head, "GET").is_err());
-    assert!(parse_response(b"HTTP/1.1 204 No Content\r\n\r\n", "GET")
-        .unwrap()
-        .body
-        .is_empty());
+    assert_eq!(
+        parse_response(b"HTTP/1.1 204 No Content\r\n\r\n", "GET")
+            .unwrap()
+            .body,
+        [] as [u8; 0]
+    );
     let closed = b"HTTP/1.1 500 X\r\n\r\nwhole body";
     assert_eq!(parse_response(closed, "GET").unwrap().body, b"whole body");
     assert!(parse_response(b"garbage", "GET").is_err());
@@ -4112,7 +4120,7 @@ fn iana_zones_follow_daylight_saving_time() {
     // Fixed-offset aliases and unknown zones.
     assert!(resolve(Some("Asia/Tokyo")).is_ok());
     assert!(resolve(Some("Mars/Olympus")).is_err());
-    assert!(!fireemu_adapter_functions::zone::database_version().is_empty());
+    assert_ne!(fireemu_adapter_functions::zone::database_version(), "");
 }
 
 #[test]
@@ -6023,7 +6031,10 @@ async fn a_manual_run_of_an_unknown_or_unscheduled_function_is_refused_and_chang
         "{unscheduled:?}"
     );
     assert!(runtime.is_idle(), "nothing was enqueued");
-    assert!(runtime.history().is_empty());
+    assert_eq!(
+        runtime.history(),
+        [] as [fireemu_adapter_functions::runtime::InvocationRecord; 0]
+    );
     assert_eq!(runtime.status()["pending"], 0);
     runtime.shutdown().await;
 }
@@ -6043,7 +6054,10 @@ async fn a_schedule_run_queued_while_the_runner_is_stopped_survives_a_reload_and
     runtime.on_clock_changed();
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(!runtime.is_idle(), "the 12:05 run waits for a runner");
-    assert!(runtime.history().is_empty());
+    assert_eq!(
+        runtime.history(),
+        [] as [fireemu_adapter_functions::runtime::InvocationRecord; 0]
+    );
     let spec = SpawnSpec {
         command: vec![
             "python3".to_owned(),
@@ -6858,7 +6872,10 @@ async fn concurrent_event_producers_wait_for_one_cold_start() {
         producer.await.unwrap();
     }
     runtime.publish("jobs", &[json!({"data": "RQ=="})]).unwrap();
-    assert!(lines_of(&dir.join("onJob.frames")).is_empty());
+    assert_eq!(
+        lines_of(&dir.join("onJob.frames")),
+        [] as [std::string::String; 0]
+    );
     assert_eq!(lines_of(&dir.join("onJob.starts")).len(), 1);
     gate.write_all(b"R").await.unwrap();
     runtime.await_idle(Duration::from_secs(20)).await.unwrap();
@@ -6905,7 +6922,10 @@ async fn http_and_event_start_their_isolated_runners_concurrently() {
     runtime.publish("jobs", &[json!({"data": "QQ=="})]).unwrap();
     let mut second = accept_hello(&listener).await;
     assert!(!request.is_finished());
-    assert!(lines_of(&dir.join("onJob.frames")).is_empty());
+    assert_eq!(
+        lines_of(&dir.join("onJob.frames")),
+        [] as [std::string::String; 0]
+    );
     assert_eq!(lines_of(&dir.join("echo.starts")).len(), 1);
     assert_eq!(lines_of(&dir.join("onJob.starts")).len(), 1);
     first.write_all(b"R").await.unwrap();
@@ -6995,7 +7015,10 @@ async fn failed_cold_start_retries_and_delivers_the_event_once() {
     failed.write_all(b"F").await.unwrap();
     let mut retry = accept_hello(&listener).await;
     assert_eq!(lines_of(&dir.join("onJob.starts")).len(), 2);
-    assert!(lines_of(&dir.join("onJob.frames")).is_empty());
+    assert_eq!(
+        lines_of(&dir.join("onJob.frames")),
+        [] as [std::string::String; 0]
+    );
     retry.write_all(b"R").await.unwrap();
     runtime.await_idle(Duration::from_secs(20)).await.unwrap();
     let frames = lines_of(&dir.join("onJob.frames"));
@@ -7093,7 +7116,10 @@ async fn a_lazy_runner_starts_on_its_first_event_and_the_waiting_events_arrive_o
     let runtime = runtime_of_units(lazy_units(&dir, &["echo", "onJob"]).await);
     // Nothing is started, and nothing is reported as down.
     assert!(runtime.runner_alive());
-    assert!(lines_of(&dir.join("onJob.starts")).is_empty());
+    assert_eq!(
+        lines_of(&dir.join("onJob.starts")),
+        [] as [std::string::String; 0]
+    );
     let status = runtime.status();
     assert_eq!(status["codebases"][1]["started"], false);
     assert_eq!(status["codebases"][1]["runnerAlive"], true);
@@ -7129,7 +7155,10 @@ async fn a_lazy_runner_starts_on_its_first_event_and_the_waiting_events_arrive_o
         "one process, started once"
     );
     // The other function was never needed, so it was never started.
-    assert!(lines_of(&dir.join("echo.starts")).is_empty());
+    assert_eq!(
+        lines_of(&dir.join("echo.starts")),
+        [] as [std::string::String; 0]
+    );
     let status = runtime.status();
     assert_eq!(status["codebases"][1]["started"], true);
     assert_eq!(status["codebases"][0]["started"], false);
@@ -7153,11 +7182,17 @@ async fn a_lazy_runner_starts_on_its_first_http_request_and_a_reset_does_not_sta
         200
     );
     assert_eq!(lines_of(&dir.join("echo.starts")).len(), 1);
-    assert!(lines_of(&dir.join("onJob.starts")).is_empty());
+    assert_eq!(
+        lines_of(&dir.join("onJob.starts")),
+        [] as [std::string::String; 0]
+    );
     // A reset restarts what ran and leaves what never ran alone.
     runtime.reset();
     tokio::time::sleep(Duration::from_millis(500)).await;
-    assert!(lines_of(&dir.join("onJob.starts")).is_empty());
+    assert_eq!(
+        lines_of(&dir.join("onJob.starts")),
+        [] as [std::string::String; 0]
+    );
     assert_eq!(
         runtime
             .invoke_http(&target, "GET", "/again", &[], &[])

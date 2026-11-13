@@ -113,7 +113,7 @@ fn document_paths_report_exact_segment_indexes_depths_and_lengths() {
             maximum: 0,
         },
     ] {
-        assert!(!e.to_string().is_empty());
+        assert_ne!(e.to_string(), "");
     }
 }
 
@@ -152,7 +152,7 @@ fn field_paths_quote_escape_and_reject_at_the_documented_boundaries() {
         FieldPathError::UnquotedSpecialCharacter { offset: 0 },
         FieldPathError::ControlCharacter { offset: 0 },
     ] {
-        assert!(!e.to_string().is_empty());
+        assert_ne!(e.to_string(), "");
     }
 }
 

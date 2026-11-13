@@ -114,18 +114,20 @@ fn a_snapshot_carries_the_bit_of_the_buckets_it_captured() {
     put(&mut live, "bucket-one", "a.txt");
     put(&mut live, "bucket-two", "a.txt");
     live.set_public_read(&bucket("bucket-one"), &name("a.txt"));
-    let captured = live.capture_buckets(|b| b == "bucket-one");
+    let captured = live.capture_buckets(|b| b == "bucket-one").unwrap();
     assert!(captured.is_public_read(&bucket("bucket-one"), &name("a.txt")));
     assert!(!captured.is_public_read(&bucket("bucket-two"), &name("a.txt")));
 
     // The live store moves on: the object becomes private again, then the snapshot is restored.
     put(&mut live, "bucket-one", "a.txt");
     assert!(!live.is_public_read(&bucket("bucket-one"), &name("a.txt")));
-    live.restore_buckets(|b| b == "bucket-one", &captured);
+    live.restore_buckets(|b| b == "bucket-one", &captured)
+        .unwrap();
     assert!(live.is_public_read(&bucket("bucket-one"), &name("a.txt")));
     // The bucket the capture did not select keeps its own state.
     live.set_public_read(&bucket("bucket-two"), &name("a.txt"));
-    live.restore_buckets(|b| b == "bucket-one", &captured);
+    live.restore_buckets(|b| b == "bucket-one", &captured)
+        .unwrap();
     assert!(live.is_public_read(&bucket("bucket-two"), &name("a.txt")));
 }
 

@@ -4053,6 +4053,21 @@ fn export_database(
     Ok(())
 }
 
+/// A copy of the object store for the export. A spilled upload session is copied with its
+/// file, which can fail.
+fn capture_storage(
+    endpoints: &Endpoints,
+    section_dir: &ExportPath,
+) -> Result<fireemu_core_storage::store::StorageState, ArtifactError> {
+    endpoints
+        .storage
+        .store
+        .lock()
+        .map_err(|_| ArtifactError::new("storage", section_dir, "the object store is poisoned"))?
+        .capture_buckets(|_| true)
+        .map_err(|e| ArtifactError::new("storage", section_dir, e.to_string()))
+}
+
 fn export_storage(
     dir: &ExportPath,
     endpoints: &Endpoints,
@@ -4068,12 +4083,7 @@ fn export_storage(
         .create_dir()
         .map_err(|e| ArtifactError::new("storage", &metadata_dir, e))?;
 
-    let store = endpoints
-        .storage
-        .store
-        .lock()
-        .map_err(|_| ArtifactError::new("storage", &section_dir, "the object store is poisoned"))?
-        .capture_buckets(|_| true);
+    let store = capture_storage(endpoints, &section_dir)?;
     let mut buckets: Vec<String> = store
         .buckets()
         .iter()

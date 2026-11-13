@@ -43,8 +43,8 @@ fn captures_share_blobs_with_the_live_store_and_with_each_other() {
 
     // Several captures of the same state retain the same allocations, not copies: the
     // shared bytes equal the whole payload, so N snapshots cost one payload, not N.
-    let first = live.capture_buckets(|_| true);
-    let second = live.capture_buckets(|_| true);
+    let first = live.capture_buckets(|_| true).unwrap();
+    let second = live.capture_buckets(|_| true).unwrap();
     assert_eq!(first.blob_bytes_shared_with(&live), retained);
     assert_eq!(second.blob_bytes_shared_with(&first), retained);
 
@@ -67,7 +67,7 @@ fn captures_share_blobs_with_the_live_store_and_with_each_other() {
 fn snapshot_export_work_does_not_hold_the_live_store_lock() {
     let live = Arc::new(Mutex::new(StorageState::new(7)));
     put(&mut live.lock().unwrap(), "large.bin", vec![0xA5; 16 * MIB]);
-    let snapshot = live.lock().unwrap().capture_buckets(|_| true);
+    let snapshot = live.lock().unwrap().capture_buckets(|_| true).unwrap();
     let (reading_tx, reading_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     let exporter = std::thread::spawn(move || {
@@ -105,7 +105,7 @@ fn one_gibibyte_snapshot_export_releases_the_store_before_writing() {
         );
     }
     let capture_started = std::time::Instant::now();
-    let snapshot = live.lock().unwrap().capture_buckets(|_| true);
+    let snapshot = live.lock().unwrap().capture_buckets(|_| true).unwrap();
     let capture_elapsed = capture_started.elapsed();
     assert_eq!(snapshot.retained_blob_bytes(), 1024 * MIB as u64);
     assert_eq!(
@@ -141,11 +141,11 @@ fn one_gibibyte_snapshot_export_releases_the_store_before_writing() {
 fn restore_shares_the_captured_blobs_instead_of_copying_them() {
     let mut live = StorageState::new(7);
     put(&mut live, "big.bin", vec![1u8; MIB]);
-    let capture = live.capture_buckets(|_| true);
+    let capture = live.capture_buckets(|_| true).unwrap();
 
     put(&mut live, "big.bin", vec![2u8; 8]);
     put(&mut live, "extra.bin", vec![3u8; 64]);
-    live.restore_buckets(|_| true, &capture);
+    live.restore_buckets(|_| true, &capture).unwrap();
 
     let meta = live.get(&bucket(), &name("big.bin")).unwrap().clone();
     assert_eq!(live.bytes(&meta), vec![1u8; MIB].as_slice());
@@ -161,7 +161,7 @@ fn restore_shares_the_captured_blobs_instead_of_copying_them() {
 fn restoring_an_older_snapshot_never_reuses_an_issued_generation() {
     let mut live = StorageState::new(7);
     put(&mut live, "object.txt", b"captured".to_vec());
-    let capture = live.capture_buckets(|_| true);
+    let capture = live.capture_buckets(|_| true).unwrap();
 
     put(&mut live, "object.txt", b"newer".to_vec());
     put(&mut live, "other.txt", b"highest".to_vec());
@@ -170,7 +170,7 @@ fn restoring_an_older_snapshot_never_reuses_an_issued_generation() {
         .expect("later object")
         .generation;
 
-    live.restore_buckets(|_| true, &capture);
+    live.restore_buckets(|_| true, &capture).unwrap();
     put(&mut live, "object.txt", b"after restore".to_vec());
     let generation_after_restore = live
         .get(&bucket(), &name("object.txt"))
@@ -197,7 +197,9 @@ fn restoring_one_scope_preserves_global_allocators_and_credentials() {
         t(0),
     )
     .unwrap();
-    let capture = live.capture_buckets(|bucket| bucket == default_bucket.as_str());
+    let capture = live
+        .capture_buckets(|bucket| bucket == default_bucket.as_str())
+        .unwrap();
 
     live.put(
         &registered_bucket,
@@ -220,7 +222,8 @@ fn restoring_one_scope_preserves_global_allocators_and_credentials() {
         )
         .unwrap();
 
-    live.restore_buckets(|bucket| bucket == default_bucket.as_str(), &capture);
+    live.restore_buckets(|bucket| bucket == default_bucket.as_str(), &capture)
+        .unwrap();
     let token_after_restore = live.mint_download_token();
     let default_upload = live
         .begin_upload(
@@ -272,7 +275,9 @@ fn restoring_one_scope_preserves_pending_events_from_other_scopes() {
     )
     .unwrap();
     let _ = live.drain_events();
-    let capture = live.capture_buckets(|bucket| bucket == default_bucket.as_str());
+    let capture = live
+        .capture_buckets(|bucket| bucket == default_bucket.as_str())
+        .unwrap();
     live.put(
         &default_bucket,
         &name("owned.txt"),
@@ -292,7 +297,8 @@ fn restoring_one_scope_preserves_pending_events_from_other_scopes() {
     )
     .unwrap();
 
-    live.restore_buckets(|bucket| bucket == default_bucket.as_str(), &capture);
+    live.restore_buckets(|bucket| bucket == default_bucket.as_str(), &capture)
+        .unwrap();
 
     let events = live.drain_events();
     assert_eq!(events.len(), 1);

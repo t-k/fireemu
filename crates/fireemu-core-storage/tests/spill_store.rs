@@ -69,7 +69,7 @@ fn readers_keep_snapshot_bytes_during_delete_and_overwrite() {
                 now,
             )
             .unwrap();
-        let snapshot = store.clone();
+        let snapshot = store.capture_buckets(|_| true).unwrap();
         let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
         std::thread::scope(|scope| {
             let ready = barrier.clone();
@@ -150,7 +150,7 @@ fn spill_lifecycle_and_failure() {
     assert_eq!(store.body_bytes(&meta).unwrap().as_ref(), body);
     assert_eq!(*store.body_shared(&meta).unwrap(), body);
     assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| store.bytes(&meta))).is_err());
-    let snapshot = store.clone();
+    let snapshot = store.capture_buckets(|_| true).unwrap();
     store
         .delete(&bucket, &name, Precondition::default(), now)
         .unwrap();
@@ -429,7 +429,7 @@ proptest::proptest! {
                 }
                 3 => {
                     let frozen = version_bodies(&memory, &buckets);
-                    snapshots.push((memory.clone(), spilled.clone(), frozen));
+                    snapshots.push((memory.capture_buckets(|_| true).unwrap(), spilled.capture_buckets(|_| true).unwrap(), frozen));
                 }
                 4 => { if !snapshots.is_empty() { snapshots.remove(n % snapshots.len()); } }
                 5 => {
@@ -514,7 +514,9 @@ proptest::proptest! {
                     if object.size >= threshold { blobs.insert(object.blob); }
                 }
             }
-            assert_eq!(spill_files(process.path()).len(), blobs.len());
+            // A spilled upload session owns one file, and so does each snapshot's copy of it.
+            let sessions = spilled.spilled_upload_sessions() + snapshots.iter().map(|(_, b, _)| b.spilled_upload_sessions()).sum::<usize>();
+            assert_eq!(spill_files(process.path()).len(), blobs.len() + sessions);
         }
         drop(snapshots);
         drop(spilled);
@@ -594,7 +596,7 @@ fn a_spilled_body_is_shared_with_a_snapshot_and_not_with_a_copy() {
             now,
         )
         .unwrap();
-    let snapshot = store.clone();
+    let snapshot = store.capture_buckets(|_| true).unwrap();
     assert_eq!(snapshot.blob_bytes_shared_with(&store), 10);
     let mut copy = StorageState::new(1);
     copy.set_spill(Some((process.spill_dir(), 1)));
@@ -725,4 +727,338 @@ fn imported_objects_spill_and_preserve_metadata_and_bytes() {
     drop(store);
     drop(process);
     fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+fn session_store(spill: Option<(&ProcessSpill, u64)>) -> StorageState {
+    let mut store = StorageState::new(1);
+    if let Some((process, threshold)) = spill {
+        store.set_spill(Some((process.spill_dir(), threshold)));
+    }
+    store
+}
+
+#[cfg(unix)]
+#[test]
+fn a_resumable_session_spills_at_the_threshold_and_hands_its_file_to_the_object() {
+    let root = std::env::temp_dir().join(format!("spill-session-{}", std::process::id()));
+    let process = ProcessSpill::create(&root).unwrap();
+    let bucket = BucketName::try_new("example.appspot.com").unwrap();
+    let name = ObjectName::try_new("session").unwrap();
+    let now = LogicalInstant::UNIX_EPOCH;
+    let mut store = session_store(Some((&process, 8)));
+    let id = store
+        .begin_upload(
+            &bucket,
+            &name,
+            NewMetadata::default(),
+            Precondition::default(),
+            None,
+            now,
+        )
+        .unwrap();
+    store.append_upload(&id, 0, b"abc", now).unwrap();
+    store.append_upload(&id, 3, b"defg", now).unwrap();
+    assert_eq!(store.spilled_upload_sessions(), 0);
+    assert!(spill_files(process.path()).is_empty());
+    // The session reaches the threshold exactly: its bytes move to a file.
+    store.append_upload(&id, 7, b"h", now).unwrap();
+    assert_eq!(store.spilled_upload_sessions(), 1);
+    let files = spill_files(process.path());
+    assert_eq!(files.len(), 1);
+    assert_eq!(store.retained_upload_bytes(), 8);
+    store.append_upload(&id, 8, b"ij", now).unwrap();
+    // The object takes over the session's file instead of copying it.
+    let object = store.finalize_upload(&id, now).unwrap();
+    assert_eq!(spill_files(process.path()), files);
+    assert_eq!(store.spilled_upload_sessions(), 0);
+    assert_eq!(store.retained_upload_bytes(), 0);
+    assert_eq!(store.body_bytes(&object).unwrap().as_ref(), b"abcdefghij");
+    // A cancelled spilled session removes its file.
+    let other = store
+        .begin_upload(
+            &bucket,
+            &ObjectName::try_new("cancelled").unwrap(),
+            NewMetadata::default(),
+            Precondition::default(),
+            None,
+            now,
+        )
+        .unwrap();
+    store.append_upload(&other, 0, &[1; 9], now).unwrap();
+    assert_eq!(spill_files(process.path()).len(), 2);
+    store.cancel_upload(&other, now).unwrap();
+    assert_eq!(spill_files(process.path()).len(), 1);
+    drop(store);
+    assert!(spill_files(process.path()).is_empty());
+    drop(process);
+    let _ = fs::remove_dir(&root);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_spilled_session_and_its_snapshot_never_share_a_file() {
+    let root = std::env::temp_dir().join(format!("spill-session-snapshot-{}", std::process::id()));
+    let process = ProcessSpill::create(&root).unwrap();
+    let bucket = BucketName::try_new("example.appspot.com").unwrap();
+    let name = ObjectName::try_new("session").unwrap();
+    let now = LogicalInstant::UNIX_EPOCH;
+    let mut live = session_store(Some((&process, 4)));
+    let id = live
+        .begin_upload(
+            &bucket,
+            &name,
+            NewMetadata::default(),
+            Precondition::default(),
+            None,
+            now,
+        )
+        .unwrap();
+    live.append_upload(&id, 0, b"01234567", now).unwrap();
+    let snapshot = live.capture_buckets(|_| true).unwrap();
+    assert_eq!(spill_files(process.path()).len(), 2);
+    // An append and a rollback on the live state do not reach the snapshot.
+    let checkpoint = live.upload_checkpoint(&id).unwrap();
+    live.append_upload(&id, 8, b"89", now).unwrap();
+    live.rollback_upload(&id, checkpoint).unwrap();
+    live.append_upload(&id, 8, b"XY", now).unwrap();
+    assert_eq!(live.upload_status(&id, now).unwrap().0, 10);
+    // Restoring brings the captured bytes back, and the snapshot is still intact afterwards.
+    for _ in 0..2 {
+        live.restore_buckets(|_| true, &snapshot).unwrap();
+        assert_eq!(live.upload_status(&id, now).unwrap().0, 8);
+        assert_eq!(live.retained_upload_bytes(), 8);
+        assert_eq!(spill_files(process.path()).len(), 2);
+        live.append_upload(&id, 8, b"YZ", now).unwrap();
+    }
+    live.restore_buckets(|_| true, &snapshot).unwrap();
+    let object = live.finalize_upload(&id, now).unwrap();
+    assert_eq!(live.body_bytes(&object).unwrap().as_ref(), b"01234567");
+    // The snapshot's session is a separate copy: finalizing in a restored third state works.
+    let mut third = session_store(Some((&process, 4)));
+    third.restore_buckets(|_| true, &snapshot).unwrap();
+    let object = third.finalize_upload(&id, now).unwrap();
+    assert_eq!(third.body_bytes(&object).unwrap().as_ref(), b"01234567");
+    drop(snapshot);
+    drop(live);
+    drop(third);
+    assert!(spill_files(process.path()).is_empty());
+    drop(process);
+    let _ = fs::remove_dir(&root);
+}
+
+#[cfg(unix)]
+#[test]
+fn rolling_back_below_the_threshold_still_commits_a_memory_object_below_it() {
+    let root = std::env::temp_dir().join(format!("spill-session-below-{}", std::process::id()));
+    let process = ProcessSpill::create(&root).unwrap();
+    let bucket = BucketName::try_new("example.appspot.com").unwrap();
+    let now = LogicalInstant::UNIX_EPOCH;
+    let mut store = session_store(Some((&process, 8)));
+    let id = store
+        .begin_upload(
+            &bucket,
+            &ObjectName::try_new("small").unwrap(),
+            NewMetadata::default(),
+            Precondition::default(),
+            None,
+            now,
+        )
+        .unwrap();
+    store.append_upload(&id, 0, b"abc", now).unwrap();
+    let checkpoint = store.upload_checkpoint(&id).unwrap();
+    store.append_upload(&id, 3, b"defghijk", now).unwrap();
+    assert_eq!(store.spilled_upload_sessions(), 1);
+    store.rollback_upload(&id, checkpoint).unwrap();
+    let object = store.finalize_upload(&id, now).unwrap();
+    // Below the threshold the object is a memory body, as for any other upload of that size.
+    assert!(spill_files(process.path()).is_empty());
+    assert_eq!(store.bytes(&object), b"abc");
+    drop(store);
+    drop(process);
+    let _ = fs::remove_dir(&root);
+}
+
+#[cfg(unix)]
+#[derive(Clone, Debug)]
+enum SessionOp {
+    Begin {
+        total: u8,
+        wrong_md5: bool,
+    },
+    Append {
+        mode: u8,
+        owned: bool,
+        bytes: Vec<u8>,
+    },
+    Checkpoint,
+    Rollback,
+    Finalize {
+        admission_fails: bool,
+    },
+    Chunk {
+        limit: u8,
+        bytes: Vec<u8>,
+    },
+    Cancel,
+    Deny,
+    SetTotal(u8),
+    Query,
+    Capture,
+    Restore,
+}
+
+#[cfg(unix)]
+fn session_op() -> impl proptest::strategy::Strategy<Value = SessionOp> {
+    use proptest::prelude::*;
+    let bytes = proptest::collection::vec(any::<u8>(), 0..=24);
+    prop_oneof![
+        2 => (0u8..3, any::<bool>()).prop_map(|(total, wrong_md5)| SessionOp::Begin { total: total * 20, wrong_md5 }),
+        8 => (0u8..4, any::<bool>(), bytes.clone()).prop_map(|(mode, owned, bytes)| SessionOp::Append { mode, owned, bytes }),
+        2 => Just(SessionOp::Checkpoint),
+        2 => Just(SessionOp::Rollback),
+        2 => any::<bool>().prop_map(|admission_fails| SessionOp::Finalize { admission_fails }),
+        2 => (0u8..40, bytes).prop_map(|(limit, bytes)| SessionOp::Chunk { limit, bytes }),
+        1 => Just(SessionOp::Cancel),
+        1 => Just(SessionOp::Deny),
+        1 => (0u8..60).prop_map(SessionOp::SetTotal),
+        4 => Just(SessionOp::Query),
+        1 => Just(SessionOp::Capture),
+        1 => Just(SessionOp::Restore),
+    ]
+}
+
+#[cfg(unix)]
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config { cases: 96, failure_persistence: None, ..proptest::test_runner::Config::default() })]
+    /// The same sequence through a memory store and a store that spills sessions at a random
+    /// threshold answers identically at every step.
+    #[test]
+    fn spilled_sessions_match_memory_sessions(
+        threshold in 0u64..=48,
+        ops in proptest::collection::vec((0usize..2, session_op()), 0..=60),
+    ) {
+        use fireemu_core_storage::store::{UploadCheckpoint, UploadOptions};
+        use fireemu_core_types::admission::EventAdmissionError;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let root = std::env::temp_dir().join(format!("spill-session-property-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        let process = ProcessSpill::create(&root).unwrap();
+        let mut memory = session_store(None);
+        let mut spilled = session_store(Some((&process, threshold)));
+        let bucket = BucketName::try_new("example.appspot.com").unwrap();
+        let names = ["one", "two"].map(|name| ObjectName::try_new(name).unwrap());
+        let now = LogicalInstant::UNIX_EPOCH;
+        let mut ids = [None, None];
+        let mut checkpoints: [Option<(UploadCheckpoint, UploadCheckpoint)>; 2] = [None, None];
+        let mut snapshot = None;
+        for (slot, op) in ops {
+            let received = ids[slot].as_ref().map_or(0, |id| memory.upload_status(id, now).map_or(0, |status| status.0));
+            match op {
+                SessionOp::Begin { total, wrong_md5 } => {
+                    let options = UploadOptions { total: (total > 0).then_some(u64::from(total)), expected_md5: wrong_md5.then_some([7u8; 16]), ..UploadOptions::default() };
+                    let a = memory.begin_upload_with(&bucket, &names[slot], NewMetadata::default(), Precondition::default(), options.clone(), now);
+                    let b = spilled.begin_upload_with(&bucket, &names[slot], NewMetadata::default(), Precondition::default(), options, now);
+                    compare_results(&a, &b);
+                    ids[slot] = a.ok();
+                    checkpoints[slot] = None;
+                }
+                SessionOp::Append { mode, owned, bytes } => {
+                    let Some(id) = &ids[slot] else { continue };
+                    let offset = match mode {
+                        0 | 1 => received,
+                        2 => received.saturating_sub(u64::try_from(bytes.len() / 2).unwrap()),
+                        _ => received + 1,
+                    };
+                    let (a, b) = if owned {
+                        (memory.append_upload_owned(id, offset, bytes.clone(), now), spilled.append_upload_owned(id, offset, bytes, now))
+                    } else {
+                        (memory.append_upload(id, offset, &bytes, now), spilled.append_upload(id, offset, &bytes, now))
+                    };
+                    compare_results(&a, &b);
+                }
+                SessionOp::Checkpoint => {
+                    let Some(id) = &ids[slot] else { continue };
+                    checkpoints[slot] = memory.upload_checkpoint(id).zip(spilled.upload_checkpoint(id));
+                }
+                SessionOp::Rollback => {
+                    let (Some(id), Some((a, b))) = (&ids[slot], checkpoints[slot].clone()) else { continue };
+                    let a = memory.rollback_upload(id, a);
+                    let b = spilled.rollback_upload(id, b);
+                    compare_results(&a, &b);
+                }
+                SessionOp::Finalize { admission_fails } => {
+                    let Some(id) = &ids[slot] else { continue };
+                    let refuse = |_: &[fireemu_core_storage::store::StorageEvent]| Err::<(), _>(StorageError::EventAdmission(EventAdmissionError::Capacity("full".to_owned())));
+                    let (a, b) = if admission_fails {
+                        (memory.finalize_upload_with_admission(id, now, refuse), spilled.finalize_upload_with_admission(id, now, refuse))
+                    } else {
+                        (memory.finalize_upload(id, now).map(|m| (m, ())), spilled.finalize_upload(id, now).map(|m| (m, ())))
+                    };
+                    compare_results(&a, &b);
+                    if let (Ok((a, ())), Ok((b, ()))) = (&a, &b) {
+                        assert_eq!(memory.body_bytes(a).unwrap(), spilled.body_bytes(b).unwrap());
+                    }
+                }
+                SessionOp::Chunk { limit, bytes } => {
+                    let Some(id) = &ids[slot] else { continue };
+                    memory.set_stored_bytes_limit(Some(u64::from(limit)));
+                    spilled.set_stored_bytes_limit(Some(u64::from(limit)));
+                    let a = memory.upload_chunk(id, received, &bytes, true, now);
+                    let b = spilled.upload_chunk(id, received, &bytes, true, now);
+                    compare_results(&a, &b);
+                    memory.set_stored_bytes_limit(None);
+                    spilled.set_stored_bytes_limit(None);
+                }
+                SessionOp::Cancel => {
+                    let Some(id) = &ids[slot] else { continue };
+                    compare_results(&memory.cancel_upload(id, now), &spilled.cancel_upload(id, now));
+                }
+                SessionOp::Deny => {
+                    let Some(id) = &ids[slot] else { continue };
+                    compare_results(&memory.mark_upload_denied(id, now), &spilled.mark_upload_denied(id, now));
+                }
+                SessionOp::SetTotal(total) => {
+                    let Some(id) = &ids[slot] else { continue };
+                    compare_results(&memory.set_upload_total(id, u64::from(total), now), &spilled.set_upload_total(id, u64::from(total), now));
+                }
+                SessionOp::Query => {
+                    let Some(id) = &ids[slot] else { continue };
+                    compare_results(&memory.upload_status(id, now), &spilled.upload_status(id, now));
+                    compare_results(&memory.upload_phase(id, now), &spilled.upload_phase(id, now));
+                    compare_results(&memory.upload_running_hashes(id, now), &spilled.upload_running_hashes(id, now));
+                    let a = memory.pending_upload(id, now).map(|p| (p.len, p.digests, p.total));
+                    let b = spilled.pending_upload(id, now).map(|p| (p.len, p.digests, p.total));
+                    compare_results(&a, &b);
+                }
+                SessionOp::Capture => {
+                    snapshot = Some((memory.capture_buckets(|_| true).unwrap(), spilled.capture_buckets(|_| true).unwrap()));
+                }
+                SessionOp::Restore => {
+                    if let Some((a, b)) = &snapshot {
+                        memory.restore_buckets(|_| true, a).unwrap();
+                        spilled.restore_buckets(|_| true, b).unwrap();
+                        checkpoints = [None, None];
+                    }
+                }
+            }
+            assert_eq!(memory.retained_upload_bytes(), spilled.retained_upload_bytes());
+            assert_eq!(memory.retained_blob_bytes(), spilled.retained_blob_bytes());
+            assert_eq!(memory.all_objects(), spilled.all_objects());
+            for id in ids.iter().flatten() {
+                compare_results(&memory.upload_status(id, now), &spilled.upload_status(id, now));
+                compare_results(&memory.upload_running_hashes(id, now), &spilled.upload_running_hashes(id, now));
+            }
+        }
+        drop(snapshot);
+        drop(spilled);
+        prop_assert_no_session_files(&process);
+        drop(process);
+        let _ = fs::remove_dir(&root);
+    }
+}
+
+#[cfg(unix)]
+fn prop_assert_no_session_files(process: &ProcessSpill) {
+    assert!(spill_files(process.path()).is_empty());
 }

@@ -570,6 +570,14 @@ fn compute_digests(
         .collect()
 }
 
+/// Computes the current digest of one bound input with the same path checks as validation.
+pub fn current_input_digest(repository_root: &Path, relative: &str) -> Result<InputDigest, String> {
+    let mut digests = compute_digests(repository_root, &[relative.to_owned()], None)?;
+    digests
+        .remove(relative)
+        .ok_or_else(|| format!("missing digest for {relative}"))
+}
+
 /// Whether `path` has the given extension, compared without regard to ASCII case.
 fn has_extension(path: &str, extension: &str) -> bool {
     std::path::Path::new(path)

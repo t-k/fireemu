@@ -7,7 +7,8 @@ use std::process::ExitCode;
 
 use fireemu_verification_quint::cargo_authority::{validate_authority_file, write_authority};
 use fireemu_verification_quint::evidence::{
-    expected_bound_inputs, input_digest, validate_evidence_file_with_cargo_authority, InputDigest,
+    current_input_digest, expected_bound_inputs, validate_evidence_file_with_cargo_authority,
+    InputDigest,
 };
 use fireemu_verification_quint::model::{all_models, model, ModelDescriptor};
 use fireemu_verification_quint::process::{
@@ -121,9 +122,7 @@ fn check_evidence(arguments: &[String]) -> Result<bool, String> {
                 let recorded = digests
                     .and_then(|digests| digests.get(path))
                     .and_then(|value| serde_json::from_value::<InputDigest>(value.clone()).ok());
-                let current = fs::read(root.join(path))
-                    .ok()
-                    .and_then(|bytes| input_digest(path, &bytes).ok());
+                let current = current_input_digest(&root, path).ok();
                 if recorded.is_none() || current.is_none() || recorded != current {
                     changed.push(path);
                 }

@@ -12,6 +12,10 @@ use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 fn check_evidence_fixture(input: Option<&str>, legacy: bool) -> Output {
+    check_evidence_fixture_with(input, legacy, false)
+}
+
+fn check_evidence_fixture_with(input: Option<&str>, legacy: bool, symlink: bool) -> Output {
     let root = tempfile::tempdir().expect("create fixture");
     let directory = root.path().join("verification/quint/evidence");
     fs::create_dir_all(&directory).expect("create evidence directory");
@@ -35,7 +39,14 @@ fn check_evidence_fixture(input: Option<&str>, legacy: bool) -> Output {
     fs::write(directory.join("Example.json"), evidence.to_string()).expect("write evidence");
     fs::write(directory.join("cargo-authority.json"), "{}").expect("write authority");
     if let Some(input) = input {
-        fs::write(root.path().join("input.rs"), input).expect("write input");
+        if symlink {
+            fs::write(root.path().join("target.rs"), input).expect("write target");
+            #[cfg(unix)]
+            std::os::unix::fs::symlink("target.rs", root.path().join("input.rs"))
+                .expect("link input");
+        } else {
+            fs::write(root.path().join("input.rs"), input).expect("write input");
+        }
     }
     Command::new(env!("CARGO_BIN_EXE_fireemu-verification-quint"))
         .arg("check-evidence")
@@ -67,6 +78,16 @@ fn check_evidence_comment_only_change() {
     assert!(
         String::from_utf8_lossy(&output.stdout).contains("STALE Example: 1 bound input(s) changed")
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn check_evidence_symlinked_input_with_identical_bytes_is_stale() {
+    let output = check_evidence_fixture_with(Some("fn main() {}\n"), false, true);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stdout).contains(
+        "STALE Example: 1 bound input(s) changed since its evidence was written\n  input.rs\n"
+    ));
 }
 
 #[test]

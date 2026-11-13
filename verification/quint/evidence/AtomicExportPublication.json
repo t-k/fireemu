@@ -2118,7 +2118,7 @@
     },
     "verification/quint/src/evidence.rs": {
       "kind": "sha256",
-      "value": "7c6b7a0a296aa69191f56b2cc10b031919b3a6e20c64d5e44828afee9a56053e"
+      "value": "ab30153e41a77d1c0666df3de05884f70b2cd747dd73a5a39bbc33cee489475e"
     },
     "verification/quint/src/evidence/source_closure.rs": {
       "kind": "sha256",
@@ -2130,7 +2130,7 @@
     },
     "verification/quint/src/main.rs": {
       "kind": "sha256",
-      "value": "7e48dfee858054a0a3884fb0140342a4b429cdf3aa701b7ec50cf0a858b80dc7"
+      "value": "831d2442bf3ef0850ab0f450d3fb419932758252fe6876ee32da07f5d1fd13fd"
     },
     "verification/quint/src/model.rs": {
       "kind": "sha256",

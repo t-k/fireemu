@@ -3,5 +3,5 @@
 # compiler wherever it is built -- one of the inputs a reproducible build has to hold constant.
 # Bump it deliberately, in its own commit, and let CI run the whole gate on the new compiler.
 [toolchain]
-channel = "1.94.0"
+channel = "1.100.0"
 components = ["rustfmt", "clippy"]

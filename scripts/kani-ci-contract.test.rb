@@ -30,7 +30,7 @@ class KaniCiContractTest < Minitest::Test
               persist-credentials: false
           - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
             with:
-              toolchain: 1.94.0
+              toolchain: 1.100.0
           - name: verify the pinned toolchain
             run: rustc --version | tee /dev/stderr | grep -q "$(sed -n 's/^channel = \\"\\(.*\\)\\"/\\1/p' rust-toolchain.toml)"
           - name: install Kani

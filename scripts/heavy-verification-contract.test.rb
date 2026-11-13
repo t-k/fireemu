@@ -156,7 +156,7 @@ class HeavyVerificationContractTest < Minitest::Test
   end
 
   def test_a_different_toolchain_is_refused
-    assert_violation(REAL.sub("toolchain: 1.94.0", "toolchain: stable"), "the toolchain must be")
+    assert_violation(REAL.sub("toolchain: 1.100.0", "toolchain: stable"), "the toolchain must be")
   end
 
   def test_a_cache_that_saves_is_refused

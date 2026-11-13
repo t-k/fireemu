@@ -11411,8 +11411,10 @@ mod schedule_capacity_tests {
     #[tokio::test]
     async fn latest_keeps_the_newest_due_occurrence_and_records_what_it_dropped() {
         let (runtime, clock) = runtime(CatchUpPolicy::Latest).await;
+        assert_eq!(runtime.catch_up_steps(), 0);
         advance(&clock, 15 * 60);
         runtime.on_clock_changed();
+        assert!(runtime.catch_up_steps() > 0);
         assert_eq!(
             admitted(&runtime),
             vec![run("tick", "2026-08-29T12:15:00Z")],

@@ -792,6 +792,24 @@ mod tests {
         fs::remove_dir(&dir).unwrap();
     }
 
+    #[test]
+    fn cloning_uses_full_chunks_and_copies_the_tail() {
+        let dir = temp_path("clone-chunks");
+        let mut file = SpillDir::new(&dir).create_file().unwrap();
+        let contents: Vec<u8> = (0..(64 * 1024 + 67))
+            .map(|n| u8::try_from(n % 251).unwrap())
+            .collect();
+        file.append(&contents).unwrap();
+        fault_injection::inject("read", io::ErrorKind::Interrupted);
+        let copy = file.try_clone().unwrap();
+        // Two chunks and the interrupted read, retried once.
+        assert_eq!(fault_injection::paths().len(), 3);
+        assert_eq!(copy.read_all().unwrap(), contents);
+        drop(copy);
+        drop(file);
+        fs::remove_dir(&dir).unwrap();
+    }
+
     proptest::proptest! {
         #[test]
         fn process_output_classification(

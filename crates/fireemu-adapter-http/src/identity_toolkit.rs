@@ -16453,6 +16453,21 @@ mod tests {
     use fireemu_core_auth::mfa::TotpPolicy;
     use fireemu_core_types::determinism::SplitMix64;
 
+    #[test]
+    fn a_verified_unregistered_phone_number_may_create_an_end_user() {
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(22), TotpPolicy::default());
+        let at = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let verification = store
+            .send_verification_code("+15555550123", VerificationPurpose::SignIn, at)
+            .unwrap();
+        assert!(request_may_create_end_user(
+            routes::Handler::SignInWithPhoneNumber,
+            &store,
+            &json!({"sessionInfo": verification.session_info, "code": verification.code}),
+            at,
+        ));
+    }
+
     fn apple_alias_state(strict: bool) -> AuthState {
         let store = Arc::new(Mutex::new(AuthStore::new(
             "demo-app",

@@ -1610,6 +1610,54 @@ mod mount_point_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    #[test]
+    fn mount_detection_falls_back_to_device_ids_when_statx_is_unavailable() {
+        // Keep the syscall filter in a child so other tests retain normal statx behavior.
+        let output = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(
+                r#"
+import ctypes
+import errno
+import os
+import platform
+import struct
+import sys
+
+statx = {"x86_64": 332, "aarch64": 291}[platform.machine()]
+# Native sock_filter entries, followed by a sock_fprog (length and aligned pointer).
+filters = ctypes.create_string_buffer(b"".join(struct.pack("@HBBI", *entry) for entry in [
+    (0x20, 0, 0, 0),                         # Load the syscall number.
+    (0x15, 0, 1, statx),                     # Only statx returns ENOSYS.
+    (0x06, 0, 0, 0x00050000 | errno.ENOSYS),
+    (0x06, 0, 0, 0x7fff0000),                # Allow every other syscall.
+]))
+program = ctypes.create_string_buffer(struct.pack("@HP", 4, ctypes.addressof(filters)))
+libc = ctypes.CDLL(None, use_errno=True)
+libc.prctl.argtypes = [ctypes.c_int] + [ctypes.c_ulong] * 4
+libc.prctl.restype = ctypes.c_int
+for option, value, pointer in [(38, 1, 0), (22, 2, ctypes.addressof(program))]:
+    if libc.prctl(option, value, pointer, 0, 0) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+os.execv(sys.argv[1], [sys.argv[1], "--exact",
+    "mount_point_tests::a_directory_on_another_device_is_a_mount_root_and_an_ordinary_one_is_not",
+    "--nocapture"])
+"#,
+            )
+            .arg(std::env::current_exe().unwrap())
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stdout}\n{stderr}");
+        assert!(stdout.contains("1 passed"), "{stdout}\n{stderr}");
+    }
+
     /// The renames of one publication: `manifest` and `a` leave (0, 1), `b` and `manifest`
     /// arrive (2, 3); a failure of rename 3 rolls back with `b` back to the stage (4), `a` back
     /// (5) and the old manifest last (6). `failing` names the renames that fail.

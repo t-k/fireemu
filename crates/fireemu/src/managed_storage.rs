@@ -383,6 +383,18 @@ mod tests {
     }
 
     #[test]
+    fn now_follows_the_storage_clock_past_the_epoch() {
+        use fireemu_core_types::time::LogicalInstant;
+
+        let bridge = bridge();
+        for seconds in [42, 123] {
+            let at = LogicalInstant::from_unix_seconds(seconds);
+            bridge.storage.clock.lock().unwrap().advance_to(at).unwrap();
+            assert_eq!(bridge.now(), at);
+        }
+    }
+
+    #[test]
     fn read_returns_the_stored_object_body() {
         let bridge = bridge();
         put(&bridge, "test-bucket", "object");

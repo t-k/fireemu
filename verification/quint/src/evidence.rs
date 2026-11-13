@@ -480,18 +480,34 @@ pub fn expected_bound_inputs(
         descriptor.production_sources,
         &authority,
     )?);
+    // Build scripts can compute reads of any package file, so no test-only exclusion is safe.
+    let build_script_packages: Vec<_> = authority
+        .packages
+        .iter()
+        .filter_map(|package| {
+            let directory = Path::new(package.manifest.as_deref()?).parent()?;
+            (package.build_script.is_some()
+                || inputs
+                    .iter()
+                    .any(|input| Path::new(input) == directory.join("build.rs")))
+            .then_some(directory)
+        })
+        .collect();
     // Directory exclusions use package roots, not arbitrary directories named "tests" in src.
     inputs.retain(|input| {
-        !authority
-            .packages
+        build_script_packages
             .iter()
-            .filter_map(|package| package.manifest.as_deref())
-            .filter_map(|manifest| Path::new(manifest).parent())
-            .any(|directory| {
-                ["tests", "benches", "examples"]
-                    .iter()
-                    .any(|name| Path::new(input).starts_with(directory.join(name)))
-            })
+            .any(|directory| Path::new(input).starts_with(directory))
+            || !authority
+                .packages
+                .iter()
+                .filter_map(|package| package.manifest.as_deref())
+                .filter_map(|manifest| Path::new(manifest).parent())
+                .any(|directory| {
+                    ["tests", "benches", "examples"]
+                        .iter()
+                        .any(|name| Path::new(input).starts_with(directory.join(name)))
+                })
     });
 
     // Tokenize only to prove file-level exclusions. Digests still cover every byte of bound files.
@@ -519,6 +535,11 @@ pub fn expected_bound_inputs(
         }
     }
     let mut candidates = test_module_candidates(&syntax, &authority, &inputs, &explicit_inputs);
+    candidates.retain(|input, _| {
+        !build_script_packages
+            .iter()
+            .any(|directory| Path::new(input).starts_with(directory))
+    });
     if !retain_referenced_candidates(&syntax, &unparsed, &mut candidates) {
         return Ok(inputs.iter().cloned().collect());
     }

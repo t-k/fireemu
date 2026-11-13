@@ -510,6 +510,105 @@ mod tests {
     }
 
     #[test]
+    fn build_scripts_prevent_all_test_only_exclusions() {
+        for script in ["tests/build.rs", "build.rs"] {
+            let mut fixture = Fixture::new();
+            let root = fixture.directory.path();
+            let descriptor = crate::model::ModelDescriptor {
+                production_sources: &["root/src/lib.rs"],
+                driver: "root/src/lib.rs",
+                connect_test: "root/src/lib.rs",
+                additional_evidence_inputs: &[
+                    "normal/tests/input.txt",
+                    "normal/benches/input.txt",
+                    "normal/examples/input.txt",
+                ],
+                ..*crate::model::model("EventDelivery").expect("registered model")
+            };
+            for path in super::super::COMMON_DIGEST_PATHS
+                .iter()
+                .chain(descriptor.additional_evidence_inputs)
+            {
+                let path = root.join(path);
+                fs::create_dir_all(path.parent().expect("input parent")).expect("input directory");
+                fs::write(path, "").expect("common or explicit input");
+            }
+            for package in ["root", "normal"] {
+                fs::write(
+                    root.join(format!("{package}/src/lib.rs")),
+                    "#[cfg(test)]\nmod probe;\npub fn value() -> &'static str { env!(\"VALUE\") }\n",
+                )
+                .expect("test-only declaration");
+                fs::write(root.join(format!("{package}/src/probe.rs")), "// Probe.\n")
+                    .expect("test-only module");
+            }
+            let authority_path = root.join(super::super::CARGO_AUTHORITY_INPUT);
+            fs::write(
+                &authority_path,
+                serde_json::to_vec(&fixture.authority).expect("serialize authority"),
+            )
+            .expect("authority without build script");
+            let baseline = super::super::expected_bound_inputs(root, &descriptor, None)
+                .expect("inventory without build script");
+            assert!(!baseline.iter().any(|input| input.ends_with("/probe.rs")));
+            for path in descriptor.additional_evidence_inputs {
+                assert!(!baseline.iter().any(|input| input == path));
+            }
+
+            let script_path = format!("normal/{script}");
+            let source = if script == "tests/build.rs" {
+                fs::write(
+                    root.join("normal/Cargo.toml"),
+                    "[package]\nbuild = \"tests/build.rs\"\n",
+                )
+                .expect("custom build manifest");
+                fixture.authority.packages[1].build_script = Some(script_path.clone());
+                "fn main() { println!(\"cargo:rustc-env=VALUE=one\"); }\n"
+            } else {
+                // Leave authority unchanged to cover discovery of a new default build script.
+                r#"fn main() {
+    let path = std::path::Path::new("src").join("probe").with_extension("rs");
+    let bytes = std::fs::read(&path).unwrap();
+    println!("cargo:rerun-if-changed={}", path.display());
+    println!("cargo:rustc-env=VALUE={}", bytes.len());
+}
+"#
+            };
+            fs::write(root.join(&script_path), source).expect("build script");
+            fs::write(
+                &authority_path,
+                serde_json::to_vec(&fixture.authority).expect("serialize authority"),
+            )
+            .expect("authority with build script");
+            let bound = super::super::expected_bound_inputs(root, &descriptor, None)
+                .expect("inventory with build script");
+            for path in fixture.inputs().expect("unfiltered inventory") {
+                if path.starts_with("normal/") {
+                    assert!(bound.contains(&path), "{script} must retain {path}");
+                }
+            }
+            for path in descriptor.additional_evidence_inputs {
+                assert!(
+                    bound.iter().any(|input| input == path),
+                    "{script} must retain {path}"
+                );
+            }
+            assert!(!bound.iter().any(|input| input == "root/src/probe.rs"));
+            for path in [script_path.as_str(), "normal/src/probe.rs"] {
+                let before = super::super::current_input_digest(root, path).expect("bound digest");
+                let mut bytes = fs::read(root.join(path)).expect("bound bytes");
+                bytes.extend_from_slice(b"// Changed build input.\n");
+                fs::write(root.join(path), bytes).expect("change build input");
+                assert_ne!(
+                    before,
+                    super::super::current_input_digest(root, path).expect("changed digest"),
+                    "{script} must bind every byte of {path}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn custom_build_script_is_bound_and_missing_script_is_rejected() {
         let mut fixture = Fixture::new();
         fs::create_dir(fixture.directory.path().join("normal/build")).expect("build directory");

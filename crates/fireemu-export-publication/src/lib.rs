@@ -923,10 +923,10 @@ fn is_mount_root(directory: BorrowedFd<'_>, name: &OsStr) -> Result<bool, String
         .st_dev;
     #[cfg(target_os = "linux")]
     {
+        use rustix::fs::{statx, AtFlags, StatxAttributes, StatxFlags};
         if target_device != parent_device {
             return Ok(true);
         }
-        use rustix::fs::{statx, AtFlags, StatxAttributes, StatxFlags};
         if let Ok(status) = statx(
             directory,
             name,

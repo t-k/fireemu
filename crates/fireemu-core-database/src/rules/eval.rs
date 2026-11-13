@@ -579,17 +579,29 @@ fn java_int(text: &str) -> Option<i32> {
 /// Code points whose case Java 21 maps otherwise than Rust's newer Unicode tables, over every
 /// plane (the r11 JVM case-map comparison and review r11 M41). A case change of a string
 /// holding one is an error, so the rule is false.
-const CASE_DIFFERS: [(char, char); 10] = [
+const CASE_DIFFERS: [(char, char); 22] = [
     ('\u{019B}', '\u{019B}'),
     ('\u{0264}', '\u{0264}'),
+    ('\u{0277}', '\u{0277}'),
+    ('\u{027C}', '\u{027C}'),
     ('\u{1C89}', '\u{1C8A}'),
     ('\u{A7CB}', '\u{A7CF}'),
     ('\u{A7D2}', '\u{A7D5}'),
-    ('\u{A7DA}', '\u{A7DC}'),
+    ('\u{A7DA}', '\u{A7DD}'),
+    ('\u{A7E2}', '\u{A7E2}'),
+    ('\u{AB4B}', '\u{AB4C}'),
+    ('\u{AB6C}', '\u{AB6D}'),
     ('\u{10D50}', '\u{10D65}'),
     ('\u{10D70}', '\u{10D85}'),
     ('\u{16EA0}', '\u{16EB8}'),
     ('\u{16EBB}', '\u{16ED3}'),
+    ('\u{1DF40}', '\u{1DF41}'),
+    ('\u{1DF48}', '\u{1DF4B}'),
+    ('\u{1DF4D}', '\u{1DF4E}'),
+    ('\u{1DF51}', '\u{1DF52}'),
+    ('\u{1DF68}', '\u{1DF6F}'),
+    ('\u{1DF72}', '\u{1DF7F}'),
+    ('\u{1DF95}', '\u{1DF95}'),
 ];
 
 /// `s.toLowerCase()` or `s.toUpperCase()` as Java 21 gives it. Java 21 makes `Σ` the final

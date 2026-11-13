@@ -696,6 +696,62 @@ async fn emulator_delete_removes_a_pending_task_before_dispatch() {
 }
 
 #[tokio::test]
+async fn emulator_delete_cancels_pending_tasks_with_various_name_forms() {
+    let h = start_full(
+        "emulator-delete-name-forms",
+        FunctionsHttpProfile::Emulator,
+        NameReuse::Retained,
+        60,
+        retry(1, 500),
+        true,
+        false,
+    )
+    .await;
+    let (addr, server) = tasks_listener(&h).await;
+    let due = LogicalInstant::from_unix_seconds(1_788_004_920)
+        .to_rfc3339()
+        .unwrap();
+    let mut paths = Vec::new();
+    for name in [
+        Some("bare-id"),
+        Some("projects/demo-app/locations/us-central1/queues/taskB/tasks/cross-queue"),
+        None,
+    ] {
+        let mut extra = json!({"scheduleTime": due});
+        if let Some(name) = name {
+            extra["name"] = json!(name);
+        }
+        let queued = body_of(&extra);
+        let (status, _, body) = wire(addr, "POST", TASKS, queued.to_string().as_bytes()).await;
+        assert_eq!(status, 200);
+        let response: Value = serde_json::from_str(&body).unwrap();
+        let id = response["task"]["name"]
+            .as_str()
+            .unwrap()
+            .rsplit('/')
+            .next()
+            .unwrap();
+        let path = format!("{TASKS}/{id}");
+        assert_eq!(wire(addr, "DELETE", &path, b"").await.0, 200);
+        paths.push(path);
+    }
+    assert!(h.runtime.pending_tasks().is_empty());
+    h.clock
+        .lock()
+        .unwrap()
+        .advance(fireemu_core_types::time::LogicalDuration::from_seconds(61))
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    h.idle().await;
+    assert!(!h.probe.exists() || std::fs::read_to_string(&h.probe).unwrap().is_empty());
+    for path in paths {
+        assert_eq!(wire(addr, "DELETE", &path, b"").await.0, 404);
+    }
+    server.abort();
+    h.stop().await;
+}
+
+#[tokio::test]
 async fn emulator_delete_answers_ok_once_for_a_dispatched_task() {
     let h = start(
         "emulator-delete-dispatched",

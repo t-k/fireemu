@@ -4010,7 +4010,17 @@ impl FunctionsRuntime {
             status: 500,
             body: "runtime poisoned".to_owned(),
         })?;
-        let mut removed = inner.task_scheduler.delete_pending(queue, &name, now_task);
+        let mut removed = inner.task_scheduler.delete_pending(
+            queue,
+            |stored| {
+                if self.is_strict() {
+                    stored == name
+                } else {
+                    stored.rsplit('/').next() == Some(id)
+                }
+            },
+            now_task,
+        );
         if !self.is_strict() {
             removed |= inner
                 .emulator_task_names

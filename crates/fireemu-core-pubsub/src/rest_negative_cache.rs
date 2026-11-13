@@ -7,19 +7,21 @@
 //! `pubsub.restNegativeCache = "production"` asks for it** (an explicit opt-in, strict profile only;
 //! `productionExact` does not select it); the adapter holds it only then.
 //!
-//! The rule is the one two production recordings settle (the packet `PUBSUB-NEGCACHE`, runs
-//! 50a305aa54d1 and 331317b47c44, see `docs/pubsub-rest-negative-cache.md`):
+//! The rule follows packet `PUBSUB-NEGCACHE` recordings 50a305aa54d1 and 331317b47c44, and
+//! v5 follow-ups 903d638614a1 and 70602e8b29e0 (see `docs/pubsub-rest-negative-cache.md`):
 //!
 //! - the entry belongs to one connection: a request on another connection is never answered from it;
 //! - a 404 of `GET` or `PATCH` on the plain subscription URL arms it, and the window runs from the
-//!   START of the arming request; a failed create, a `DELETE` 404, a `:verb`, a snapshot or a request
+//!   START of the arming request; a failed create, a `:verb`, a snapshot or a request
 //!   with a query string does not arm;
 //! - `GET`, `PATCH` and `DELETE` of the plain URL are answered with the cached 404 and never reach
 //!   the backend (the patch is not applied, the delete does not run); a `:verb` is forwarded;
 //! - a hit neither extends nor re-arms the entry, and a create clears nothing.
 //!
-//! What the recordings leave open stays a documented choice in [`RuleChoice`]: the exact window edge
-//! (it lies in 10.20 s to 10.50 s), and whether a recent `GET` 200 keeps a later 404 from arming.
+//! A `GET` 200 seven seconds before a 404 exempted it in both v5 runs; results at four and 13
+//! seconds were mixed. DELETE 404 arming and activation for never-created names remain open. The
+//! window edge varies between runs: run 4 missed from 10.25 s, run 3 hit at 10.50 s, and the v4
+//! runs hit up to 10.20 s. The deterministic window is a known difference, not a sharp production edge.
 //!
 //! The model is pure: it owns no clock, and every call takes the instant the request started on the
 //! virtual clock, so a test (or `await-idle`) moves it by moving that clock.
@@ -28,29 +30,27 @@ use std::collections::BTreeMap;
 
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
-/// The window, measured from the start of the arming request. Recorded hits reach 10.20 s and 11 of
-/// 12 reads at 10.50 s or later were forwarded, so the edge lies in (10.20 s, 10.50 s]; the middle is
-/// the choice.
+/// The window from the arming request's start. The edge varies between runs: run 4 missed from
+/// 10.25 s, run 3 hit at 10.50 s, and the v4 runs hit up to 10.20 s. The model chooses 10.35 s;
+/// production is nondeterministic in the observed band.
 pub const RECORDED_TTL: LogicalDuration = LogicalDuration::from_millis(10_350);
 
 /// The most entries the cache keeps. Expired entries go first, then the oldest, so a client that
 /// probes many absent names cannot grow the map without bound.
 pub const MAX_ENTRIES: usize = 4096;
 
-/// The choices the recordings leave open, each fixed to one value. Listed here so a later recording
-/// changes one value and one test.
+/// The deterministic window and recent-success rule chosen for the recorded observations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuleChoice {
     /// How long an entry serves, from the start of the request that armed it.
     pub ttl: LogicalDuration,
-    /// A `GET` that answered 200 within the window keeps a later 404 from arming. Unrecorded for
-    /// subscriptions (the only recorded counterexample was a snapshot read); kept because it can
-    /// only remove a cached 404.
+    /// A `GET` 200 within the window keeps a later 404 from arming. Recorded at seven seconds;
+    /// four and 13 seconds remain open.
     pub recent_success_exempts: bool,
 }
 
 impl RuleChoice {
-    /// The rule the two recordings settle, with the open choices at their documented values.
+    /// The recorded rule, with open choices at their documented values.
     pub const RECORDED: Self = Self {
         ttl: RECORDED_TTL,
         recent_success_exempts: true,

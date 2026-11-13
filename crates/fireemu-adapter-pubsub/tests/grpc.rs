@@ -2810,6 +2810,7 @@ async fn a_new_publication_wakes_a_subscription_deferred_for_push_backoff() {
 #[tokio::test]
 async fn deferred_push_backoff_leaves_worker_capacity_for_other_subscriptions() {
     const DELAYED_SUBSCRIPTIONS: usize = 256;
+    const BATCH_SIZE: usize = 32;
     let h = start().await;
     let mut pubc = h.publisher().await;
     let mut subc = h.subscriber().await;
@@ -2819,9 +2820,12 @@ async fn deferred_push_backoff_leaves_worker_capacity_for_other_subscriptions() 
     let blocked_topic = "projects/demo-app/topics/push-backoff-saturated";
     let other_topic = "projects/demo-app/topics/push-backoff-other";
 
-    for topic in [blocked_topic, other_topic] {
+    for topic in (0..DELAYED_SUBSCRIPTIONS / BATCH_SIZE)
+        .map(|batch| format!("{blocked_topic}-{batch}"))
+        .chain(std::iter::once(other_topic.to_owned()))
+    {
         pubc.create_topic(pb::Topic {
-            name: topic.to_owned(),
+            name: topic,
             ..Default::default()
         })
         .await
@@ -2830,7 +2834,7 @@ async fn deferred_push_backoff_leaves_worker_capacity_for_other_subscriptions() 
     for index in 0..DELAYED_SUBSCRIPTIONS {
         subc.create_subscription(pb::Subscription {
             name: format!("projects/demo-app/subscriptions/push-backoff-{index:04}"),
-            topic: blocked_topic.to_owned(),
+            topic: format!("{blocked_topic}-{}", index / BATCH_SIZE),
             retry_policy: Some(pb::RetryPolicy {
                 minimum_backoff: Some(prost_types::Duration {
                     seconds: 30,
@@ -2862,15 +2866,17 @@ async fn deferred_push_backoff_leaves_worker_capacity_for_other_subscriptions() 
     .await
     .unwrap();
 
-    pubc.publish(pb::PublishRequest {
-        topic: blocked_topic.to_owned(),
-        messages: vec![msg(b"defer")],
-    })
-    .await
-    .unwrap();
     let attempts = tokio::time::timeout(std::time::Duration::from_secs(15), async {
-        while blocked_bodies.lock().unwrap().len() < DELAYED_SUBSCRIPTIONS {
-            tokio::task::yield_now().await;
+        for batch in 0..DELAYED_SUBSCRIPTIONS / BATCH_SIZE {
+            pubc.publish(pb::PublishRequest {
+                topic: format!("{blocked_topic}-{batch}"),
+                messages: vec![msg(b"defer")],
+            })
+            .await
+            .unwrap();
+            while blocked_bodies.lock().unwrap().len() < (batch + 1) * BATCH_SIZE {
+                tokio::task::yield_now().await;
+            }
         }
     })
     .await;
@@ -2982,6 +2988,7 @@ async fn deleting_an_unrelated_subscription_does_not_stop_a_deferred_retry() {
 #[tokio::test]
 async fn saturated_workers_release_cross_topic_work_without_another_publish() {
     const SATURATED_WORKERS: usize = 256;
+    const BATCH_SIZE: usize = 32;
 
     let h = start().await;
     let mut pubc = h.publisher().await;
@@ -2992,9 +2999,12 @@ async fn saturated_workers_release_cross_topic_work_without_another_publish() {
     let first_topic = "projects/demo-app/topics/saturated-first";
     let second_topic = "projects/demo-app/topics/saturated-second";
 
-    for topic in [first_topic, second_topic] {
+    for topic in (0..SATURATED_WORKERS / BATCH_SIZE)
+        .map(|batch| format!("{first_topic}-{batch}"))
+        .chain(std::iter::once(second_topic.to_owned()))
+    {
         pubc.create_topic(pb::Topic {
-            name: topic.to_owned(),
+            name: topic,
             ..Default::default()
         })
         .await
@@ -3003,7 +3013,7 @@ async fn saturated_workers_release_cross_topic_work_without_another_publish() {
     for index in 0..SATURATED_WORKERS {
         subc.create_subscription(pb::Subscription {
             name: format!("projects/demo-app/subscriptions/saturated-{index:04}"),
-            topic: first_topic.to_owned(),
+            topic: format!("{first_topic}-{}", index / BATCH_SIZE),
             push_config: Some(pb::PushConfig {
                 push_endpoint: blocked_endpoint.clone(),
                 ..Default::default()
@@ -3025,15 +3035,17 @@ async fn saturated_workers_release_cross_topic_work_without_another_publish() {
     .await
     .unwrap();
 
-    pubc.publish(pb::PublishRequest {
-        topic: first_topic.to_owned(),
-        messages: vec![msg(b"occupy")],
-    })
-    .await
-    .unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        while blocked_count.load(Ordering::Acquire) != SATURATED_WORKERS {
-            tokio::task::yield_now().await;
+        for batch in 0..SATURATED_WORKERS / BATCH_SIZE {
+            pubc.publish(pb::PublishRequest {
+                topic: format!("{first_topic}-{batch}"),
+                messages: vec![msg(b"occupy")],
+            })
+            .await
+            .unwrap();
+            while blocked_count.load(Ordering::Acquire) < (batch + 1) * BATCH_SIZE {
+                tokio::task::yield_now().await;
+            }
         }
     })
     .await

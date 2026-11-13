@@ -97,10 +97,21 @@ impl TotpSecret {
     }
 }
 
+fn wipe_secret(bytes: &mut [u8]) {
+    bytes.fill(0);
+    std::hint::black_box(bytes);
+}
+
+#[cfg(test)]
+thread_local! {
+    static SECRET_DROPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl Drop for TotpSecret {
     fn drop(&mut self) {
-        self.0.fill(0);
-        std::hint::black_box(&self.0);
+        wipe_secret(&mut self.0);
+        #[cfg(test)]
+        SECRET_DROPS.with(|count| count.set(count.get() + 1));
     }
 }
 

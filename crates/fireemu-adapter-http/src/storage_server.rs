@@ -312,7 +312,17 @@ fn bucket_cors_for(
     if !state.is_strict() {
         return None;
     }
-    let (bucket, firebase) = crate::storage::cors_bucket(method, path)?;
+    let (bucket, firebase, json_api) = crate::storage::cors_bucket(method, path)?;
+    // C6-C8 recorded JSON API CORS only with nonempty bucket rules. Absent and empty entries retain the base behavior.
+    if json_api
+        && crate::storage::is_recorded_json_cors_shape(method, path)
+        && state
+            .rules
+            .bucket_cors(&bucket)
+            .is_some_and(|cors| !cors.is_empty())
+    {
+        return None;
+    }
     if firebase
         && crate::storage::query_params(query)
             .get("alt")
@@ -365,6 +375,9 @@ fn configured_preflight(
             for (name, value) in matched {
                 builder = builder.header(name, value);
             }
+        } else if !cors.is_empty() {
+            // RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case C3); R3 has no Vary after removing all rules.
+            builder = builder.header("vary", "Origin");
         }
     }
     builder
@@ -499,9 +512,74 @@ async fn respond(
         req.uri().path(),
         req.uri().query().unwrap_or(""),
     );
+    let json_api_cors = state.is_strict()
+        && crate::storage::is_recorded_json_cors_shape(req.method().as_str(), req.uri().path())
+        && crate::storage::cors_bucket(req.method().as_str(), req.uri().path()).is_some_and(
+            |(bucket, _, json_api)| {
+                json_api
+                    && state
+                        .rules
+                        .bucket_cors(&bucket)
+                        .is_some_and(|cors| !cors.is_empty())
+            },
+        );
     if req.method() == hyper::Method::OPTIONS {
+        if json_api_cors {
+            // RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case C8): JSON API preflight with nonempty bucket CORS rules.
+            let mut builder = Response::builder()
+                .status(200)
+                .header("content-type", "application/octet-stream")
+                .header("vary", "Origin, X-Origin")
+                .header("access-control-allow-credentials", "true")
+                .header(
+                    "access-control-allow-methods",
+                    "DELETE,GET,HEAD,PATCH,POST,PUT",
+                )
+                .header("access-control-max-age", "3600");
+            if let Some(origin) = origin.as_deref() {
+                builder = builder.header("access-control-allow-origin", origin);
+            }
+            if let Some(requested) = req.headers().get("access-control-request-headers") {
+                builder = builder.header("access-control-allow-headers", requested);
+            }
+            return Ok(builder
+                .body(plain(Bytes::new()))
+                .unwrap_or_else(|_| Response::new(plain(Bytes::new()))));
+        }
         if let Some(cors) = &bucket_cors {
-            return Ok(configured_preflight(cors, origin.as_deref(), req.headers()));
+            let mut response = configured_preflight(cors, origin.as_deref(), req.headers());
+            // Configured Firebase media preflights were not recorded; preserve their existing reflection of methods and requested headers.
+            if req.uri().path().starts_with("/v0/") {
+                if response
+                    .headers()
+                    .contains_key("access-control-allow-origin")
+                {
+                    if let Some(method) = req.headers().get("access-control-request-method") {
+                        response
+                            .headers_mut()
+                            .insert("access-control-allow-methods", method.clone());
+                    }
+                    response
+                        .headers_mut()
+                        .remove("access-control-allow-headers");
+                    if let Some(requested) = req
+                        .headers()
+                        .get("access-control-request-headers")
+                        .filter(|value| {
+                            value.to_str().is_ok_and(|text| {
+                                text.split(',').any(|part| !part.trim().is_empty())
+                            })
+                        })
+                    {
+                        response
+                            .headers_mut()
+                            .insert("access-control-allow-headers", requested.clone());
+                    }
+                } else {
+                    response.headers_mut().remove("vary");
+                }
+            }
+            return Ok(response);
         }
         // The preflight the official emulator's `cors` middleware answers: the requested
         // headers reflected, the express method list, and both Vary members.
@@ -696,16 +774,46 @@ async fn respond(
         // text/html content-type renders, so it is not a substitute for typing
         // caller-influenced bodies as text/plain -- see storage::gcs_no_such_object.
         builder = builder.header("x-content-type-options", "nosniff");
-        if bucket_cors.is_none() {
+        if bucket_cors.is_none() && !(json_api_cors && origin.is_some()) {
             builder = cors(builder, origin.as_deref());
         }
     }
     let body = body_of(&response);
     let mut response_headers = response.headers;
+    if let Some(origin) = origin.as_deref().filter(|_| json_api_cors) {
+        // RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, cases C6-C7): object GETs (metadata and media) only;
+        // replace only CORS headers and keep the route's base JSON layout, caching and other framing.
+        let media = request_method == "GET"
+            && crate::storage::query_params(&trace_query)
+                .get("alt")
+                .map(String::as_str)
+                == Some("media");
+        response_headers.retain(|(name, _)| !name.eq_ignore_ascii_case("vary"));
+        response_headers = with_bucket_cors(response_headers, Some(vec![
+            ("access-control-allow-origin".to_owned(), origin.to_owned()),
+            ("access-control-allow-credentials".to_owned(), "true".to_owned()),
+            ("vary".to_owned(), "Origin, X-Origin".to_owned()),
+            ("access-control-expose-headers".to_owned(), match (media, request_method.as_str()) {
+                (true, _) => "Cache-Control, Content-Disposition, Content-Length, Content-Type, Date, ETag, Expires, Last-Modified, Pragma, Server, Transfer-Encoding, Vary, X-GUploader-UploadID, X-Goog-Gcs-Base-Ts, X-Goog-Generation, X-Goog-Hash, X-Goog-Metageneration, X-Google-Trace",
+                (_, "GET") => "Cache-Control, Content-Length, Content-Type, Date, ETag, Expires, Server, Transfer-Encoding, Vary, X-GUploader-UploadID, X-Goog-Gcs-Base-Ts, X-Google-Trace",
+                _ => EXPOSED_HEADERS,
+            }.to_owned()),
+        ]));
+    }
     if let Some(configured) = &bucket_cors {
-        let matched = origin
+        let mut matched = origin
             .as_deref()
             .and_then(|origin| configured.actual(origin, &request_method));
+        // RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case C5): the XML wildcard expose list includes these standard headers, without Vary.
+        if !trace_path.starts_with("/v0/") {
+            if let Some(headers) = &mut matched {
+                for (name, value) in headers {
+                    if name == "access-control-expose-headers" && value == "*" {
+                        "*, Content-Length, Date, Server, Transfer-Encoding, X-GUploader-UploadID, X-Google-Trace".clone_into(value);
+                    }
+                }
+            }
+        }
         response_headers = with_bucket_cors(response_headers, matched);
     }
     for (k, v) in response_headers {

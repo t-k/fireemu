@@ -16,7 +16,7 @@
 // list, is not settled in the run either (read-after-write lag): only the read-back at least ten minutes later
 // settles it as gone. The one exception is the run's own DELETE that answered 2xx (or a clean CLI delete, for the names
 // the CLI made), after which a 404 is the normal end. A task lives only in a queue of the run: an unknown createTask or
-// deleteTask is an unknown mutation (the run cannot close) that the read-back settles by proving the queues gone.
+// deleteTask stays open through read-back until explicitly accepted; absent queues cannot settle an unknown mutation.
 import {
   AuthStop,
   answerClass,
@@ -24,7 +24,7 @@ import {
   isUnknownClass,
   readable,
 } from "../../../scheduled-delivery/capture.mjs";
-import { MAY_FORBID, PROGRAM, materialize, minStarts } from "../corpus.mjs";
+import { BURST_PROGRAM, MAY_FORBID, PROGRAM, materialize, minStarts, taskId } from "../corpus.mjs";
 import {
   READY_MAX_POLLS,
   READY_POLL_SECONDS,
@@ -122,6 +122,7 @@ const answerSummary = (a) =>
 
 export async function record({
   runId,
+  program = "default",
   projectNumber,
   accessToken,
   save,
@@ -146,9 +147,13 @@ export async function record({
     ...waits,
   };
   const pause = (seconds) => sleep(seconds * 1000);
-  const FNS = functionsOf(runId);
-  const QUEUES = queueIdsOf(runId);
-  const guard = createGuard(runId, projectNumber);
+  const FNS = functionsOf(runId, program);
+  const roles = program === "burst" ? ["tqrate"] : ROLE_IDS;
+  const steps = program === "burst" ? BURST_PROGRAM : PROGRAM;
+  const anchors = {};
+  const burstFindings = [];
+  const QUEUES = queueIdsOf(runId, program);
+  const guard = createGuard(runId, projectNumber, program);
   const SERVICES_URL = `https://serviceusage.googleapis.com/v1/projects/${projectNumber}/services?filter=state:ENABLED&pageSize=200`;
   const { capture, counts, authStop } = createCapture({
     accessToken,
@@ -163,6 +168,7 @@ export async function record({
   });
   const out = {
     runId,
+    programName: program,
     stage: "preflight",
     outcome: "tq-needs-review",
     cli: {},
@@ -209,6 +215,15 @@ export async function record({
     if (counts().attempted >= normalCeiling && !spec.cleanup)
       throw new BudgetError("the normal request ceiling is reached");
     await prepareRequest?.(spec);
+    if (
+      out.burst &&
+      spec.method === "POST" &&
+      spec.url.endsWith("/tasks") &&
+      clock() >= out.burst.anchorMs
+    ) {
+      burstFindings.push({ kind: "burst-late", case: spec.id });
+      throw new BudgetError("burst creates reached the scheduled anchor");
+    }
     const answer = await capture(spec);
     // A 200, 201 or 202 whose JSON body does not parse says nothing about the effect: it is an unknown answer. An empty
     // 204 is a complete answer.
@@ -241,7 +256,19 @@ export async function record({
   };
   const mutate = async (spec) => {
     const answer = await normal(spec);
-    if (isUnknownClass(answer)) unknownMutations.push({ id: spec.id, class: answerClass(answer) });
+    if (isUnknownClass(answer))
+      unknownMutations.push({
+        id: spec.id,
+        class: answerClass(answer),
+        ...(spec.method === "POST" && spec.url.endsWith("/tasks")
+          ? { kind: "createTask", name: spec.json?.task?.name ?? null }
+          : spec.method === "DELETE" && /\/tasks\//.test(spec.url)
+            ? {
+                kind: "deleteTask",
+                name: spec.url.replace("https://cloudtasks.googleapis.com/v2/", ""),
+              }
+            : {}),
+      });
     return answer;
   };
   const cliUnknownClass = (result) =>
@@ -333,6 +360,7 @@ export async function record({
   const hostOfLabel = (label) => (label.startsWith("function-") ? "cloudfunctions" : "cloudtasks");
   const unconfirmedCreates = () => [
     ...uploadUnconfirmed,
+    ...unknownMutations.filter((m) => m.kind === "createTask").map((m) => ({ ...m, label: m.id })),
     ...(deployUnknown
       ? [...cliLabels]
           .filter(([label]) => !confirmed.has(label))
@@ -558,13 +586,18 @@ export async function record({
       sources: sourceObjectsBefore[sourceBuckets(projectNumber)[1]],
     };
     const ownPackagesPresent = packages.packages.some((p) =>
-      ownPackages(runId).includes(lastSegment(p.name)),
+      ownPackages(runId, program).includes(lastSegment(p.name)),
     );
     const ownTriggers = triggers.triggers.some((t) =>
       FNS.some((fn) => String(t.name).includes("/" + fn + "-")),
     );
     const ownQueues = queues.queues.some((qe) => QUEUES.includes(lastSegment(qe.name)));
-    if (!nonePresent(summarize(before, runId)) || ownPackagesPresent || ownTriggers || ownQueues)
+    if (
+      !nonePresent(summarize(before, runId, program)) ||
+      ownPackagesPresent ||
+      ownTriggers ||
+      ownQueues
+    )
       return "namespace";
     // The CLI deploy of the codebase deletes (with --force, and with the queue of each) every function of the codebase that the
     // source does not have. A function, service, queue or image of another run of this fixture, or any function labelled with
@@ -674,7 +707,7 @@ export async function record({
     let found = null;
     for (let poll = 1; poll <= polls; poll++) {
       found = await functionLists("ready-" + poll);
-      out.ready = complete(found) ? summarize(found, runId) : null;
+      out.ready = complete(found) ? summarize(found, runId, program) : null;
       if (!failed && out.ready && allActive(out.ready)) return true;
       if (poll < polls) await pause(wait.ready);
     }
@@ -685,7 +718,7 @@ export async function record({
   async function readbacks() {
     await pause(wait.propagation);
     const targets = {};
-    for (const role of ROLE_IDS) {
+    for (const role of roles) {
       const fn = functionOfRole(runId, role);
       const a = await read({
         id: "readback-function-" + fn,
@@ -705,6 +738,15 @@ export async function record({
           };
       }
     }
+    if (program === "burst") {
+      const fn = FNS[0];
+      const queue = await read({
+        id: "readback-queue-" + fn,
+        method: "GET",
+        url: TASKS + "/" + fn,
+      });
+      if (out.readbacks[fn]) out.readbacks[fn].queue = answerSummary(queue);
+    }
     guard.setTargets(targets);
     return targets;
   }
@@ -714,7 +756,23 @@ export async function record({
     // A step on a task id whose earlier create or delete has an unknown answer is not sent: it would be a second try at the
     // same name, and its answer could not be told from the effect of the first.
     const unknownIds = new Set();
-    for (const spec of PROGRAM) {
+    if (program === "burst") {
+      anchors.burst = clock();
+      // The result anchor is the scheduled due time; the context anchor is the program start.
+      out.burst = {
+        anchorMs: anchors.burst + 300_000,
+        starts: [],
+        anyAttemptStarts: [],
+        firstMs: null,
+        countWithin1s: 0,
+        countWithin5s: 0,
+      };
+    }
+    for (const spec of steps) {
+      if (program === "burst" && clock() >= out.burst.anchorMs) {
+        burstFindings.push({ kind: "burst-late", case: spec.key });
+        break;
+      }
       if (signal.aborted) throw new BudgetError("stopped by a signal");
       if (spec.pauseBefore) await pause(spec.pauseBefore);
       if (spec.id !== undefined && unknownIds.has(spec.id)) {
@@ -725,7 +783,7 @@ export async function record({
         };
         continue;
       }
-      const request = materialize(spec, { runId, now: clock(), targets });
+      const request = materialize(spec, { runId, now: clock(), targets, anchors });
       const dispatchedAt = clock();
       const mutation = spec.kind === "create" || spec.kind === "delete";
       if (spec.kind === "create")
@@ -759,7 +817,11 @@ export async function record({
         out.stoppedBecause = `the step ${spec.key} was answered 403`;
         throw new BudgetError(out.stoppedBecause);
       }
-      await pause(wait.gap);
+      if (program === "burst" && clock() >= out.burst.anchorMs) {
+        burstFindings.push({ kind: "burst-late", case: spec.key });
+        break;
+      }
+      if (program !== "burst") await pause(wait.gap);
     }
   }
 
@@ -773,6 +835,38 @@ export async function record({
     return want;
   };
   const startsSeen = () => {
+    if (out.burst) {
+      const distinct = new Map();
+      const anyAttempt = new Map();
+      for (const { frame } of allFrames) {
+        if (frame.kind !== "start" || frame.function !== FNS[0]) continue;
+        if (frame.run !== "tqrun-" + runId || !out.program[frame.case]?.sent) continue;
+        const id = frame.context?.id;
+        if (id !== taskId(runId, frame.case)) continue;
+        const startMs = Date.parse(frame.at);
+        if (!Number.isFinite(startMs)) continue;
+        if (!anyAttempt.has(id) || startMs < anyAttempt.get(id).startMs)
+          anyAttempt.set(id, { id, startMs, retryCount: frame.context.retryCount });
+        if (
+          frame.context.retryCount === 0 &&
+          (!distinct.has(id) || startMs < distinct.get(id).startMs)
+        )
+          distinct.set(id, { id, startMs, attempt: 0 });
+      }
+      const starts = [...distinct.values()].toSorted((a, b) => a.startMs - b.startMs);
+      Object.assign(out.burst, {
+        starts,
+        anyAttemptStarts: [...anyAttempt.values()].toSorted((a, b) => a.startMs - b.startMs),
+        firstMs: starts.length ? starts[0].startMs - out.burst.anchorMs : null,
+        // Half-open windows measured from the scheduled due time.
+        countWithin1s: starts.filter(
+          (s) => s.startMs >= out.burst.anchorMs && s.startMs < out.burst.anchorMs + 1000,
+        ).length,
+        countWithin5s: starts.filter(
+          (s) => s.startMs >= out.burst.anchorMs && s.startMs < out.burst.anchorMs + 5000,
+        ).length,
+      });
+    }
     const seen = {};
     for (const { frame } of allFrames)
       if (frame.kind === "start") seen[frame.case] = (seen[frame.case] ?? 0) + 1;
@@ -780,6 +874,21 @@ export async function record({
   };
 
   async function observe() {
+    if (out.burst) {
+      const bound = out.burst.anchorMs + 240_000;
+      let poll = 0;
+      do {
+        await pause(Math.max(0, Math.min(wait.logPoll, (bound - clock()) / 1000)));
+        await pollLogs("observe-" + ++poll, { final: true });
+        startsSeen();
+        if (out.burst.starts.length === BURST_PROGRAM.length) return;
+      } while (clock() < bound);
+      burstFindings.push({
+        kind: "burst-missing-start",
+        missing: BURST_PROGRAM.length - out.burst.starts.length,
+      });
+      return;
+    }
     const want = expectedStarts();
     const steps = Math.max(1, Math.ceil(wait.window / wait.logPoll));
     for (let step = 1; step <= steps; step++) {
@@ -816,7 +925,7 @@ export async function record({
       }
     };
     let found = null;
-    const settled = () => complete(found ?? {}) && nonePresent(summarize(found, runId));
+    const settled = () => complete(found ?? {}) && nonePresent(summarize(found, runId, program));
     // The public invoker the CLI gives an HTTP function is not expected on a task queue function: each service of the run is
     // read before the function goes, and a public member is recorded as a finding (nothing is written to a policy).
     out.cleanup.invoker = {};
@@ -859,7 +968,7 @@ export async function record({
       }
     });
     if (complete(found ?? {})) {
-      const left = summarize(found, runId);
+      const left = summarize(found, runId, program);
       for (const fn of FNS) {
         if (!left[fn].present) continue;
         await step("leftover-" + fn, async () => {
@@ -905,7 +1014,7 @@ export async function record({
       });
     }
     out.cleanup.functionsGone = Boolean(settled());
-    // The queues the CLI makes (its function delete removes them): a leftover is deleted once, after a fresh list shows it.
+    // Function deletion disables and retains its queue; delete each queue once after a fresh list shows it.
     const queuesLeft = await step("queues-list", () =>
       list("cleanup-queues", TASKS + "?pageSize=500", "queues"),
     );
@@ -929,7 +1038,7 @@ export async function record({
     out.cleanup.packagesDeleted = [];
     for (const item of packagesFound?.packages ?? []) {
       const id = lastSegment(item.name);
-      if (!ownPackages(runId).includes(id)) continue;
+      if (!ownPackages(runId, program).includes(id)) continue;
       await step("package-" + id, async () => {
         const answer = await mutate({
           id: "delete-package-" + id,
@@ -1134,8 +1243,8 @@ export async function record({
         Boolean(queues && topics && subs && triggers && packages && complete(fns)) &&
         !queues.queues.some((x) => QUEUES.includes(lastSegment(x.name))) &&
         !triggers.triggers.some((t) => FNS.some((fn) => String(t.name).includes("/" + fn + "-"))) &&
-        !packages.packages.some((x) => ownPackages(runId).includes(lastSegment(x.name))) &&
-        nonePresent(summarize(fns, runId));
+        !packages.packages.some((x) => ownPackages(runId, program).includes(lastSegment(x.name))) &&
+        nonePresent(summarize(fns, runId, program));
     });
     // The inventory the run started from, compared by identity with a fresh one: the two Gen2 buckets, the channels, the
     // enabled services (nothing may have been added: the run enables none) and the project IAM (only service-agent additions).
@@ -1194,6 +1303,8 @@ export async function record({
         ? channels.channels.map((c) => lastSegment(c.name)).toSorted()
         : null;
       const compared = inventoryDifferences({
+        runId,
+        program,
         before: out.inventory.before,
         after: {
           channels: out.inventory.channelsAfter,
@@ -1270,7 +1381,7 @@ export async function record({
     if (ready) {
       out.stage = "readbacks";
       const targets = await readbacks();
-      if (Object.keys(targets).length < ROLE_IDS.length) {
+      if (Object.keys(targets).length < roles.length) {
         out.stoppedBecause = "a function readback gave no URL or identity";
       } else {
         out.stage = "program";
@@ -1306,6 +1417,19 @@ export async function record({
     errors: allErrors,
     projectNumber,
   });
+  if (out.burst) {
+    startsSeen();
+    if (
+      out.burst.starts.length < BURST_PROGRAM.length &&
+      !burstFindings.some((f) => f.kind === "burst-missing-start")
+    )
+      burstFindings.push({
+        kind: "burst-missing-start",
+        missing: BURST_PROGRAM.length - out.burst.starts.length,
+      });
+    out.judged.findings.push(...burstFindings);
+    out.judged.observationComplete = out.judged.findings.length === 0;
+  }
   const completeRun = programmed && !out.stoppedBecause && Object.keys(out.program).length > 0;
   out.outcome =
     !created && !issued.size

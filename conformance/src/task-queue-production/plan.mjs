@@ -65,7 +65,12 @@ export const suffixOf = (runId) => {
 };
 
 /** The function ids of a run: every role plus the suffix. Lower case, so the Cloud Run service id is the same text. */
-export const functionsOf = (runId) => Object.freeze(ROLE_IDS.map((role) => role + suffixOf(runId)));
+export const functionsOf = (runId, program = "default") => {
+  if (!["default", "burst"].includes(program)) throw new Error("unknown program " + program);
+  return Object.freeze(
+    (program === "burst" ? ["tqrate"] : ROLE_IDS).map((role) => role + suffixOf(runId)),
+  );
+};
 export const roleOf = (fn) =>
   ROLE_IDS.find((role) => fn.startsWith(role) && fn.length === role.length + 6) ?? null;
 export const functionOfRole = (runId, role) => {

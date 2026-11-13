@@ -1609,6 +1609,51 @@ async fn a_blocking_auth_request_starts_recovery_of_an_idle_dead_runner() {
 }
 
 #[tokio::test]
+async fn a_future_task_starts_recovery_of_an_idle_dead_runner() {
+    let dir = std::env::temp_dir().join(format!(
+        "fireemu-future-task-recovery-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let probe = dir.join("entries");
+    let runtime = start_task_runtime_using_clock(
+        &probe,
+        4,
+        |_| (TaskRetryConfig::default(), TaskRateLimits::default()),
+        Vec::new(),
+        Arc::new(Mutex::new(VirtualClock::new(START))),
+        fireemu_adapter_functions::application_clock::ApplicationClockPolicy {
+            tasks_virtual: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    runtime.runner().kill_now();
+    let mut body = task_body("future");
+    body["task"]["scheduleTime"] = json!("2099-01-01T00:00:00Z");
+    runtime
+        .enqueue_task("demo-app", "us-central1", "taskA", &body)
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !runtime.runner_alive() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the task starts runner recovery");
+    assert_eq!(
+        runtime.task_queue_stats()["queue:demo-app-us-central1-taskA"]["numberOfTasks"],
+        1
+    );
+    assert!(std::fs::read_to_string(&probe)
+        .unwrap_or_default()
+        .is_empty());
+    runtime.shutdown().await;
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
 async fn failed_blocking_auth_respawn_releases_recovery_ownership() {
     let dir =
         std::env::temp_dir().join(format!("fireemu-auth-restart-fails-{}", std::process::id()));

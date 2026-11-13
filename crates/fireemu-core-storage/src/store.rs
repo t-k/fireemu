@@ -1304,6 +1304,20 @@ impl StorageState {
     /// spill file is copied together with its file, so the copy and the live state never share
     /// one. When a file cannot be copied nothing is captured and the error is returned.
     pub fn capture_buckets(&self, owned: impl Fn(&str) -> bool) -> Result<Self, StorageError> {
+        let mut captured = self.capture_bucket_objects(&owned);
+        captured.uploads = self
+            .uploads
+            .iter()
+            .filter(|(_, u)| owned(u.bucket.as_str()))
+            .map(|(k, v)| Ok((k.clone(), v.try_clone()?)))
+            .collect::<Result<BTreeMap<_, _>, StorageError>>()?;
+        captured.retained_upload_bytes = Self::upload_bytes(&captured.uploads);
+        Ok(captured)
+    }
+
+    /// Captures committed objects and bucket metadata without copying upload sessions.
+    #[must_use]
+    pub fn capture_bucket_objects(&self, owned: impl Fn(&str) -> bool) -> Self {
         let objects: BTreeMap<(BucketName, ObjectName), ObjectMetadata> = self
             .objects
             .iter()
@@ -1334,20 +1348,13 @@ impl StorageState {
             .filter(|(b, _, _)| owned(b.as_str()))
             .cloned()
             .collect();
-        let uploads = self
-            .uploads
-            .iter()
-            .filter(|(_, u)| owned(u.bucket.as_str()))
-            .map(|(k, v)| Ok((k.clone(), v.try_clone()?)))
-            .collect::<Result<BTreeMap<_, _>, StorageError>>()?;
-        let retained_upload_bytes = Self::upload_bytes(&uploads);
         let stored_bytes = blob_bytes(&blobs);
-        Ok(Self {
+        Self {
             objects,
             blobs,
             spill: self.spill.clone(),
-            uploads,
-            retained_upload_bytes,
+            uploads: BTreeMap::new(),
+            retained_upload_bytes: 0,
             retained_upload_limit: self.retained_upload_limit,
             max_object_bytes: self.max_object_bytes,
             stored_bytes_limit: self.stored_bytes_limit,
@@ -1367,7 +1374,7 @@ impl StorageState {
             upload_recomputations: 0,
             #[cfg(test)]
             upload_accounting_lookups: 0,
-        })
+        }
     }
 
     /// Replaces the buckets `owned` selects with `captured`'s objects, blobs and uploads

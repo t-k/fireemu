@@ -390,6 +390,18 @@ export const PROGRAM = Object.freeze(
     ...QUEUES,
   ].map((s) => Object.freeze(s)),
 );
+/** The burst probe: named tasks due together five minutes after the program starts. */
+export const BURST_PROGRAM = Object.freeze(
+  Array.from({ length: 120 }, (_, index) => {
+    const key = "burst-" + String(index + 1).padStart(3, "0");
+    return Object.freeze(
+      create(key, "tqrate", ["max-dispatches-per-second"], {
+        id: key,
+        schedule: { anchor: "burst", offsetSeconds: 300 },
+      }),
+    );
+  }),
+);
 export const caseKeys = () => PROGRAM.map((s) => s.key);
 
 /** The first minimum of deliveries a case is waited for: an accepted task is delivered at least once unless it is scheduled far away or removed. */
@@ -491,7 +503,11 @@ export function materializeCreate(spec, ctx) {
   if (spec.schedule !== undefined)
     task.scheduleTime =
       spec.schedule.raw ??
-      formatTime(ctx.now + spec.schedule.offsetSeconds * 1000, spec.schedule.form);
+      formatTime(
+        (spec.schedule.anchor ? ctx.anchors?.[spec.schedule.anchor] : ctx.now) +
+          spec.schedule.offsetSeconds * 1000,
+        spec.schedule.form,
+      );
   if (spec.deadline !== undefined) task.dispatchDeadline = spec.deadline;
   if (spec.extraTaskKey !== undefined) task[spec.extraTaskKey] = 1;
   return {
@@ -541,26 +557,35 @@ export function shapeOf(json) {
 const DUMMY_TARGET = { uri: "https://x.run.app", serviceAccountEmail: "a@b.gserviceaccount.com" };
 
 /** The shapes of every createTask of a run, for the guard, with the targets the readbacks will give. */
-export function plannedShapes(runId, targets) {
+export function plannedShapes(runId, targets, program = "default") {
   const filled = Object.fromEntries(
     ROLE_IDS.map((role) => [role, targets?.[role] ?? DUMMY_TARGET]),
   );
   return new Set(
-    PROGRAM.filter((s) => s.kind === "create").map(
-      (spec) =>
-        functionOfRoleOrAbsent(runId, spec.role) +
-        "\n" +
-        shapeOf(materializeCreate(spec, { runId, now: 1_800_000_000_000, targets: filled }).json),
-    ),
+    (program === "burst" ? BURST_PROGRAM : PROGRAM)
+      .filter((s) => s.kind === "create")
+      .map(
+        (spec) =>
+          functionOfRoleOrAbsent(runId, spec.role) +
+          "\n" +
+          shapeOf(
+            materializeCreate(spec, {
+              runId,
+              now: 1_800_000_000_000,
+              anchors: { burst: 1_800_000_000_000 },
+              targets: filled,
+            }).json,
+          ),
+      ),
   );
 }
 
 /** The task resource names the program deletes and reads, for the guard. */
-export function plannedTaskNames(runId) {
+export function plannedTaskNames(runId, program = "default") {
   return new Set(
-    PROGRAM.filter((s) => s.kind === "delete" || s.kind === "get-task").map((spec) =>
-      taskNameOf(spec, { runId }),
-    ),
+    (program === "burst" ? BURST_PROGRAM : PROGRAM)
+      .filter((s) => s.kind === "delete" || s.kind === "get-task")
+      .map((spec) => taskNameOf(spec, { runId })),
   );
 }
 

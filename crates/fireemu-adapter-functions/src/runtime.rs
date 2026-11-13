@@ -3801,6 +3801,10 @@ impl FunctionsRuntime {
             }
         }
         drop(inner);
+        let owner = self.owner.get(queue).copied().unwrap_or(0);
+        if !self.runner_at(owner).is_alive() {
+            self.schedule_dead_runner_recovery(owner);
+        }
         let answer = crate::tasks::accepted_response(&task);
         self.wake.notify_one();
         Ok(answer)
@@ -3957,6 +3961,10 @@ impl FunctionsRuntime {
                     });
                 }
             }
+        }
+        let owner = self.owner.get(queue).copied().unwrap_or(0);
+        if !self.runner_at(owner).is_alive() {
+            self.schedule_dead_runner_recovery(owner);
         }
         self.wake.notify_one();
         let empty = serde_json::Map::new();

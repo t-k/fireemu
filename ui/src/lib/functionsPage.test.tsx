@@ -551,6 +551,52 @@ it("restores an event link, reports eviction, and clears it on session change", 
   await waitFor(() => expect(ui.queryByTestId("timeline-detail")).toBeNull());
 });
 
+it("restores the linked session when navigating back and forward through event links", async () => {
+  history.replaceState(
+    null,
+    "",
+    "/functions?event=7&eventFunction=consume&eventSession=owner&eventProject=demo-owner",
+  );
+  const ui = render(() => (
+    <Router>
+      <Route path="*" component={Functions} />
+    </Router>
+  ));
+  await waitFor(() => expect(ui.getByTestId("timeline-detail")).toBeTruthy());
+  mocks.event?.({
+    kind: "snapshot",
+    project: "demo-owner",
+    generation: 1,
+    logs: [],
+    invocations: [
+      { eventId: "7", function: "consume", attempt: 1, outcome: "success" },
+      { eventId: "8", function: "consume", attempt: 1, outcome: "success" },
+    ],
+    logRecords: [],
+    logScopes: [],
+  });
+  fireEvent.click(ui.getByRole("link", { name: /Select event 8/ }));
+  await waitFor(() => expect(location.search).toContain("event=8"));
+  history.back();
+  await waitFor(() => expect(location.search).toContain("event=7"));
+  appState.setSession("other");
+  await waitFor(() => expect(location.search).not.toContain("event="));
+  history.forward();
+  await waitFor(() => expect(appState.session()).toBe("owner"));
+  await waitFor(() =>
+    expect(ui.getByTestId("timeline-detail").textContent).toContain("8 / consume"),
+  );
+  fireEvent.click(ui.getByRole("link", { name: /Select event 7/ }));
+  await waitFor(() => expect(location.search).toContain("event=7"));
+  appState.setSession("other");
+  await waitFor(() => expect(location.search).not.toContain("event="));
+  history.back();
+  await waitFor(() => expect(appState.session()).toBe("owner"));
+  await waitFor(() =>
+    expect(ui.getByTestId("timeline-detail").textContent).toContain("8 / consume"),
+  );
+});
+
 it("opens a synthetic invocation after selecting a linked event", async () => {
   const ui = render(() => (
     <Router>

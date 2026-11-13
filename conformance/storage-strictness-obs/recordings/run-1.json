@@ -1,0 +1,406 @@
+{
+  "description": "STORAGE-STRICTNESS-OBS production recording (packet v2), masked: project p, run-named bucket fireemu-obs-RUN. Error bodies kept byte for byte; metadata bodies omitted.",
+  "rows": [
+    {
+      "case": "A1",
+      "method": "GET",
+      "url": "https://storage.googleapis.com/storage/v1/b/fireemu-obs-RUN-absent/o/x",
+      "requestHeaders": {},
+      "status": 404,
+      "bodyBytes": 247,
+      "headers": {
+        "content-length": "247",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin"
+      },
+      "body": "{\n  \"error\": {\n    \"code\": 404,\n    \"message\": \"The specified bucket does not exist.\",\n    \"errors\": [\n      {\n        \"message\": \"The specified bucket does not exist.\",\n        \"domain\": \"global\",\n        \"reason\": \"notFound\"\n      }\n    ]\n  }\n}\n"
+    },
+    {
+      "case": "A2",
+      "method": "GET",
+      "url": "https://storage.googleapis.com/storage/v1/b/fireemu-obs-RUN-absent/o/x?alt=media",
+      "requestHeaders": {},
+      "status": 404,
+      "bodyBytes": 36,
+      "headers": {
+        "content-length": "36",
+        "content-type": "text/html; charset=UTF-8",
+        "vary": "Origin, X-Origin"
+      },
+      "body": "The specified bucket does not exist."
+    },
+    {
+      "case": "A3",
+      "method": "GET",
+      "url": "https://storage.googleapis.com/storage/v1/b/fireemu-obs-RUN-absent/o",
+      "requestHeaders": {},
+      "status": 404,
+      "bodyBytes": 247,
+      "headers": {
+        "content-length": "247",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin"
+      },
+      "body": "{\n  \"error\": {\n    \"code\": 404,\n    \"message\": \"The specified bucket does not exist.\",\n    \"errors\": [\n      {\n        \"message\": \"The specified bucket does not exist.\",\n        \"domain\": \"global\",\n        \"reason\": \"notFound\"\n      }\n    ]\n  }\n}\n"
+    },
+    {
+      "case": "A4",
+      "method": "POST",
+      "url": "https://storage.googleapis.com/upload/storage/v1/b/fireemu-obs-RUN-absent/o?uploadType=media&name=x",
+      "requestHeaders": {},
+      "status": 404,
+      "bodyBytes": 247,
+      "headers": {
+        "content-length": "247",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin"
+      },
+      "body": "{\n  \"error\": {\n    \"code\": 404,\n    \"message\": \"The specified bucket does not exist.\",\n    \"errors\": [\n      {\n        \"message\": \"The specified bucket does not exist.\",\n        \"domain\": \"global\",\n        \"reason\": \"notFound\"\n      }\n    ]\n  }\n}\n"
+    },
+    {
+      "case": "A5",
+      "method": "DELETE",
+      "url": "https://storage.googleapis.com/storage/v1/b/fireemu-obs-RUN-absent/o/x",
+      "requestHeaders": {},
+      "status": 404,
+      "bodyBytes": 247,
+      "headers": {
+        "content-length": "247",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin"
+      },
+      "body": "{\n  \"error\": {\n    \"code\": 404,\n    \"message\": \"The specified bucket does not exist.\",\n    \"errors\": [\n      {\n        \"message\": \"The specified bucket does not exist.\",\n        \"domain\": \"global\",\n        \"reason\": \"notFound\"\n      }\n    ]\n  }\n}\n"
+    },
+    {
+      "case": "A6",
+      "method": "POST",
+      "url": "https://storage.googleapis.com/storage/v1/b/fireemu-obs-RUN-absent/o/x/copyTo/b/fireemu-obs-RUN/o/y",
+      "requestHeaders": {},
+      "status": 404,
+      "bodyBytes": 247,
+      "headers": {
+        "content-length": "247",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin"
+      },
+      "body": "{\n  \"error\": {\n    \"code\": 404,\n    \"message\": \"The specified bucket does not exist.\",\n    \"errors\": [\n      {\n        \"message\": \"The specified bucket does not exist.\",\n        \"domain\": \"global\",\n        \"reason\": \"notFound\"\n      }\n    ]\n  }\n}\n"
+    },
+    {
+      "case": "A7",
+      "method": "POST",
+      "url": "https://storage.googleapis.com/storage/v1/b/fireemu-obs-RUN/o/cors%2Fo.txt/rewriteTo/b/fireemu-obs-RUN-absent/o/y",
+      "requestHeaders": {},
+      "status": 404,
+      "bodyBytes": 247,
+      "headers": {
+        "content-length": "247",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin"
+      },
+      "body": "{\n  \"error\": {\n    \"code\": 404,\n    \"message\": \"The specified bucket does not exist.\",\n    \"errors\": [\n      {\n        \"message\": \"The specified bucket does not exist.\",\n        \"domain\": \"global\",\n        \"reason\": \"notFound\"\n      }\n    ]\n  }\n}\n"
+    },
+    {
+      "case": "A8",
+      "method": "GET",
+      "url": "https://storage.googleapis.com/storage/v1/b/fireemu-obs-RUN-absent/o/x/acl",
+      "requestHeaders": {},
+      "status": 404,
+      "bodyBytes": 247,
+      "headers": {
+        "content-length": "247",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin"
+      },
+      "body": "{\n  \"error\": {\n    \"code\": 404,\n    \"message\": \"The specified bucket does not exist.\",\n    \"errors\": [\n      {\n        \"message\": \"The specified bucket does not exist.\",\n        \"domain\": \"global\",\n        \"reason\": \"notFound\"\n      }\n    ]\n  }\n}\n"
+    },
+    {
+      "case": "A9",
+      "method": "GET",
+      "url": "https://storage.googleapis.com/fireemu-obs-RUN-absent/x",
+      "requestHeaders": {},
+      "status": 404,
+      "bodyBytes": 133,
+      "headers": {
+        "content-length": "133",
+        "content-type": "application/xml; charset=UTF-8"
+      },
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist.</Message></Error>"
+    },
+    {
+      "case": "A10",
+      "method": "PUT",
+      "url": "https://storage.googleapis.com/fireemu-obs-RUN-absent/x",
+      "requestHeaders": {},
+      "status": 404,
+      "bodyBytes": 133,
+      "headers": {
+        "content-length": "133",
+        "content-type": "application/xml; charset=UTF-8",
+        "vary": "Origin"
+      },
+      "body": "<?xml version='1.0' encoding='UTF-8'?><Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist.</Message></Error>"
+    },
+    {
+      "case": "A11",
+      "method": "GET",
+      "url": "https://firebasestorage.googleapis.com/v0/b/fireemu-obs-RUN-absent/o/x",
+      "requestHeaders": {},
+      "status": 404,
+      "bodyBytes": 65,
+      "headers": {
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "Content-Range, X-Firebase-Storage-XSRF",
+        "content-length": "65",
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\n  \"error\": {\n    \"code\": 404,\n    \"message\": \"Not Found.\"\n  }\n}"
+    },
+    {
+      "case": "A12",
+      "method": "POST",
+      "url": "https://firebasestorage.googleapis.com/v0/b/fireemu-obs-RUN-absent/o?name=x",
+      "requestHeaders": {},
+      "status": 404,
+      "bodyBytes": 65,
+      "headers": {
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "Content-Range, X-Firebase-Storage-XSRF",
+        "content-length": "65",
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\n  \"error\": {\n    \"code\": 404,\n    \"message\": \"Not Found.\"\n  }\n}"
+    },
+    {
+      "case": "A13",
+      "method": "GET",
+      "url": "https://firebasestorage.googleapis.com/v0/b/fireemu-obs-RUN/o/cors%2Fo.txt",
+      "requestHeaders": {},
+      "status": 200,
+      "bodyBytes": 476,
+      "headers": {
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "Content-Range, X-Firebase-Storage-XSRF",
+        "content-length": "476",
+        "content-type": "application/json; charset=UTF-8"
+      }
+    },
+    {
+      "case": "A14",
+      "method": "GET",
+      "url": "https://firebasestorage.googleapis.com/v0/b/fireemu-obs-RUN/o",
+      "requestHeaders": {},
+      "status": 200,
+      "bodyBytes": 120,
+      "headers": {
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "Content-Range, X-Firebase-Storage-XSRF",
+        "content-length": "120",
+        "content-type": "application/json; charset=UTF-8"
+      }
+    },
+    {
+      "case": "C1",
+      "method": "OPTIONS",
+      "url": "https://storage.googleapis.com/fireemu-obs-RUN/cors/o.txt",
+      "requestHeaders": {
+        "access-control-request-method": "GET",
+        "origin": "http://a.example"
+      },
+      "status": 200,
+      "bodyBytes": 0,
+      "headers": {
+        "access-control-allow-headers": "",
+        "access-control-allow-methods": "GET",
+        "access-control-allow-origin": "*",
+        "access-control-max-age": "3600",
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8"
+      }
+    },
+    {
+      "case": "C2",
+      "method": "OPTIONS",
+      "url": "https://storage.googleapis.com/fireemu-obs-RUN/cors/o.txt",
+      "requestHeaders": {
+        "access-control-request-headers": "content-type",
+        "access-control-request-method": "PUT",
+        "origin": "http://localhost:3000"
+      },
+      "status": 200,
+      "bodyBytes": 0,
+      "headers": {
+        "access-control-allow-headers": "Content-Type",
+        "access-control-allow-methods": "PUT,GET",
+        "access-control-allow-origin": "http://localhost:3000",
+        "access-control-max-age": "600",
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "vary": "Origin"
+      }
+    },
+    {
+      "case": "C3",
+      "method": "OPTIONS",
+      "url": "https://storage.googleapis.com/fireemu-obs-RUN/cors/o.txt",
+      "requestHeaders": {
+        "access-control-request-method": "DELETE",
+        "origin": "http://localhost:3000"
+      },
+      "status": 200,
+      "bodyBytes": 0,
+      "headers": {
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8",
+        "vary": "Origin"
+      }
+    },
+    {
+      "case": "C4",
+      "method": "OPTIONS",
+      "url": "https://storage.googleapis.com/fireemu-obs-RUN/cors/o.txt",
+      "requestHeaders": {
+        "access-control-request-headers": "x-custom-header",
+        "access-control-request-method": "GET",
+        "origin": "http://a.example"
+      },
+      "status": 200,
+      "bodyBytes": 0,
+      "headers": {
+        "access-control-allow-headers": "x-custom-header",
+        "access-control-allow-methods": "GET",
+        "access-control-allow-origin": "*",
+        "access-control-max-age": "3600",
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8"
+      }
+    },
+    {
+      "case": "C5",
+      "method": "GET",
+      "url": "https://storage.googleapis.com/fireemu-obs-RUN/cors/o.txt",
+      "requestHeaders": {
+        "origin": "http://a.example"
+      },
+      "status": 200,
+      "bodyBytes": 4,
+      "headers": {
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "*, Content-Length, Date, Server, Transfer-Encoding, X-GUploader-UploadID, X-Google-Trace",
+        "content-length": "4",
+        "content-type": "text/plain"
+      }
+    },
+    {
+      "case": "C6",
+      "method": "GET",
+      "url": "https://storage.googleapis.com/storage/v1/b/fireemu-obs-RUN/o/cors%2Fo.txt?alt=media",
+      "requestHeaders": {
+        "origin": "http://a.example"
+      },
+      "status": 200,
+      "bodyBytes": 4,
+      "headers": {
+        "access-control-allow-credentials": "true",
+        "access-control-allow-origin": "http://a.example",
+        "access-control-expose-headers": "Cache-Control, Content-Disposition, Content-Length, Content-Type, Date, ETag, Expires, Last-Modified, Pragma, Server, Transfer-Encoding, Vary, X-GUploader-UploadID, X-Goog-Gcs-Base-Ts, X-Goog-Generation, X-Goog-Hash, X-Goog-Metageneration, X-Google-Trace",
+        "content-length": "4",
+        "content-type": "text/plain",
+        "vary": "Origin, X-Origin"
+      }
+    },
+    {
+      "case": "C7",
+      "method": "GET",
+      "url": "https://storage.googleapis.com/storage/v1/b/fireemu-obs-RUN/o/cors%2Fo.txt",
+      "requestHeaders": {
+        "origin": "http://localhost:3000"
+      },
+      "status": 200,
+      "bodyBytes": 920,
+      "headers": {
+        "access-control-allow-credentials": "true",
+        "access-control-allow-origin": "http://localhost:3000",
+        "access-control-expose-headers": "Cache-Control, Content-Length, Content-Type, Date, ETag, Expires, Server, Transfer-Encoding, Vary, X-GUploader-UploadID, X-Goog-Gcs-Base-Ts, X-Google-Trace",
+        "content-length": "920",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin"
+      }
+    },
+    {
+      "case": "C8",
+      "method": "OPTIONS",
+      "url": "https://storage.googleapis.com/storage/v1/b/fireemu-obs-RUN/o/cors%2Fo.txt",
+      "requestHeaders": {
+        "access-control-request-method": "GET",
+        "origin": "http://a.example"
+      },
+      "status": 200,
+      "bodyBytes": 0,
+      "headers": {
+        "access-control-allow-credentials": "true",
+        "access-control-allow-methods": "DELETE,GET,HEAD,PATCH,POST,PUT",
+        "access-control-allow-origin": "http://a.example",
+        "access-control-max-age": "3600",
+        "content-length": "0",
+        "content-type": "application/octet-stream",
+        "vary": "Origin, X-Origin"
+      }
+    },
+    {
+      "case": "R3",
+      "method": "OPTIONS",
+      "url": "https://storage.googleapis.com/fireemu-obs-RUN/cors/o.txt",
+      "requestHeaders": {
+        "access-control-request-method": "GET",
+        "origin": "http://a.example"
+      },
+      "status": 200,
+      "bodyBytes": 0,
+      "headers": {
+        "content-length": "0",
+        "content-type": "text/html; charset=UTF-8"
+      }
+    },
+    {
+      "case": "F1",
+      "method": "GET",
+      "url": "https://firebasestorage.googleapis.com/v0/b/p.firebasestorage.app/o/storage-strictness%2FRUN%2Fd.txt",
+      "requestHeaders": {},
+      "status": 403,
+      "bodyBytes": 73,
+      "headers": {
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "Content-Range, X-Firebase-Storage-XSRF",
+        "content-length": "73",
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\n  \"error\": {\n    \"code\": 403,\n    \"message\": \"Permission denied.\"\n  }\n}"
+    },
+    {
+      "case": "F2",
+      "method": "DELETE",
+      "url": "https://firebasestorage.googleapis.com/v0/b/p.firebasestorage.app/o/storage-strictness%2FRUN%2Fd.txt",
+      "requestHeaders": {},
+      "status": 204,
+      "bodyBytes": 0,
+      "headers": {
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "Content-Range, X-Firebase-Storage-XSRF",
+        "content-length": "0"
+      }
+    },
+    {
+      "case": "K1",
+      "method": "DELETE",
+      "url": "https://storage.googleapis.com/storage/v1/b/fireemu-obs-RUN/o/cors%2Fo.txt",
+      "requestHeaders": {},
+      "status": 204,
+      "bodyBytes": 0,
+      "headers": {
+        "content-length": "0",
+        "content-type": "application/json",
+        "vary": "Origin, X-Origin"
+      }
+    }
+  ]
+}

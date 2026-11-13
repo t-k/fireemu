@@ -1,8 +1,22 @@
 use super::{
-    MfaState, PendingEnrollment, PendingSignIn, PendingSignInContext, PendingSignInCredentials,
-    TotpSecret,
+    wipe_secret, MfaState, PendingEnrollment, PendingSignIn, PendingSignInContext,
+    PendingSignInCredentials, TotpSecret, SECRET_DROPS,
 };
 use fireemu_core_types::time::LogicalInstant;
+
+#[test]
+fn wipe_secret_zeros_every_byte() {
+    let mut bytes = [1, 0, 42, 255];
+    wipe_secret(&mut bytes);
+    assert!(bytes.iter().all(|&byte| byte == 0));
+}
+
+#[test]
+fn dropping_totp_secret_runs_drop() {
+    let before = SECRET_DROPS.with(std::cell::Cell::get);
+    drop(TotpSecret::new(vec![1, 2, 3]));
+    assert_eq!(SECRET_DROPS.with(std::cell::Cell::get), before + 1);
+}
 
 fn enrollment(expires: i64) -> PendingEnrollment {
     PendingEnrollment {

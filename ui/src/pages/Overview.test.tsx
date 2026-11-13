@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, waitFor } from "@solidjs/testing-library";
+import { cleanup, render, waitFor, fireEvent } from "@solidjs/testing-library";
 import { okAsync } from "neverthrow";
 import Overview from "./Overview";
 import { appState } from "../state";
@@ -124,4 +124,37 @@ describe("Overview", () => {
       expect(text, word).not.toContain(word);
     }
   });
+});
+
+for (const accepted of [true, false])
+  it(`reports clipboard success truthfully: ${accepted}`, async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: accepted
+          ? vi.fn().mockResolvedValue(undefined)
+          : vi.fn().mockRejectedValue(new Error("denied")),
+      },
+    });
+    const view = render(() => <Overview />);
+    fireEvent.click(view.getByTestId("env-dotenv-copy"));
+    await waitFor(() =>
+      expect(view.getByTestId("env-dotenv-copy-status").textContent).toContain(
+        accepted ? "Copied" : "Copy manually",
+      ),
+    );
+    if (!accepted) expect(view.getByTestId("env-dotenv-copy").textContent).not.toBe("Copied");
+  });
+
+it("offers keyboard-selectable manual text when clipboard and selection APIs are unavailable", async () => {
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+  const selection = vi.spyOn(window, "getSelection").mockReturnValue(null);
+  const view = render(() => <Overview />);
+  fireEvent.click(view.getByTestId("env-dotenv-copy"));
+  const field = await view.findByRole("textbox");
+  await waitFor(() => expect(document.activeElement).toBe(field));
+  expect((field as HTMLTextAreaElement).selectionEnd).toBe(
+    (field as HTMLTextAreaElement).value.length,
+  );
+  selection.mockRestore();
 });

@@ -153,7 +153,19 @@ export const App: Component<RouteSectionProps> = (props) => {
           </span>
           <span class={`badge ${connectionClass()}`} data-testid="connection-badge">
             {connectionLabel()}
+            <span class="sr-only">{t("header.controlHint")}</span>
           </span>
+          <Show when={appState.lastConnectedAt()}>
+            {(time) => (
+              <span
+                class="text-xs text-zinc-500"
+                title={t("header.controlHint")}
+                data-testid="control-last-success"
+              >
+                {t("header.lastSuccess", { time: time() })}
+              </span>
+            )}
+          </Show>
         </header>
         <main class="min-w-0 flex-1 p-4 lg:p-6">
           <Show when={!appState.config().controlToken}>

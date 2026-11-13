@@ -1,3 +1,5 @@
+import { useSearchParams } from "@solidjs/router";
+import { readFunctionFilters, functionFiltersUrl } from "../lib/functionsFilters";
 import {
   createEffect,
   createMemo,
@@ -692,6 +694,70 @@ const Functions: Component = () => {
   const [logLevel, setLogLevel] = createSignal<LevelFilter>("all");
   const [logText, setLogText] = createSignal("");
   const [fnFilter, setFnFilter] = createSignal("");
+  const [filterSearch, setFilterSearch] = useSearchParams();
+  const [includeSearch, setIncludeSearch] = createSignal(false);
+  let filterScope: string | undefined;
+  const localSearchMemory = new Map<string, string>();
+  const localSearchKey = () =>
+    `fireemu.functionSearch.${JSON.stringify([appState.session(), appState.project()])}`;
+  createEffect(() => {
+    const currentFunction = filterSearch.function;
+    const currentLevel = filterSearch.level;
+    const currentQuery = filterSearch.q;
+    const scope = JSON.stringify([appState.session(), appState.project()]);
+    if (filterScope !== undefined && filterScope !== scope) {
+      filterScope = scope;
+      setFnFilter("");
+      setLogLevel("all");
+      setLogText("");
+      setIncludeSearch(false);
+      setFilterSearch({ function: undefined, level: undefined, q: undefined }, { replace: true });
+      return;
+    }
+    filterScope = scope;
+    const restored = readFunctionFilters(
+      new URLSearchParams({
+        function: typeof currentFunction === "string" ? currentFunction : "",
+        level: typeof currentLevel === "string" ? currentLevel : "all",
+        q: typeof currentQuery === "string" ? currentQuery : "",
+      }),
+    );
+    setFnFilter(restored.function);
+    setLogLevel(restored.level);
+    let local = localSearchMemory.get(localSearchKey()) ?? "";
+    try {
+      local =
+        localSearchMemory.get(localSearchKey()) ?? sessionStorage.getItem(localSearchKey()) ?? "";
+    } catch {
+      /* Storage is optional. */
+    }
+    setLogText(typeof currentQuery === "string" ? restored.text : local);
+    setIncludeSearch(false);
+  });
+  const editLogText = (text: string) => {
+    localSearchMemory.set(localSearchKey(), text);
+    try {
+      sessionStorage.setItem(localSearchKey(), text);
+    } catch {
+      /* Storage is optional. */
+    }
+    if (filterSearch.q !== undefined) setFilterSearch({ q: undefined }, { replace: true });
+    setLogText(text);
+  };
+  const shareFilters = async () => {
+    setNotice(null);
+    const url = functionFiltersUrl(
+      window.location.href,
+      { function: fnFilter(), level: logLevel(), text: logText() },
+      includeSearch(),
+    );
+    try {
+      await navigator.clipboard.writeText(url);
+      setNotice(t("functions.shareCopied"));
+    } catch {
+      setError(t("functions.shareFailed"));
+    }
+  };
 
   const filteredLines = createMemo(() =>
     lines().filter((line) => matchesLog(line, { level: logLevel(), text: logText() })),
@@ -822,6 +888,22 @@ const Functions: Component = () => {
       <h1 class="mb-4 text-xl font-bold">{t("functions.title")}</h1>
       <ErrorBanner message={error() ?? (o() ? errorOf(overview()) : null)} />
       <Notice message={notice()} />
+      <div class="mb-3 flex flex-wrap items-center gap-3">
+        <label class="text-sm">
+          <input
+            type="checkbox"
+            checked={includeSearch()}
+            onChange={(e) => setIncludeSearch(e.currentTarget.checked)}
+          />{" "}
+          {t("functions.includeSearch")}
+        </label>
+        <AsyncButton class="btn" onClick={shareFilters}>
+          {t("functions.shareFilters")}
+        </AsyncButton>
+      </div>
+      <Show when={fnFilter() && o() && !functionNames().includes(fnFilter())}>
+        <p role="status">{t("functions.unknownFilter", { name: fnFilter() })}</p>
+      </Show>
       <FetchState
         loading={overview.loading && !o()}
         error={o() ? null : errorOf(overview())}
@@ -1008,9 +1090,14 @@ const Functions: Component = () => {
                     class="input"
                     data-testid="invocation-function-filter"
                     value={fnFilter()}
-                    onInput={(e) => setFnFilter(e.currentTarget.value)}
+                    onInput={(e) =>
+                      setFilterSearch({ function: e.currentTarget.value || undefined })
+                    }
                   >
                     <option value="">{t("functions.allFunctions")}</option>
+                    <Show when={fnFilter() && !functionNames().includes(fnFilter())}>
+                      <option value={fnFilter()}>{fnFilter()}</option>
+                    </Show>
                     <For each={functionNames()}>
                       {(name) => <option value={name}>{name}</option>}
                     </For>
@@ -1073,7 +1160,11 @@ const Functions: Component = () => {
                     class="input"
                     data-testid="log-level-filter"
                     value={logLevel()}
-                    onInput={(e) => setLogLevel(e.currentTarget.value as LevelFilter)}
+                    onInput={(e) =>
+                      setFilterSearch({
+                        level: e.currentTarget.value === "all" ? undefined : e.currentTarget.value,
+                      })
+                    }
                   >
                     <For each={LEVEL_OPTIONS}>
                       {(opt) => <option value={opt.value}>{t(opt.key)}</option>}
@@ -1087,7 +1178,7 @@ const Functions: Component = () => {
                     data-testid="log-text-filter"
                     placeholder={t("functions.filterTextPlaceholder")}
                     value={logText()}
-                    onInput={(e) => setLogText(e.currentTarget.value)}
+                    onInput={(e) => editLogText(e.currentTarget.value)}
                   />
                 </label>
                 <span

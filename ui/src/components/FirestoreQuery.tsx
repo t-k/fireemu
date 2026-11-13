@@ -1,3 +1,4 @@
+import { querySdkSource } from "../lib/querySdk";
 import { A } from "@solidjs/router";
 import {
   createEffect,
@@ -405,6 +406,15 @@ const FirestoreQuery: Component<{ root: string; collection: string; db: string }
                 null,
                 2,
               )}
+            </pre>
+          </details>
+          <details class="mb-3">
+            <summary class="cursor-pointer text-sm">{t("firestore.querySdk")}</summary>
+            <pre
+              class="mono max-h-96 overflow-auto rounded bg-zinc-100 p-3 text-xs dark:bg-zinc-900"
+              data-testid="query-sdk"
+            >
+              {compiled().match(querySdkSource, () => "")}
             </pre>
           </details>
         </Show>

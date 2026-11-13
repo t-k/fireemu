@@ -1,3 +1,4 @@
+import DatabasePicker from "../components/DatabasePicker";
 import { A, useNavigate, useParams, useSearchParams } from "@solidjs/router";
 import {
   createEffect,
@@ -996,7 +997,6 @@ const Firestore: Component = () => {
   const root = () => documentsRoot(appState.project(), db());
   const [version, setVersion] = createSignal(0);
   const [live, setLive] = createSignal(false);
-  const [dbInput, setDbInput] = createSignal(db());
 
   // Live updates: any commit of the selected project / database refreshes the view
   // (coalesced; the views re-read what they show).
@@ -1042,16 +1042,12 @@ const Firestore: Component = () => {
     <div>
       <div class="mb-3 flex flex-wrap items-center gap-3">
         <h1 class="text-xl font-bold">{t("firestore.title")}</h1>
-        <label class="flex items-center gap-1 text-sm">
-          <span class="label">{t("firestore.database")}</span>
-          <input
-            class="input mono w-40"
-            data-testid="database-input"
-            value={dbInput()}
-            onInput={(e) => setDbInput(e.currentTarget.value)}
-            onChange={() => setSearch({ db: dbInput() })}
-          />
-        </label>
+        <DatabasePicker
+          project={appState.project()}
+          session={appState.session()}
+          database={db()}
+          onSelect={(name) => setSearch({ db: name })}
+        />
         <span class="text-sm text-zinc-500">
           {t("firestore.project")}: <span class="mono">{appState.project()}</span>
         </span>

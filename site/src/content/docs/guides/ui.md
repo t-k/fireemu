@@ -29,3 +29,17 @@ If the default port is busy, `up` starts without the UI; check the startup outpu
 - **Rules:** the newest 100 traced Firestore Security Rules decisions, with bounded expression results. Tracing starts with the UI or the first control-API read; a new ruleset clears the history. See [Security Rules](../security-rules/) for diagnostic limits.
 - **App Check:** registered apps and debug tokens.
 - **Runtime:** the virtual clock. Move it forward, or backwards with **Allow moving backwards**.
+
+## Database selection and query reproduction
+
+The Firestore database field offers the current project's known databases and recently opened names. You can also enter a name directly and select **Open database**. The catalog is checked again when the selection changes; **Refresh** checks it without changing the selection. A failed catalog request is reported separately from a database that is absent from a successful catalog response. Recent names are scoped to the selected session and project and retained only in the browser tab's session storage.
+
+The query panel's **Node.js SDK reproduction** section generates a script using the low-level Firestore Node.js SDK. This preserves typed query values, including 64-bit integers and timestamp nanoseconds. Install the packages listed in the script, save it as `query.cjs`, and set `FIRESTORE_EMULATOR_HOST` to your local Firestore port before running it. The script refuses non-loopback endpoints. Like console queries, it uses local administrator access rather than testing client Security Rules.
+
+## Connection checks and shareable Functions filters
+
+The header's connection badge describes responses from the control API, not the health of every product listener. Its last successful check uses wall-clock time, independently of the emulator's virtual clock. A failed check retains the previous successful timestamp; changing the selected session clears it until that target answers.
+
+Functions function-name and log-level filters are kept in the URL. Search text stays in the tab's session storage, scoped to the selected session and project, unless you explicitly select **Include search text in the shared link** and use **Copy filter link**. Review search text before sharing it. Links contain filter settings, not a saved copy of log records; records may no longer be retained when another reader opens the link. When browser storage is unavailable, private text is retained only while the page remains mounted.
+
+When clipboard access fails, the Overview page offers a focused, read-only text field for manual keyboard copying instead of reporting success.

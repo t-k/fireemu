@@ -1,6 +1,20 @@
 // English messages. Every user-visible string of the app lives here; components call
 // `t("key")`. Placeholders are `{name}`.
 export const en = {
+  "app.copyManually":
+    "Copy manually: clipboard access was unavailable. Select the text and use your copy shortcut.",
+  "header.lastSuccess": "Last successful check: {time}",
+  "header.controlHint": "Control API status only; individual services may be unavailable.",
+  "functions.shareFilters": "Copy filter link",
+  "functions.includeSearch": "Include search text in the shared link",
+  "functions.unknownFilter": "The selected function is not registered or retained: {name}",
+  "functions.shareCopied": "Filter link copied",
+  "functions.shareFailed": "Could not copy the filter link. Clipboard access was unavailable.",
+  "firestore.querySdk": "Node.js SDK reproduction",
+  "firestore.databaseOpen": "Open database",
+  "firestore.databaseRecent": "Recently used databases",
+  "firestore.databaseMissing": "Database {name} does not exist. Select an existing database.",
+  "firestore.databaseListError": "Database list unavailable: {message}",
   "hosting.title": "Hosting",
   "hosting.site": "Site",
   "hosting.url": "Local URL",
@@ -150,9 +164,9 @@ export const en = {
   "overview.selectedSession": "Selected session",
   "overview.daemonProject": "Daemon default project",
   "header.local": "Local emulator",
-  "header.connected": "Connected",
-  "header.disconnected": "Daemon not answering",
-  "header.connecting": "Connecting",
+  "header.connected": "Control API responding",
+  "header.disconnected": "Control API not answering",
+  "header.connecting": "Checking control API",
   "overview.capabilities": "Capability manifest",
 
   "firestore.title": "Firestore",

@@ -826,12 +826,16 @@ const CollectionView: Component<{
   onDeleted: () => void;
 }> = (props) => {
   const navigate = useNavigate();
+  const rowReadGuard = createRowReadGuard();
   const list = createPagedList(
-    (token) =>
-      listDocuments(props.root, props.path, token).map((page) => ({
+    (token) => {
+      // A membership read supersedes row reads issued before its first page.
+      if (!token) rowReadGuard.invalidate();
+      return listDocuments(props.root, props.path, token).map((page) => ({
         items: page.documents ?? [],
         nextToken: page.nextPageToken,
-      })),
+      }));
+    },
     (document) => document.name,
   );
   const [error, setError] = createSignal<string | null>(null);
@@ -840,7 +844,6 @@ const CollectionView: Component<{
   const [deleting, setDeleting] = createSignal<number | null>(null);
   const [pendingRowRevision, setPendingRowRevision] = createSignal(0);
   const pendingRowUpdates = new Set<string>();
-  const rowReadGuard = createRowReadGuard();
   const load = async () => {
     pendingRowUpdates.clear();
     rowReadGuard.invalidate();
@@ -879,6 +882,27 @@ const CollectionView: Component<{
       void getDocument(props.root, `${props.path}/${id}`).match(
         (document) => {
           if (rowReadGuard.isCurrent(id, ticket)) {
+            const displayed = list.items().find((item) => item.name === document.name);
+            if (!displayed) return;
+            if (displayed.updateTime) {
+              if (!document.updateTime) return;
+              // Compare whole seconds and nanoseconds separately, including differing precision.
+              const readSeconds = Date.parse(document.updateTime.replace(/\.\d+/, ""));
+              const displayedSeconds = Date.parse(displayed.updateTime.replace(/\.\d+/, ""));
+              const readNanos = Number(
+                document.updateTime.match(/\.(\d+)/)?.[1]?.padEnd(9, "0") ?? 0,
+              );
+              const displayedNanos = Number(
+                displayed.updateTime.match(/\.(\d+)/)?.[1]?.padEnd(9, "0") ?? 0,
+              );
+              if (
+                !(
+                  readSeconds > displayedSeconds ||
+                  (readSeconds === displayedSeconds && readNanos >= displayedNanos)
+                )
+              )
+                return;
+            }
             list.updateItem(document);
             rowReadGuard.markApplied(id, ticket);
           }

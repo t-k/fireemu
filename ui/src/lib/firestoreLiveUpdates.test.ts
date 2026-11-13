@@ -99,6 +99,167 @@ describe("Firestore live updates with delayed responses", () => {
     expect(view.getByTestId("document-list").textContent).not.toContain("value1");
   });
 
+  it.each(["2026-11-13T12:00:00.000000001Z", "2026-11-13T12:00:00.000000002Z"])(
+    "keeps recreated alice after a pre-delete GET with updateTime %s completes",
+    async (updateTime) => {
+      vi.useFakeTimers();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() => {
+          throw new Error("Unexpected network request");
+        }),
+      );
+      appState.setSessions([{ name: "default", project: "p" }]);
+      appState.setSession("default");
+      const root = "projects/p/databases/(default)/documents";
+      const alice = {
+        name: `${root}/users/alice`,
+        fields: { value: { stringValue: "value0" } },
+        updateTime: "2026-11-13T12:00:00Z",
+      };
+      const recreated = {
+        ...alice,
+        fields: { value: { stringValue: "value2" } },
+        updateTime: "2026-11-13T12:00:00.000000002Z",
+      };
+      let emit!: (event: SseEvent) => void;
+      vi.mocked(subscribe).mockImplementation((_path, onEvent) => {
+        emit = onEvent;
+        return vi.fn();
+      });
+      const memberships: ((page: DocumentPage) => void)[] = [];
+      vi.mocked(listDocuments)
+        .mockReturnValueOnce(okAsync({ documents: [alice] }))
+        .mockImplementation(() =>
+          ResultAsync.fromSafePromise(
+            new Promise<DocumentPage>((resolve) => memberships.push(resolve)),
+          ),
+        );
+      let releaseRow!: (document: FsDocument) => void;
+      vi.mocked(getDocument).mockImplementation(() =>
+        ResultAsync.fromSafePromise(
+          new Promise<FsDocument>((resolve) => {
+            releaseRow = resolve;
+          }),
+        ),
+      );
+      const history = createMemoryHistory();
+      history.set({ value: "/users" });
+      const view = render(() =>
+        createComponent(MemoryRouter, {
+          history,
+          get children() {
+            return createComponent(Route, { path: "/:path", component: Firestore });
+          },
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      emit({
+        event: "commit",
+        data: JSON.stringify({ changes: [{ path: alice.name, kind: "updated" }] }),
+      });
+      expect(getDocument).toHaveBeenCalledExactlyOnceWith(root, "users/alice");
+      await vi.advanceTimersByTimeAsync(151);
+      emit({
+        event: "commit",
+        data: JSON.stringify({ changes: [{ path: alice.name, kind: "deleted" }] }),
+      });
+      expect(memberships).toHaveLength(1);
+      emit({
+        event: "commit",
+        data: JSON.stringify({ changes: [{ path: alice.name, kind: "created" }] }),
+      });
+      await vi.advanceTimersByTimeAsync(150);
+      expect(memberships).toHaveLength(1);
+      memberships[0]!({ documents: [] });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(view.queryByText("alice")).toBeNull();
+      expect(memberships).toHaveLength(2);
+      memberships[1]!({ documents: [recreated] });
+      await vi.advanceTimersByTimeAsync(0);
+      const recreatedRow = view.getByText("alice").closest("tr");
+      expect(view.getByTestId("document-list").textContent).toContain("value2");
+      releaseRow({ ...alice, fields: { value: { stringValue: "value1" } }, updateTime });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(view.getByTestId("document-list").textContent).toContain("value2");
+      expect(view.getByTestId("document-list").textContent).not.toContain("value1");
+      expect(view.getByText("alice").closest("tr")).toBe(recreatedRow);
+      expect(listDocuments).toHaveBeenCalledTimes(3);
+    },
+  );
+
+  it.each([
+    ["2026-11-13T12:00:00.000000002Z", "2026-11-13T12:00:00.000000001Z", false],
+    ["2026-11-13T12:00:00.000000001Z", "2026-11-13T12:00:00.000000002Z", true],
+    ["2026-11-13T12:00:00Z", "2026-11-13T12:00:00.000000000Z", true],
+    ["2026-11-13T12:00:00.100Z", "2026-11-13T12:00:00.100000000Z", true],
+    ["2026-11-13T12:00:00.100000000Z", "2026-11-13T12:00:00.100Z", true],
+    ["2026-11-13T12:00:00.999999999Z", "2026-11-13T12:00:01Z", true],
+    ["2026-11-13T12:00:01Z", "2026-11-13T12:00:00.999999999Z", false],
+    ["2026-11-13T12:00:00Z", "2026-11-13T13:00:00.000000001+01:00", true],
+    ["2026-11-13T12:00:00.000000002Z", "2026-11-13T13:00:00.000000001+01:00", false],
+  ] as const)(
+    "compares displayed timestamp %s with row read %s at nanosecond precision",
+    async (displayedTime, readTime, accepted) => {
+      vi.useFakeTimers();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() => {
+          throw new Error("Unexpected network request");
+        }),
+      );
+      appState.setSessions([{ name: "default", project: "p" }]);
+      appState.setSession("default");
+      const root = "projects/p/databases/(default)/documents";
+      const alice = {
+        name: `${root}/users/alice`,
+        fields: { value: { stringValue: "displayed" } },
+        updateTime: displayedTime,
+      };
+      let emit!: (event: SseEvent) => void;
+      vi.mocked(subscribe).mockImplementation((_path, onEvent) => {
+        emit = onEvent;
+        return vi.fn();
+      });
+      vi.mocked(listDocuments).mockReturnValue(okAsync({ documents: [alice] }));
+      let releaseRow!: (document: FsDocument) => void;
+      vi.mocked(getDocument).mockImplementation(() =>
+        ResultAsync.fromSafePromise(
+          new Promise<FsDocument>((resolve) => {
+            releaseRow = resolve;
+          }),
+        ),
+      );
+      const history = createMemoryHistory();
+      history.set({ value: "/users" });
+      const view = render(() =>
+        createComponent(MemoryRouter, {
+          history,
+          get children() {
+            return createComponent(Route, { path: "/:path", component: Firestore });
+          },
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      const displayedRow = view.getByText("alice").closest("tr");
+      emit({
+        event: "commit",
+        data: JSON.stringify({ changes: [{ path: alice.name, kind: "updated" }] }),
+      });
+      releaseRow({ ...alice, fields: { value: { stringValue: "read" } }, updateTime: readTime });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(view.getByTestId("document-list").textContent).toContain(
+        accepted ? "read" : "displayed",
+      );
+      expect(view.getByTestId("document-list").textContent).not.toContain(
+        accepted ? "displayed" : "read",
+      );
+      if (!accepted) expect(view.getByText("alice").closest("tr")).toBe(displayedRow);
+      expect(getDocument).toHaveBeenCalledExactlyOnceWith(root, "users/alice");
+      expect(listDocuments).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it.each(["created", "updated"] as const)(
     "applies every completed response while %s events continue every 151 ms",
     async (kind) => {

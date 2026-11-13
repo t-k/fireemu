@@ -4181,6 +4181,13 @@ fn unknown_bucket_written(state: &StorageState, route: &Route, method: &str) -> 
 /// The bucket a request addresses and whether it is the Firebase API (`/v0`) or JSON API, for the CORS
 /// decision: the bucket of the route `method` and `path` resolve to. A preflight names no method
 /// of its own, so each verb a browser may ask for is tried. `None` for a path that names no bucket.
+/// Whether a JSON API request has the shape the STORAGE-STRICTNESS-OBS recording observed for JSON
+/// API CORS (cases C6-C8): a `GET` of an object (metadata or `alt=media`), or a preflight of that
+/// object URL. Other JSON API routes keep the base behaviour (UNRECORDED).
+pub(crate) fn is_recorded_json_cors_shape(method: &str, path: &str) -> bool {
+    matches!(method, "GET" | "OPTIONS") && matches!(route("GET", path), Ok(Route::GcsObject { .. }))
+}
+
 pub(crate) fn cors_bucket(method: &str, path: &str) -> Option<(String, bool, bool)> {
     let methods: &[&str] = if method == "OPTIONS" {
         // POST first: the upload route is not a bucket named `upload` for the object read.

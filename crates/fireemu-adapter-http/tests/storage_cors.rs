@@ -571,7 +571,7 @@ async fn absent_and_empty_cors_keep_base_behavior_on_every_surface() {
 }
 
 #[tokio::test]
-async fn json_api_origin_changes_only_cors_headers_without_extending_production_framing() {
+async fn unrecorded_json_api_routes_keep_the_base_cors_and_framing() {
     for production_exact in [false, true] {
         let s = configured(TokenAcceptance::Verified, &rule());
         s.rules.set_unlisted_buckets_cors_none(production_exact);
@@ -602,14 +602,13 @@ async fn json_api_origin_changes_only_cors_headers_without_extending_production_
                 browser_headers, bare_headers,
                 "{method} {path}: non-CORS framing"
             );
-            if path != "/b" {
-                assert_eq!(browser.header("access-control-allow-origin"), Some(ORIGIN));
-                assert_eq!(
-                    browser.header("access-control-allow-credentials"),
-                    Some("true")
-                );
-                assert_eq!(browser.header("vary"), Some("Origin, X-Origin"));
-            }
+            // Bucket, list and ACL routes were not recorded (C6-C8 are object reads and an object
+            // preflight): they keep the base behaviour, so the recorded credentialed answer is absent.
+            assert_eq!(
+                browser.header("access-control-allow-credentials"),
+                None,
+                "{method} {path}: unrecorded JSON route"
+            );
         }
         task.abort();
         let _ = task.await;

@@ -315,6 +315,7 @@ fn bucket_cors_for(
     let (bucket, firebase, json_api) = crate::storage::cors_bucket(method, path)?;
     // C6-C8 recorded JSON API CORS only with nonempty bucket rules. Absent and empty entries retain the base behavior.
     if json_api
+        && crate::storage::is_recorded_json_cors_shape(method, path)
         && state
             .rules
             .bucket_cors(&bucket)
@@ -512,6 +513,7 @@ async fn respond(
         req.uri().query().unwrap_or(""),
     );
     let json_api_cors = state.is_strict()
+        && crate::storage::is_recorded_json_cors_shape(req.method().as_str(), req.uri().path())
         && crate::storage::cors_bucket(req.method().as_str(), req.uri().path()).is_some_and(
             |(bucket, _, json_api)| {
                 json_api
@@ -779,7 +781,8 @@ async fn respond(
     let body = body_of(&response);
     let mut response_headers = response.headers;
     if let Some(origin) = origin.as_deref().filter(|_| json_api_cors) {
-        // RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, cases C6-C7): replace only CORS headers; preserve the route's base JSON layout, caching and other framing.
+        // RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, cases C6-C7): object GETs (metadata and media) only;
+        // replace only CORS headers and keep the route's base JSON layout, caching and other framing.
         let media = request_method == "GET"
             && crate::storage::query_params(&trace_query)
                 .get("alt")

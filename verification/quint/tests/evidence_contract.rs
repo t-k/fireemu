@@ -155,7 +155,26 @@ fn every_bound_input_tamper_invalidates_evidence() {
             .expect("untampered copied fixture must validate");
         let path = temporary.path.join(target);
         let mut bytes = fs::read(&path).expect("read copied bound input");
-        bytes.push(b'!');
+        if target == "verification/quint/evidence/cargo-authority.json" {
+            let mut authority: serde_json::Value =
+                serde_json::from_slice(&bytes).expect("valid authority");
+            authority["packages"][0]["version"] = "tampered-version".into();
+            bytes = serde_json::to_vec(&authority).expect("serialize authority");
+        } else if std::path::Path::new(AsRef::<str>::as_ref(&target))
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+        {
+            let mut json: serde_json::Value = serde_json::from_slice(&bytes).expect("valid JSON");
+            json["tampered"] = true.into();
+            bytes = serde_json::to_vec(&json).expect("serialize JSON");
+        } else if std::path::Path::new(AsRef::<str>::as_ref(&target))
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("rs"))
+        {
+            bytes.extend_from_slice(b"\nconst _: () = ();\n");
+        } else {
+            bytes.push(b'!');
+        }
         fs::write(&path, bytes).expect("tamper copied bound input");
         assert!(
             validate_evidence_json(EVIDENCE, descriptor(), Some(&temporary.path)).is_err(),

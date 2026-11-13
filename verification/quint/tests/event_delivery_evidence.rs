@@ -63,8 +63,20 @@ fn checked_in_evidence_rejects_each_bound_input_tamper() {
         if relative.as_str() == "verification/quint/evidence/cargo-authority.json" {
             let mut authority: serde_json::Value =
                 serde_json::from_slice(&bytes).expect("valid authority");
-            authority["target"] = serde_json::Value::String("tampered-target".to_owned());
+            authority["packages"][0]["version"] = "tampered-version".into();
             bytes = serde_json::to_vec(&authority).expect("serialize authority");
+        } else if std::path::Path::new(AsRef::<str>::as_ref(&relative))
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+        {
+            let mut json: serde_json::Value = serde_json::from_slice(&bytes).expect("valid JSON");
+            json["tampered"] = true.into();
+            bytes = serde_json::to_vec(&json).expect("serialize JSON");
+        } else if std::path::Path::new(AsRef::<str>::as_ref(&relative))
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("rs"))
+        {
+            bytes.extend_from_slice(b"\nconst _: () = ();\n");
         } else {
             bytes.push(b'!');
         }

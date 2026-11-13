@@ -46,6 +46,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Fixed
 
+- Task queues: under the strict profile a queue with `maxDispatchesPerSecond` 1 starts with a burst of 10 dispatches and then refills at 1 per second, as a production recording of 120 tasks due at one instant showed (2026-11-13); a rate of 500 has a burst of 100 (production's read-back). Other rates and the emulator profile keep the official emulator's bucket.
 - Task queues: the emulator profile deletes pending tasks and returns the official emulator's success response; GET and PUT on task routes return its 404 response. A task already dispatched can also be deleted once, as in firebase-tools 15.28.2; the second delete of a name returns 404.
 
 - Test worlds: `Promise.all([world.control('POST', 'sessions/default:awaitIdle'), world.clock.advance(1000)])` no longer waits for itself. A pending `awaitIdle` no longer holds up later clock calls on the same world, `reset()` and `dispose()` cancel pending waits instead of waiting for their budget, and an `awaitIdle` request is bounded by its own `timeoutSeconds` (30 s by default) plus five seconds rather than by `requestTimeoutMs`.

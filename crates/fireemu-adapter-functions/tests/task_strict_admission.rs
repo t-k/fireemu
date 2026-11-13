@@ -62,6 +62,7 @@ async fn start_full(
     let log = dir.join("requests");
     let probe = dir.join("entries");
     std::fs::write(dir.join("entries.taskA.release"), "").unwrap();
+    std::fs::write(dir.join("entries.taskB.release"), "").unwrap();
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
     let spec = SpawnSpec {
         command: vec!["python3".to_owned(), script.to_owned()],
@@ -92,7 +93,18 @@ async fn start_full(
             max_dispatches_per_second: 500.0,
         },
     };
+    let mut burst_function = function.clone();
+    "taskB".clone_into(&mut burst_function.name);
+    "taskB".clone_into(&mut burst_function.entry_point);
+    burst_function.trigger = Trigger::TaskQueue {
+        retry,
+        rate_limits: TaskRateLimits {
+            max_concurrent_dispatches: 100,
+            max_dispatches_per_second: 1.0,
+        },
+    };
     manifest.functions.push(function);
+    manifest.functions.push(burst_function);
     let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
     let runtime = FunctionsRuntime::with_codebases(
         vec![CodebaseSpec {
@@ -461,6 +473,53 @@ fn json_of_size(bytes: usize) -> String {
 }
 
 const TASKS: &str = "/projects/demo-app/locations/us-central1/queues/taskA/tasks";
+
+#[tokio::test]
+async fn strict_runtime_uses_the_recorded_burst_at_one_dispatch_per_second() {
+    for (name, profile) in [
+        ("strict-burst", FunctionsHttpProfile::Strict),
+        ("emulator-burst", FunctionsHttpProfile::Emulator),
+    ] {
+        let h = start_full(
+            name,
+            profile,
+            NameReuse::Immediate,
+            600,
+            retry(1, 500),
+            false,
+            false,
+        )
+        .await;
+        let (addr, server) = tasks_listener(&h).await;
+        let start = tokio::time::Instant::now();
+        for _ in 0..12 {
+            let body = body_of(&json!({})).to_string();
+            let (status, _, text) = wire(
+                addr,
+                "POST",
+                "/projects/demo-app/locations/us-central1/queues/taskB/tasks",
+                body.as_bytes(),
+            )
+            .await;
+            assert_eq!(status, 200, "{text}");
+        }
+        tokio::time::sleep_until(start + Duration::from_millis(1500)).await;
+        let deliveries = std::fs::read_to_string(&h.probe)
+            .unwrap_or_default()
+            .lines()
+            .count();
+        if name == "strict-burst" {
+            assert!(
+                (10..12).contains(&deliveries),
+                "strict deliveries: {deliveries}"
+            );
+        } else {
+            assert!(deliveries <= 2, "emulator deliveries: {deliveries}");
+        }
+        server.abort();
+        h.stop().await;
+    }
+}
 
 #[tokio::test]
 async fn the_strict_listener_answers_json_in_both_directions_and_reads_a_task_of_a_mebibyte() {

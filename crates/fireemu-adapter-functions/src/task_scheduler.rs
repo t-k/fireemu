@@ -2006,6 +2006,42 @@ mod tests {
         }
     }
 
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn production_refund_never_exceeds_bucket_capacity() {
+        let start = super::TaskTime::Virtual(0);
+        let mut scheduler = TaskScheduler::from_manifest(
+            &manifest(TaskRateLimits {
+                max_concurrent_dispatches: 1,
+                max_dispatches_per_second: 1.0,
+            }),
+            start,
+        );
+        scheduler.set_burst_rule(super::BurstRule::Production);
+        scheduler
+            .enqueue_at(
+                "queue",
+                task("refund"),
+                TaskRetryConfig::default(),
+                1,
+                start,
+            )
+            .unwrap();
+        let (dispatch, _) = scheduler.dispatch_ready_at(
+            start,
+            None,
+            "demo-app",
+            |_| Some(DEFAULT_REGION.to_owned()),
+            1,
+        );
+        assert_eq!(dispatch.len(), 1);
+        assert_eq!(scheduler.queues["queue"].tokens, 9.0);
+        scheduler.refund_token("queue", dispatch[0].id, dispatch[0].generation);
+        assert_eq!(scheduler.queues["queue"].tokens, 10.0);
+        scheduler.refund_token("queue", dispatch[0].id, dispatch[0].generation);
+        assert_eq!(scheduler.queues["queue"].tokens, 10.0);
+    }
+
     proptest::proptest! {
         #[test]
         #[allow(clippy::float_cmp)] // exact rates select the recorded rows

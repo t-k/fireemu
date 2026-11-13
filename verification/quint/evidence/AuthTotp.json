@@ -120,7 +120,7 @@
     },
     "crates/fireemu-core-auth/src/mfa.rs": {
       "kind": "sha256",
-      "value": "f85fdb1f22d236c1a0371e0cbc5bef742ca1ef73b79105ae2443512ba6085fbe"
+      "value": "45db524ec2f302893951cc3bb3a72046a5a1a7c680424c7fea6eb5c085867377"
     },
     "crates/fireemu-core-auth/src/mfa_config.rs": {
       "kind": "sha256",

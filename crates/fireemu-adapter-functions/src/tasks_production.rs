@@ -850,14 +850,18 @@ pub(crate) fn get_answer(
         result.insert("createTime".to_owned(), json!(create_time));
     }
     result.insert("dispatchDeadline".to_owned(), json!(task.dispatch_deadline));
-    result.insert(
-        "dispatchCount".to_owned(),
-        json!(observation.dispatch_count),
-    );
-    result.insert(
-        "responseCount".to_owned(),
-        json!(observation.response_count),
-    );
+    if observation.dispatch_count != 0 {
+        result.insert(
+            "dispatchCount".to_owned(),
+            json!(observation.dispatch_count),
+        );
+    }
+    if observation.response_count != 0 {
+        result.insert(
+            "responseCount".to_owned(),
+            json!(observation.response_count),
+        );
+    }
     if let Some(attempt) = &observation.first_attempt {
         result.insert(
             "firstAttempt".to_owned(),
@@ -1541,18 +1545,37 @@ mod tests {
     }
 
     #[test]
-    fn a_request_with_no_schedule_is_stamped_with_its_own_microsecond() {
-        let admitted = admit(
-            QUEUE,
-            &json!({ "task": base() }),
-            NOW + 789,
-            1,
-            DEFAULT_DEADLINE_SECONDS,
-            || 100,
-        )
-        .unwrap();
-        assert_eq!(admitted.schedule_nanos, NOW);
-        assert_eq!(admitted.schedule_time, "2026-11-11T09:06:59.589154Z");
+    fn past_or_missing_schedule_preserves_request_microseconds_at_millisecond_boundaries() {
+        for task in [
+            base(),
+            with(json!({"scheduleTime": "2026-11-11T08:06:59Z"})),
+        ] {
+            for (now, expected_nanos, expected_time) in [
+                (NOW + 789, NOW, "2026-11-11T09:06:59.589154Z"),
+                (
+                    1_794_388_019_588_999_999,
+                    1_794_388_019_588_999_000,
+                    "2026-11-11T09:06:59.588999Z",
+                ),
+                (
+                    1_794_388_019_589_000_789,
+                    1_794_388_019_589_000_000,
+                    "2026-11-11T09:06:59.589Z",
+                ),
+            ] {
+                let admitted = admit(
+                    QUEUE,
+                    &json!({ "task": task }),
+                    now,
+                    1,
+                    DEFAULT_DEADLINE_SECONDS,
+                    || 100,
+                )
+                .unwrap();
+                assert_eq!(admitted.schedule_nanos, expected_nanos);
+                assert_eq!(admitted.schedule_time, expected_time);
+            }
+        }
     }
 
     // ---- a duration of any length is refused, never a panic or a wrap (review S1 of 2026-11-12) ------------------------------

@@ -394,8 +394,7 @@
       "knownDifferences": [
         "KD-LOCAL-PATH",
         "KD-LOCAL-URL",
-        "KD-PLATFORM-HEADERS",
-        "KD-QUEUE-READS"
+        "KD-PLATFORM-HEADERS"
       ],
       "profiles": {
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
@@ -444,9 +443,9 @@
         "strictVsPass1": {
           "rows": 4,
           "counts": {
-            "MATCH": 2,
+            "MATCH": 3,
             "MATCH_LAYOUT": 0,
-            "KNOWN_DIFFERENCE": 2,
+            "KNOWN_DIFFERENCE": 1,
             "MISMATCH": 0,
             "UNKNOWN": 0
           }
@@ -454,9 +453,9 @@
         "strictVsPass2": {
           "rows": 4,
           "counts": {
-            "MATCH": 2,
+            "MATCH": 3,
             "MATCH_LAYOUT": 0,
-            "KNOWN_DIFFERENCE": 2,
+            "KNOWN_DIFFERENCE": 1,
             "MISMATCH": 0,
             "UNKNOWN": 0
           }
@@ -465,8 +464,7 @@
       "knownDifferences": [
         "KD-LOCAL-PATH",
         "KD-LOCAL-URL",
-        "KD-PLATFORM-HEADERS",
-        "KD-QUEUE-READS"
+        "KD-PLATFORM-HEADERS"
       ],
       "profiles": {
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
@@ -1479,9 +1477,9 @@
         "strictVsPass1": {
           "rows": 6,
           "counts": {
-            "MATCH": 4,
+            "MATCH": 5,
             "MATCH_LAYOUT": 0,
-            "KNOWN_DIFFERENCE": 2,
+            "KNOWN_DIFFERENCE": 1,
             "MISMATCH": 0,
             "UNKNOWN": 0
           }
@@ -1489,16 +1487,16 @@
         "strictVsPass2": {
           "rows": 6,
           "counts": {
-            "MATCH": 4,
+            "MATCH": 5,
             "MATCH_LAYOUT": 0,
-            "KNOWN_DIFFERENCE": 2,
+            "KNOWN_DIFFERENCE": 1,
             "MISMATCH": 0,
             "UNKNOWN": 0
           }
         }
       },
       "knownDifferences": [
-        "KD-QUEUE-READS"
+        "KD-LOCAL-URL"
       ],
       "profiles": {
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
@@ -1654,7 +1652,7 @@
     },
     {
       "id": "queue-management-api",
-      "reason": "createQueue, updateQueue, pause, purge, getTask and listTasks as an API: used for setup and read-back, no claim that fireemu implements them.",
+      "reason": "createQueue, updateQueue, pause, purge, getQueue and listTasks as an API: used for setup and read-back, no claim that fireemu implements them. The recorded getTask cases are now compared.",
       "status": "NOT_COMPARED"
     },
     {
@@ -1732,8 +1730,8 @@
     "Production's retry gaps grew past the declared maxBackoff in both runs (queue tqwindow, maxBackoff 2 s, 100 attempts: 1 s, then ten gaps of 2 s, then 4 s three times, 8 s twice and 10 s from the seventeenth gap on). `functions.taskRetryBackoff` `production` (selected by productionExact) follows that schedule as a floor under the declared gap, and the comparison claims every gap of the shorter side. Not recorded: how the growth depends on the declared maxBackoff (no other queue of the program failed twelve times), whether it depends on the elapsed time, and the gaps after the observation ended; the length of the observation differs between runs, which is the observation-window known difference (ruling 16).",
     "Strict delivers an `Authorization: Bearer` identity token of three segments to a task that named an `oidcToken`, so that `request.auth` is present in an `onTaskDispatched` handler as in production. The emulator issues it unsigned (`alg: none`, an empty third segment) with Google's claim names: only the scheme, the segment count and the presence of `request.auth` are production's, not the signature or the values (rulings 17 and 23). The handler and its timers see `FUNCTIONS_EMULATOR=\"true\"` (ruling 22).",
     "The strict FUNCTIONS_EMULATOR hide covers the next read inside a dispatch scope, which is the SDK's request.auth check; an onInit callback that reads FUNCTIONS_EMULATOR during the first dispatch would take that read (coordinator re-check of ruling 22, 2026-11-12).",
-    "The answers of createTask, deleteTask and the refusals are printed as production printed them (two-space JSON in proto field order with a newline at the end, `<`, `>` and `&` escaped, `application/json; charset=UTF-8`), including the `details` of an argument error; the order of the members of `headers` varied between production's runs and is not compared. The byte length is not compared because the task's URL differs (rulings 18 and 24). getTask stays 405 in strict under KD-QUEUE-READS (rulings 3 and 24).",
-    "A strict createTask whose body is not JSON is refused with 400, which production does not do (a task body is any bytes); the daemon needs a JSON body to deliver to an `onTaskDispatched` function. A refusal of that kind is not a recorded production answer.",
+    "The answers of createTask, deleteTask and the refusals are printed as production printed them (two-space JSON in proto field order with a newline at the end, `<`, `>` and `&` escaped, `application/json; charset=UTF-8`), including the `details` of an argument error; the order of the members of `headers` varied between production's runs and is not compared. The byte length is not compared because the task's URL differs (rulings 18 and 24). Strict getTask now returns pending tasks without zero-valued dispatchCount or responseCount (get-dup-sched) and the recorded recent-task 404 NOT_FOUND after completion or deletion (get-dup-first). These cases are no longer excluded by KD-QUEUE-READS; only the local httpRequest.url is excluded by KD-LOCAL-URL. The committed comparison results and their counts describe the historical replay, which excluded getTask; they have not been regenerated or promoted by this change.",
+    "Strict createTask accepts empty, text and binary bodies and delivers their original bytes and Content-Type, subject to the existing body/header size estimate. The emulator profile retains JSON-only admission. Raw non-JSON delivery, FULL views, active/retry observations, invalid responseView refusals and unknown-name getTask answers are locally tested but unrecorded. Unknown-name getTask keeps the generic 404 text recorded for del-missing; no unknown-name GET was recorded. Recent lookup history uses the existing bounded completed-name history, for one hour with immediate name reuse or for the configured name-retention period otherwise; expiry was not observed.",
     "The emulator profile is unchanged by this closure: it keeps the official emulator's answers, plain-text refusals, header shape, 100 KiB request limit, forever-kept names and retry defaults (ruling 20)."
   ],
   "outOfScope": [
@@ -1759,37 +1757,37 @@
     },
     "strictVsPass1": {
       "path": "conformance/task-queue-production-strict-vs-pass-1.json",
-      "sha256": "1150f3f0a123df2025f65009759a41a16a6dc90044098ffacb1675af022e6d35",
+      "sha256": "68e7757e3646a592e2d3864728532996f964a40ba5442657e729c367d28b5275",
       "rows": 122,
       "summary": {
-        "MATCH": 57,
+        "MATCH": 58,
         "MATCH_LAYOUT": 0,
-        "KNOWN_DIFFERENCE": 65,
+        "KNOWN_DIFFERENCE": 64,
         "MISMATCH": 0,
         "UNKNOWN": 0
       }
     },
     "strictVsPass2": {
       "path": "conformance/task-queue-production-strict-vs-pass-2.json",
-      "sha256": "86816c298482262a6953f62242cf9a82ef7eb57d0e2dbeafc0d05512e60fae6e",
+      "sha256": "c665056aaa3783920fa8eb7ff8276c7b82884837d685ebded847df30922343b5",
       "rows": 122,
       "summary": {
-        "MATCH": 57,
+        "MATCH": 58,
         "MATCH_LAYOUT": 0,
-        "KNOWN_DIFFERENCE": 65,
+        "KNOWN_DIFFERENCE": 64,
         "MISMATCH": 0,
         "UNKNOWN": 0
       }
     },
     "localStrictReplay": {
       "path": "conformance/task-queue-production-local-strict.json",
-      "sha256": "a8189faebb9514d049a7b30e14fe59b08045880f06ecc180ef663e6d0b0b6302",
-      "binarySha256": "edf1396254676143143341be5029d014332799f074061d150335a85a2a01ce60"
+      "sha256": "d7767756ec6f07b57ac5f2bd7b0b2433b0f280a8b14a35876934ba5e1e2c313e",
+      "binarySha256": "4b046f2b9adda877c3f1c8e74fd07914c40e72d40bc6011d9805536050f2dc01"
     }
   },
   "knownDifferences": {
     "path": "conformance/src/task-queue-production/known-differences.mjs",
-    "sha256": "d8c7aa4e58201cf0290d069ec862bf4dfef2b9de573b26d432e7e2a8d22d882e",
+    "sha256": "9a067def6fe3bfc73ed0f914d19c45393d7675fe4bc6c19916858e388e8a99e5",
     "entries": [
       "KD-LOCAL-URL",
       "KD-QUEUE-READS",
@@ -1818,24 +1816,24 @@
       },
       {
         "path": "conformance/task-queue-production-strict-vs-pass-1.json",
-        "sha256": "1150f3f0a123df2025f65009759a41a16a6dc90044098ffacb1675af022e6d35",
+        "sha256": "68e7757e3646a592e2d3864728532996f964a40ba5442657e729c367d28b5275",
         "rows": 122,
         "summary": {
-          "MATCH": 57,
+          "MATCH": 58,
           "MATCH_LAYOUT": 0,
-          "KNOWN_DIFFERENCE": 65,
+          "KNOWN_DIFFERENCE": 64,
           "MISMATCH": 0,
           "UNKNOWN": 0
         }
       },
       {
         "path": "conformance/task-queue-production-strict-vs-pass-2.json",
-        "sha256": "86816c298482262a6953f62242cf9a82ef7eb57d0e2dbeafc0d05512e60fae6e",
+        "sha256": "c665056aaa3783920fa8eb7ff8276c7b82884837d685ebded847df30922343b5",
         "rows": 122,
         "summary": {
-          "MATCH": 57,
+          "MATCH": 58,
           "MATCH_LAYOUT": 0,
-          "KNOWN_DIFFERENCE": 65,
+          "KNOWN_DIFFERENCE": 64,
           "MISMATCH": 0,
           "UNKNOWN": 0
         }

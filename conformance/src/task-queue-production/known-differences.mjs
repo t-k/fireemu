@@ -19,8 +19,6 @@ export const KNOWN_DIFFERENCES = Object.freeze([
     id: "KD-QUEUE-READS",
     part: "admission",
     cases: [
-      "get-dup-sched",
-      "get-dup-first",
       "queue-tqdef",
       "queue-tqretry",
       "queue-tqlimit",
@@ -33,7 +31,7 @@ export const KNOWN_DIFFERENCES = Object.freeze([
     ],
     paths: [/.*/],
     ruling: 3,
-    what: "getTask and getQueue are the Cloud Tasks management API, which neither fireemu nor the official emulator serves (405 here); the recordings are read-back evidence of the queue settings and of the task states, not a claim.",
+    what: "getQueue is a Cloud Tasks management API that neither fireemu nor the official emulator serves (405 here); these cases are read-back evidence of queue settings. The recorded getTask cases are compared, with only httpRequest.url covered by KD-LOCAL-URL.",
   },
   {
     id: "KD-PLATFORM-HEADERS",

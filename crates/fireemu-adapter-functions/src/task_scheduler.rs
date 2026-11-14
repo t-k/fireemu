@@ -494,8 +494,10 @@ impl TaskScheduler {
 
     /// Releases the names whose tombstone has run out.
     fn expire_names(&mut self, now: TaskTime) {
-        let NameReuse::Window(window) = self.name_reuse else {
-            return;
+        let window = match self.name_reuse {
+            NameReuse::Window(window) => window,
+            NameReuse::Immediate => Duration::from_secs(3600),
+            NameReuse::Retained => return,
         };
         while let Some((_, _, finished)) = self.completed_names.front() {
             if now.saturating_duration_since(*finished) < window {
@@ -507,8 +509,10 @@ impl TaskScheduler {
             let bytes = name.len().saturating_add(queue.len());
             self.completed_history_bytes = self.completed_history_bytes.saturating_sub(bytes);
             self.retained_bytes = self.retained_bytes.saturating_sub(bytes);
-            if let Some(state) = self.queues.get_mut(&queue) {
-                state.names.remove(name.as_ref());
+            if self.name_reuse != NameReuse::Immediate {
+                if let Some(state) = self.queues.get_mut(&queue) {
+                    state.names.remove(name.as_ref());
+                }
             }
         }
     }
@@ -568,15 +572,11 @@ impl TaskScheduler {
     /// A task is gone: free what it held, and keep its name according to the reuse rule.
     fn release_name(&mut self, queue: &str, name: Arc<str>, retained: usize, now: TaskTime) {
         let history_bytes = name.len().saturating_add(queue.len());
-        match self.name_reuse {
-            NameReuse::Immediate => {
-                self.retained_bytes = self.retained_bytes.saturating_sub(retained);
-                if let Some(state) = self.queues.get_mut(queue) {
-                    state.names.remove(name.as_ref());
-                }
-                return;
+        if self.name_reuse == NameReuse::Immediate {
+            // Keep bounded lookup history without reserving the name against another create.
+            if let Some(state) = self.queues.get_mut(queue) {
+                state.names.remove(name.as_ref());
             }
-            NameReuse::Retained | NameReuse::Window(_) => {}
         }
         self.retained_bytes = self
             .retained_bytes
@@ -594,8 +594,10 @@ impl TaskScheduler {
             self.completed_history_bytes =
                 self.completed_history_bytes.saturating_sub(expired_bytes);
             self.retained_bytes = self.retained_bytes.saturating_sub(expired_bytes);
-            if let Some(expired_state) = self.queues.get_mut(&expired_queue) {
-                expired_state.names.remove(expired_name.as_ref());
+            if self.name_reuse != NameReuse::Immediate {
+                if let Some(expired_state) = self.queues.get_mut(&expired_queue) {
+                    expired_state.names.remove(expired_name.as_ref());
+                }
             }
         }
     }
@@ -803,8 +805,14 @@ impl TaskScheduler {
     }
 
     /// Returns a task while it is pending, dispatching, or waiting for retry.
-    pub(crate) fn get_task(&self, queue: &str, name: &str) -> Option<TaskObservation> {
-        let state = self.queues.get(queue)?;
+    pub(crate) fn get_task(
+        &mut self,
+        queue: &str,
+        name: &str,
+        now: impl Into<TaskTime>,
+    ) -> Result<TaskObservation, NameState> {
+        self.expire_names(now.into());
+        let state = self.queues.get(queue).ok_or(NameState::Free)?;
         state
             .pending
             .iter()
@@ -830,6 +838,17 @@ impl TaskScheduler {
                         first_attempt: active.first_attempt.clone(),
                         last_attempt: active.last_attempt.clone(),
                     })
+            })
+            .ok_or_else(|| {
+                if self
+                    .completed_names
+                    .iter()
+                    .any(|(q, n, _)| q == queue && n.as_ref() == name)
+                {
+                    NameState::Finished
+                } else {
+                    NameState::Free
+                }
             })
     }
 
@@ -2992,7 +3011,63 @@ mod tests {
             .unwrap();
         assert!(immediate.delete_pending("queue", |name| name == "p", start));
         assert_eq!(immediate.name_state("queue", "p", start), NameState::Free);
-        assert_eq!(immediate.retained_bytes, 0);
+        assert_eq!(immediate.retained_bytes, "queue".len() + "p".len());
+    }
+
+    #[test]
+    fn recent_lookup_history_expires_without_removing_a_reused_live_name() {
+        use crate::tasks_production::NameReuse;
+        let start = Instant::now();
+        for reuse in [
+            NameReuse::Immediate,
+            NameReuse::Window(Duration::from_secs(3600)),
+        ] {
+            let mut scheduler = scheduler_with_reuse(reuse, start);
+            assert_eq!(
+                scheduler.get_task("queue", "p", start).unwrap_err(),
+                NameState::Free
+            );
+            scheduler
+                .enqueue_at("queue", task("p"), TaskRetryConfig::default(), 8, start)
+                .unwrap();
+            assert!(scheduler.delete_pending("queue", |name| name == "p", start));
+            let before = (start + Duration::from_secs(3600))
+                .checked_sub(Duration::from_nanos(1))
+                .unwrap();
+            assert_eq!(
+                scheduler.get_task("queue", "p", before).unwrap_err(),
+                NameState::Finished
+            );
+            if reuse == NameReuse::Immediate {
+                scheduler
+                    .enqueue_at("queue", task("p"), TaskRetryConfig::default(), 8, before)
+                    .unwrap();
+            }
+            let expired = start + Duration::from_secs(3600);
+            if reuse == NameReuse::Immediate {
+                assert!(scheduler.get_task("queue", "p", expired).is_ok());
+                assert_eq!(scheduler.name_state("queue", "p", expired), NameState::Live);
+                assert_eq!(scheduler.retained_bytes, 8);
+                assert_eq!(
+                    scheduler.enqueue_at(
+                        "queue",
+                        task("p"),
+                        TaskRetryConfig::default(),
+                        8,
+                        expired
+                    ),
+                    Err(AdmissionError::Duplicate)
+                );
+            } else {
+                assert_eq!(
+                    scheduler.get_task("queue", "p", expired).unwrap_err(),
+                    NameState::Free
+                );
+                assert_eq!(scheduler.retained_bytes, 0);
+            }
+            assert!(scheduler.completed_names.is_empty());
+            assert_eq!(scheduler.completed_history_bytes, 0);
+        }
     }
 
     #[test]

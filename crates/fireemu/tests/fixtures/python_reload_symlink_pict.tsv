@@ -1,0 +1,17 @@
+LinkKind	TargetLocation	LinkSpelling	Operation	MutationPhase
+Directory	External	Relative	Snapshot	AddEmptyDirectoryDuringCapture
+Directory	External	Relative	Snapshot	Static
+Directory	External	Relative	Scan	TargetEditDuringCapture
+File	External	Absolute	Snapshot	RetargetDuringCapture
+Cycle	Internal	Relative	Scan	Static
+Fifo	External	Absolute	Snapshot	ReplaceWithFifo
+Dangling	Internal	Absolute	Scan	Static
+Directory	Internal	Absolute	Snapshot	AddEmptyDirectoryDuringCapture
+Cycle	Internal	Relative	Snapshot	Static
+File	Internal	Relative	Scan	TargetEditDuringCapture
+Fifo	Internal	Relative	Scan	Static
+Directory	Internal	Relative	Scan	RetargetDuringCapture
+Directory	External	Absolute	Snapshot	TargetEditDuringCapture
+Fifo	Internal	Relative	Scan	ReplaceWithFifo
+Dangling	External	Relative	Snapshot	Static
+File	Internal	Absolute	Snapshot	Static

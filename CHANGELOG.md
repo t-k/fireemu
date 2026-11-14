@@ -12,6 +12,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 - Hosting supports multiple firebase.json sites, including .firebaserc deploy targets, with separate local listeners and content roots. Startup and Hub discovery expose the additional endpoints.
 - Cloud Tasks in the strict profile supports getTask with BASIC and FULL response views, including pending and active tasks, and accepts non-JSON request bodies without changing their bytes. Pending answers omit zero counters and recent completion/deletion returns the recorded 404 message. Immediate name reuse remains available while bounded lookup history distinguishes recently used names from unknown ones. FULL, active/retry, invalid-view and unknown-name GET behavior is not recorded. The emulator profile retains its existing behavior.
+- Python Functions source changes reload through a fresh runner while retaining the codebase virtual environment. Invalid candidates keep the last working generation; Python bytecode caches do not trigger reloads. Ordinary source symlinks to files or directories are watched and materialized in each snapshot, including targets outside the source directory; cyclic, dangling and special-file targets are refused.
 
 ## [0.51.0] - 2026-11-14
 

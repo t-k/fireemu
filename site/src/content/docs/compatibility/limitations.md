@@ -51,7 +51,7 @@ See [Realtime Database](../../products/realtime-database/#differences-from-the-o
 - Triggers for products Fireemu does not deliver events for, such as Data Connect (deferred). Remote Config handlers run only through the local injection action, and its production event shape is unobserved.
 - Dart codebases, and protobuf CloudEvents ingress other than Firestore events. Firestore events reach the Python SDK as protobuf, and Node 2nd-gen functions as protobuf under `strict`.
 - The exact shape of Storage archive events remains unrecorded.
-- Python codebases serve HTTP, callable, Firestore, Pub/Sub, Storage, Eventarc, Realtime Database, scheduled, task-queue and Auth blocking functions. They see real time only (no virtual clock), do not reload source changes (Node source changes reload automatically), and run on macOS and Linux only. Their callables' App Check tokens are verified by the Python SDK against the App Check emulator's keys (no limited-use consumption, and an explicit App Check configuration refuses to start). See [Cloud Functions (Python)](../../products/functions-python/).
+- Python codebases serve HTTP, callable, Firestore, Pub/Sub, Storage, Eventarc, Realtime Database, scheduled, task-queue and Auth blocking functions. They see real time only (no virtual clock), reload application source changes while ignoring edits to their `venv` and Python bytecode caches, and run on macOS and Linux only. Restart Fireemu after changing installed dependencies. Their callables' App Check tokens are verified by the Python SDK against the App Check emulator's keys (no limited-use consumption, and an explicit App Check configuration refuses to start). See [Cloud Functions (Python)](../../products/functions-python/).
 
 ### Cloud Pub/Sub
 

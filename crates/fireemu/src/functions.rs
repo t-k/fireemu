@@ -316,6 +316,15 @@ async fn inspector_endpoint_is_active(port: u16) -> bool {
     )
 }
 
+fn is_python_cache_path(relative: &Path) -> bool {
+    relative
+        .components()
+        .any(|part| part.as_os_str() == "__pycache__")
+        || relative
+            .extension()
+            .is_some_and(|extension| matches!(extension.to_str(), Some("pyc" | "pyo")))
+}
+
 fn ignored_reload_path(relative: &Path, configured: &[String]) -> bool {
     let text = relative.to_string_lossy().replace('\\', "/");
     if relative
@@ -558,6 +567,15 @@ fn hash_source_stamp_metadata(
     hash
 }
 
+fn hash_source_stamp_typed_path(hash: u64, relative: &Path, tag: u8) -> u64 {
+    relative
+        .to_string_lossy()
+        .bytes()
+        .chain([0, tag])
+        .fold(hash, update_watch_hash)
+}
+
+#[cfg(test)]
 fn hash_source_file(
     child: &Path,
     relative: &Path,
@@ -565,6 +583,23 @@ fn hash_source_file(
     stamp: &mut FunctionsSourceStamp,
     charge: &mut dyn FnMut(u64, u64) -> Result<(), String>,
     cancelled: &AtomicBool,
+) -> Result<(), String> {
+    let (mut file, _) = open_source_regular_file(child, "watch")?;
+    hash_open_source_file(
+        child, relative, &mut file, version, stamp, charge, cancelled, false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)] // Keep the shared streaming inputs explicit.
+fn hash_open_source_file(
+    child: &Path,
+    relative: &Path,
+    file: &mut std::fs::File,
+    version: FunctionsSourceFileVersion,
+    stamp: &mut FunctionsSourceStamp,
+    charge: &mut dyn FnMut(u64, u64) -> Result<(), String>,
+    cancelled: &AtomicBool,
+    python_signature_tags: bool,
 ) -> Result<(), String> {
     stamp.change_guard = hash_source_stamp_metadata(
         stamp.change_guard,
@@ -574,14 +609,17 @@ fn hash_source_file(
         version.changed_seconds,
         version.changed_nanos,
     );
-    for byte in relative.to_string_lossy().bytes().chain([0]) {
-        stamp.content_signature = update_watch_hash(stamp.content_signature, byte);
+    if python_signature_tags {
+        stamp.content_signature =
+            hash_source_stamp_typed_path(stamp.content_signature, relative, b'F');
+    } else {
+        for byte in relative.to_string_lossy().bytes().chain([0]) {
+            stamp.content_signature = update_watch_hash(stamp.content_signature, byte);
+        }
     }
-    let mut file = std::fs::File::open(child)
-        .map_err(|error| format!("watch {}: {error}", child.display()))?;
     let mut read_bytes = 0_u64;
     stream_source_chunks(
-        &mut file,
+        file,
         |bytes| {
             for byte in bytes {
                 stamp.change_guard = update_watch_hash(stamp.change_guard, *byte);
@@ -602,6 +640,70 @@ fn hash_source_file(
     stamp.tracked_files = stamp.tracked_files.saturating_add(1);
     stamp.tracked_bytes = stamp.tracked_bytes.saturating_add(version.len);
     Ok(())
+}
+
+fn open_source_regular_file(
+    path: &Path,
+    operation: &str,
+) -> Result<(std::fs::File, std::fs::Metadata), String> {
+    open_source_regular_file_after(path, operation, || Ok(()))
+}
+
+fn open_source_regular_file_after(
+    path: &Path,
+    operation: &str,
+    before_open: impl FnOnce() -> Result<(), String>,
+) -> Result<(std::fs::File, std::fs::Metadata), String> {
+    before_open()?;
+    #[cfg(unix)]
+    let file = {
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        let mut options = std::fs::OpenOptions::new();
+        options
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+        options
+            .open(path)
+            .map_err(|error| format!("{operation} {}: {error}", path.display()))?
+    };
+    #[cfg(not(unix))]
+    let file = std::fs::File::open(path)
+        .map_err(|error| format!("{operation} {}: {error}", path.display()))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("{operation} {}: {error}", path.display()))?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "{operation} {}: source target is not a regular file",
+            path.display()
+        ));
+    }
+    Ok((file, metadata))
+}
+
+fn resolve_source_entry(
+    path: &Path,
+    is_symlink: bool,
+    follow_symlinks: bool,
+    operation: &str,
+) -> Result<PathBuf, String> {
+    if is_symlink && !follow_symlinks {
+        return Err(format!(
+            "{operation} {}: symbolic links outside node_modules are not supported",
+            path.display()
+        ));
+    }
+    if is_symlink {
+        path.canonicalize().map_err(|error| {
+            format!(
+                "{operation} {}: cannot resolve source link: {error}",
+                path.display()
+            )
+        })
+    } else {
+        Ok(path.to_path_buf())
+    }
 }
 
 #[cfg(test)]
@@ -625,12 +727,15 @@ fn functions_source_stamp_with_file_version(
 }
 
 struct FunctionsSourceTraversal<'a> {
-    root: &'a Path,
     ignores: &'a [String],
     entry_budget: FunctionsSourceEntryBudget,
     byte_budget: FunctionsSourceByteBudget,
     charge: &'a mut dyn FnMut(u64, u64) -> Result<(), String>,
     cancelled: &'a AtomicBool,
+    exclude_python_cache_artifacts: bool,
+    exclude_python_venv: bool,
+    follow_source_symlinks: bool,
+    active_directories: Vec<PathBuf>,
 }
 
 impl FunctionsSourceTraversal<'_> {
@@ -658,53 +763,89 @@ impl FunctionsSourceTraversal<'_> {
     fn scan_directory(
         &mut self,
         directory: &Path,
+        relative_directory: &Path,
         stamp: &mut FunctionsSourceStamp,
         depth: usize,
         file_version: &dyn Fn(&std::fs::Metadata) -> FunctionsSourceFileVersion,
     ) -> Result<(), String> {
-        for entry in self.entries(directory, "watch", depth)? {
-            ensure_source_work_active(self.cancelled)?;
-            let child = entry.path();
-            let relative = child.strip_prefix(self.root).unwrap_or(&child);
-            if ignored_reload_path(relative, self.ignores) {
-                continue;
-            }
-            let kind = entry
-                .file_type()
-                .map_err(|error| format!("watch {}: {error}", child.display()))?;
-            if kind.is_dir() {
-                self.scan_directory(&child, stamp, depth.saturating_add(1), file_version)?;
-            } else if kind.is_file() {
-                self.hash_file(&entry, &child, relative, stamp, file_version)?;
-            } else if kind.is_symlink() {
-                return Err(format!(
-                    "watch {}: symbolic links outside node_modules are not supported",
-                    child.display()
-                ));
-            }
+        let identity = directory
+            .canonicalize()
+            .map_err(|error| format!("watch {}: {error}", directory.display()))?;
+        if self.active_directories.contains(&identity) {
+            return Err(format!(
+                "watch {}: source directory link creates a cycle",
+                relative_directory.display()
+            ));
         }
-        Ok(())
+        self.active_directories.push(identity);
+        let result = (|| {
+            for entry in self.entries(directory, "watch", depth)? {
+                ensure_source_work_active(self.cancelled)?;
+                let child = entry.path();
+                let relative = relative_directory.join(entry.file_name());
+                if ignored_reload_path(&relative, self.ignores)
+                    || (self.exclude_python_cache_artifacts && is_python_cache_path(&relative))
+                {
+                    continue;
+                }
+                let kind = entry
+                    .file_type()
+                    .map_err(|error| format!("watch {}: {error}", child.display()))?;
+                let resolved = resolve_source_entry(
+                    &child,
+                    kind.is_symlink(),
+                    self.follow_source_symlinks,
+                    "watch",
+                )?;
+                let metadata = std::fs::metadata(&resolved)
+                    .map_err(|error| format!("watch {}: {error}", child.display()))?;
+                if metadata.is_dir() {
+                    if self.follow_source_symlinks {
+                        stamp.content_signature =
+                            hash_source_stamp_typed_path(stamp.content_signature, &relative, b'D');
+                        stamp.change_guard =
+                            hash_source_stamp_typed_path(stamp.change_guard, &relative, b'D');
+                    }
+                    self.scan_directory(
+                        &resolved,
+                        &relative,
+                        stamp,
+                        depth.saturating_add(1),
+                        file_version,
+                    )?;
+                } else if metadata.is_file() {
+                    self.hash_file(&resolved, &relative, stamp, file_version)?;
+                } else if self.follow_source_symlinks {
+                    return Err(format!(
+                        "watch {}: source target is neither a regular file nor a directory",
+                        child.display()
+                    ));
+                }
+            }
+            Ok(())
+        })();
+        self.active_directories.pop();
+        result
     }
 
     fn hash_file(
         &mut self,
-        entry: &std::fs::DirEntry,
         child: &Path,
         relative: &Path,
         stamp: &mut FunctionsSourceStamp,
         file_version: &dyn Fn(&std::fs::Metadata) -> FunctionsSourceFileVersion,
     ) -> Result<(), String> {
-        let metadata = entry
-            .metadata()
-            .map_err(|error| format!("watch {}: {error}", child.display()))?;
+        let (mut file, metadata) = open_source_regular_file(child, "watch")?;
         self.byte_budget.claim(child, metadata.len())?;
-        hash_source_file(
+        hash_open_source_file(
             child,
             relative,
+            &mut file,
             file_version(&metadata),
             stamp,
             self.charge,
             self.cancelled,
+            self.follow_source_symlinks,
         )
     }
 
@@ -712,34 +853,69 @@ impl FunctionsSourceTraversal<'_> {
         &mut self,
         source: &Path,
         destination: &Path,
+        relative_directory: &Path,
         depth: usize,
     ) -> Result<(), String> {
-        for entry in self.entries(source, "snapshot", depth)? {
-            ensure_source_work_active(self.cancelled)?;
-            let path = entry.path();
-            let relative = path.strip_prefix(self.root).unwrap_or(&path);
-            // Watcher/deploy ignores must not remove files required by the runtime.
-            if ignored_reload_path(relative, &[]) {
-                continue;
-            }
-            let kind = entry
-                .file_type()
-                .map_err(|error| format!("snapshot {}: {error}", path.display()))?;
-            let target = destination.join(relative);
-            if kind.is_dir() {
-                std::fs::create_dir_all(&target)
-                    .map_err(|error| format!("snapshot {}: {error}", target.display()))?;
-                self.copy_directory(&path, destination, depth.saturating_add(1))?;
-            } else if kind.is_file() {
-                self.copy_file(&path, &target)?;
-            } else if kind.is_symlink() {
-                return Err(format!(
-                    "snapshot {}: symbolic links outside node_modules are not supported",
-                    path.display()
-                ));
-            }
+        let identity = source
+            .canonicalize()
+            .map_err(|error| format!("snapshot {}: {error}", source.display()))?;
+        if self.active_directories.contains(&identity) {
+            return Err(format!(
+                "snapshot {}: source directory link creates a cycle",
+                relative_directory.display()
+            ));
         }
-        Ok(())
+        self.active_directories.push(identity);
+        let result = (|| {
+            for entry in self.entries(source, "snapshot", depth)? {
+                ensure_source_work_active(self.cancelled)?;
+                let path = entry.path();
+                let relative = relative_directory.join(entry.file_name());
+                // Watcher/deploy ignores must not remove files required by the runtime.
+                if ignored_reload_path(&relative, &[])
+                    || (self.exclude_python_venv
+                        && relative
+                            .components()
+                            .next()
+                            .is_some_and(|component| component.as_os_str() == "venv"))
+                    || (self.exclude_python_cache_artifacts && is_python_cache_path(&relative))
+                {
+                    continue;
+                }
+                let kind = entry
+                    .file_type()
+                    .map_err(|error| format!("snapshot {}: {error}", path.display()))?;
+                let resolved = resolve_source_entry(
+                    &path,
+                    kind.is_symlink(),
+                    self.follow_source_symlinks,
+                    "snapshot",
+                )?;
+                let metadata = std::fs::metadata(&resolved)
+                    .map_err(|error| format!("snapshot {}: {error}", path.display()))?;
+                let target = destination.join(&relative);
+                if metadata.is_dir() {
+                    std::fs::create_dir_all(&target)
+                        .map_err(|error| format!("snapshot {}: {error}", target.display()))?;
+                    self.copy_directory(
+                        &resolved,
+                        destination,
+                        &relative,
+                        depth.saturating_add(1),
+                    )?;
+                } else if metadata.is_file() {
+                    self.copy_file(&resolved, &target)?;
+                } else if self.follow_source_symlinks {
+                    return Err(format!(
+                        "snapshot {}: source target is neither a regular file nor a directory",
+                        path.display()
+                    ));
+                }
+            }
+            Ok(())
+        })();
+        self.active_directories.pop();
+        result
     }
 
     fn copy_file(&mut self, source: &Path, target: &Path) -> Result<(), String> {
@@ -747,12 +923,8 @@ impl FunctionsSourceTraversal<'_> {
             std::fs::create_dir_all(parent)
                 .map_err(|error| format!("snapshot {}: {error}", parent.display()))?;
         }
-        let mut source_file = std::fs::File::open(source)
-            .map_err(|error| format!("snapshot {}: {error}", source.display()))?;
-        let expected_len = source_file
-            .metadata()
-            .map_err(|error| format!("snapshot {}: {error}", source.display()))?
-            .len();
+        let (mut source_file, metadata) = open_source_regular_file(source, "snapshot")?;
+        let expected_len = metadata.len();
         self.byte_budget.claim(source, expected_len)?;
         let mut target_file = std::fs::File::create(target)
             .map_err(|error| format!("snapshot {}: {error}", target.display()))?;
@@ -791,9 +963,43 @@ fn functions_source_stamp_with_charge(
     )
 }
 
+fn functions_source_stamp_with_python_cache_excluded(
+    root: &Path,
+    ignores: &[String],
+    charge: &mut dyn FnMut(u64, u64) -> Result<(), String>,
+    cancelled: &AtomicBool,
+) -> Result<FunctionsSourceStamp, String> {
+    functions_source_stamp_with_charge_and_file_version_and_python_cache(
+        root,
+        ignores,
+        true,
+        charge,
+        cancelled,
+        &functions_source_file_version,
+    )
+}
+
 fn functions_source_stamp_with_charge_and_file_version(
     root: &Path,
     ignores: &[String],
+    charge: &mut dyn FnMut(u64, u64) -> Result<(), String>,
+    cancelled: &AtomicBool,
+    file_version: &dyn Fn(&std::fs::Metadata) -> FunctionsSourceFileVersion,
+) -> Result<FunctionsSourceStamp, String> {
+    functions_source_stamp_with_charge_and_file_version_and_python_cache(
+        root,
+        ignores,
+        false,
+        charge,
+        cancelled,
+        file_version,
+    )
+}
+
+fn functions_source_stamp_with_charge_and_file_version_and_python_cache(
+    root: &Path,
+    ignores: &[String],
+    exclude_python_cache_artifacts: bool,
     charge: &mut dyn FnMut(u64, u64) -> Result<(), String>,
     cancelled: &AtomicBool,
     file_version: &dyn Fn(&std::fs::Metadata) -> FunctionsSourceFileVersion,
@@ -806,14 +1012,17 @@ fn functions_source_stamp_with_charge_and_file_version(
     };
     charge(1, 0)?;
     FunctionsSourceTraversal {
-        root,
         ignores,
         entry_budget: FunctionsSourceEntryBudget::default(),
         byte_budget: FunctionsSourceByteBudget::default(),
         charge,
         cancelled,
+        exclude_python_cache_artifacts,
+        exclude_python_venv: false,
+        follow_source_symlinks: exclude_python_cache_artifacts,
+        active_directories: Vec::new(),
     }
-    .scan_directory(root, &mut stamp, 0, file_version)?;
+    .scan_directory(root, Path::new(""), &mut stamp, 0, file_version)?;
     Ok(stamp)
 }
 
@@ -863,7 +1072,17 @@ impl FunctionsSourceScanBudget {
         }
     }
 
+    #[cfg(test)]
     async fn scan(&self, root: &Path, ignores: &[String]) -> Result<FunctionsSourceStamp, String> {
+        self.scan_with_python_cache(root, ignores, false).await
+    }
+
+    async fn scan_with_python_cache(
+        &self,
+        root: &Path,
+        ignores: &[String],
+        python_runtime: bool,
+    ) -> Result<FunctionsSourceStamp, String> {
         let permit = Arc::clone(&self.gate)
             .acquire_owned()
             .await
@@ -875,12 +1094,17 @@ impl FunctionsSourceScanBudget {
         let result = tokio::task::spawn_blocking(move || {
             let _permit = permit;
             let mut pacer = BlockingSourceWorkPacer::new();
-            functions_source_stamp_with_charge(
-                &root,
-                &ignores,
-                &mut |entries, bytes| pacer.charge(entries, bytes, &cancelled),
-                &cancelled,
-            )
+            let mut charge = |entries, bytes| pacer.charge(entries, bytes, &cancelled);
+            if python_runtime {
+                functions_source_stamp_with_python_cache_excluded(
+                    &root,
+                    &ignores,
+                    &mut charge,
+                    &cancelled,
+                )
+            } else {
+                functions_source_stamp_with_charge(&root, &ignores, &mut charge, &cancelled)
+            }
         })
         .await
         .map_err(|error| format!("watch worker failed: {error}"))?;
@@ -888,10 +1112,22 @@ impl FunctionsSourceScanBudget {
         result
     }
 
+    #[cfg(test)]
     async fn snapshot(
         &self,
         root: &Path,
         ignores: &[String],
+        link_python_venv: bool,
+    ) -> Result<FunctionsSourceSnapshot, String> {
+        self.snapshot_with_venv(root, ignores, link_python_venv)
+            .await
+    }
+
+    async fn snapshot_with_venv(
+        &self,
+        root: &Path,
+        ignores: &[String],
+        link_python_venv: bool,
     ) -> Result<FunctionsSourceSnapshot, String> {
         let permit = Arc::clone(&self.gate)
             .acquire_owned()
@@ -904,9 +1140,10 @@ impl FunctionsSourceScanBudget {
         let result = tokio::task::spawn_blocking(move || {
             let _permit = permit;
             let mut pacer = BlockingSourceWorkPacer::new();
-            snapshot_functions_source_with_charge(
+            snapshot_functions_source_with_charge_and_venv(
                 &root,
                 &ignores,
+                link_python_venv,
                 &mut |entries, bytes| pacer.charge(entries, bytes, &cancelled),
                 &cancelled,
             )
@@ -1114,21 +1351,48 @@ fn snapshot_functions_source(
     )
 }
 
+#[cfg(all(test, unix))]
+fn snapshot_functions_source_with_linked_venv(
+    root: &Path,
+    ignores: &[String],
+) -> Result<FunctionsSourceSnapshot, String> {
+    snapshot_functions_source_with_charge_and_venv(
+        root,
+        ignores,
+        true,
+        &mut |_, _| Ok(()),
+        &AtomicBool::new(false),
+    )
+}
+
+#[cfg(test)]
 fn snapshot_functions_source_with_charge(
     root: &Path,
     ignores: &[String],
     charge: &mut dyn FnMut(u64, u64) -> Result<(), String>,
     cancelled: &AtomicBool,
 ) -> Result<FunctionsSourceSnapshot, String> {
-    snapshot_functions_source_with_charge_at(
+    snapshot_functions_source_with_charge_and_venv(root, ignores, false, charge, cancelled)
+}
+
+fn snapshot_functions_source_with_charge_and_venv(
+    root: &Path,
+    ignores: &[String],
+    link_python_venv: bool,
+    charge: &mut dyn FnMut(u64, u64) -> Result<(), String>,
+    cancelled: &AtomicBool,
+) -> Result<FunctionsSourceSnapshot, String> {
+    snapshot_functions_source_with_charge_at_and_venv(
         root,
         ignores,
+        link_python_venv,
         charge,
         cancelled,
         &std::env::temp_dir(),
     )
 }
 
+#[cfg(all(test, windows))]
 fn snapshot_functions_source_with_charge_at(
     root: &Path,
     ignores: &[String],
@@ -1136,9 +1400,28 @@ fn snapshot_functions_source_with_charge_at(
     cancelled: &AtomicBool,
     snapshot_root: &Path,
 ) -> Result<FunctionsSourceSnapshot, String> {
-    snapshot_functions_source_with_charge_at_and_acl_check(
+    snapshot_functions_source_with_charge_at_and_venv(
         root,
         ignores,
+        false,
+        charge,
+        cancelled,
+        snapshot_root,
+    )
+}
+
+fn snapshot_functions_source_with_charge_at_and_venv(
+    root: &Path,
+    ignores: &[String],
+    link_python_venv: bool,
+    charge: &mut dyn FnMut(u64, u64) -> Result<(), String>,
+    cancelled: &AtomicBool,
+    snapshot_root: &Path,
+) -> Result<FunctionsSourceSnapshot, String> {
+    snapshot_functions_source_with_charge_at_and_acl_check_and_venv(
+        root,
+        ignores,
+        link_python_venv,
         charge,
         cancelled,
         snapshot_root,
@@ -1147,6 +1430,7 @@ fn snapshot_functions_source_with_charge_at(
 }
 
 #[allow(clippy::too_many_lines)] // Keep atomic Windows DACL creation with snapshot setup.
+#[cfg(all(test, windows))]
 fn snapshot_functions_source_with_charge_at_and_acl_check<F>(
     root: &Path,
     ignores: &[String],
@@ -1158,13 +1442,46 @@ fn snapshot_functions_source_with_charge_at_and_acl_check<F>(
 where
     F: FnOnce(&Path) -> Result<(), String>,
 {
+    snapshot_functions_source_with_charge_at_and_acl_check_and_venv(
+        root,
+        ignores,
+        false,
+        charge,
+        cancelled,
+        snapshot_root,
+        acl_check,
+    )
+}
+
+#[allow(clippy::too_many_lines)] // Keep the snapshot's atomic copy and consistency checks together.
+fn snapshot_functions_source_with_charge_at_and_acl_check_and_venv<F>(
+    root: &Path,
+    ignores: &[String],
+    link_python_venv: bool,
+    charge: &mut dyn FnMut(u64, u64) -> Result<(), String>,
+    cancelled: &AtomicBool,
+    snapshot_root: &Path,
+    acl_check: F,
+) -> Result<FunctionsSourceSnapshot, String>
+where
+    F: FnOnce(&Path) -> Result<(), String>,
+{
     static NEXT_SNAPSHOT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let source_root = std::fs::canonicalize(root)
         .map_err(|error| format!("snapshot {}: {error}", root.display()))?;
-    // Deployment/watch ignores do not define the runtime generation. Validate every
-    // copied input, including local dotenv and secret files, under the same I/O budget.
-    let before =
-        functions_source_stamp_with_charge(&source_root, &[], charge, cancelled)?.content_signature;
+    // The linked Python venv is the only runtime input excluded from the consistency signature.
+    let runtime_excludes = if link_python_venv {
+        vec!["venv".to_owned()]
+    } else {
+        Vec::new()
+    };
+    let before = functions_source_runtime_signature(
+        &source_root,
+        &runtime_excludes,
+        link_python_venv,
+        charge,
+        cancelled,
+    )?;
     let sequence = NEXT_SNAPSHOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     #[cfg(unix)]
     let name = snapshot_directory_name(std::process::id(), sequence);
@@ -1250,14 +1567,17 @@ exit 0
     std::fs::create_dir_all(&source_path)
         .map_err(|error| format!("snapshot {}: {error}", source_path.display()))?;
     FunctionsSourceTraversal {
-        root: &source_root,
         ignores,
         entry_budget: FunctionsSourceEntryBudget::default(),
         byte_budget: FunctionsSourceByteBudget::default(),
         charge,
         cancelled,
+        exclude_python_cache_artifacts: link_python_venv,
+        exclude_python_venv: link_python_venv,
+        follow_source_symlinks: link_python_venv,
+        active_directories: Vec::new(),
     }
-    .copy_directory(&source_root, &source_path, 0)
+    .copy_directory(&source_root, &source_path, Path::new(""), 0)
     .and_then(|()| {
         for (level, dependencies) in dependencies {
             let ancestor = source_path
@@ -1266,18 +1586,49 @@ exit 0
                 .expect("the snapshot mirrors each dependency ancestor");
             link_dependency_directory(&dependencies, &ancestor.join("node_modules"))?;
         }
+        if link_python_venv {
+            let venv = source_root.join("venv");
+            if venv.is_dir() {
+                link_dependency_directory(&venv, &source_path.join("venv"))?;
+            }
+        }
         Ok(())
     })?;
-    let copied =
-        functions_source_stamp_with_charge(&source_path, &[], charge, cancelled)?.content_signature;
-    let after =
-        functions_source_stamp_with_charge(&source_root, &[], charge, cancelled)?.content_signature;
+    let copied = functions_source_runtime_signature(
+        &source_path,
+        &runtime_excludes,
+        link_python_venv,
+        charge,
+        cancelled,
+    )?;
+    let after = functions_source_runtime_signature(
+        &source_root,
+        &runtime_excludes,
+        link_python_venv,
+        charge,
+        cancelled,
+    )?;
     if before != copied || before != after {
         return Err(
             "Functions runtime inputs changed while capturing a reload snapshot".to_owned(),
         );
     }
     Ok(snapshot)
+}
+
+fn functions_source_runtime_signature(
+    root: &Path,
+    ignores: &[String],
+    exclude_python_cache: bool,
+    charge: &mut dyn FnMut(u64, u64) -> Result<(), String>,
+    cancelled: &AtomicBool,
+) -> Result<u64, String> {
+    let stamp = if exclude_python_cache {
+        functions_source_stamp_with_python_cache_excluded(root, ignores, charge, cancelled)?
+    } else {
+        functions_source_stamp_with_charge(root, ignores, charge, cancelled)?
+    };
+    Ok(stamp.content_signature)
 }
 
 #[cfg(unix)]
@@ -1576,11 +1927,22 @@ fn split_reload(
     codebases.into_iter().partition(reload_supervised)
 }
 
-/// Whether source changes of the codebase are watched and reloaded. The reload snapshot links
-/// `node_modules` only, so it would lack the interpreter of a Python codebase's `venv`: Python reload
-/// is a later slice.
-fn reload_supervised(codebase: &FunctionsCodebase) -> bool {
-    crate::python_functions::codebase_language(codebase) != RuntimeLanguage::Python
+/// Whether source changes of the codebase are watched and reloaded.
+fn reload_supervised(_codebase: &FunctionsCodebase) -> bool {
+    true
+}
+
+fn reload_ignore_patterns(codebase: &FunctionsCodebase) -> Vec<String> {
+    let mut ignores = codebase.ignore.clone();
+    if crate::python_functions::codebase_language(codebase) == RuntimeLanguage::Python
+        && !ignores.iter().any(|pattern| {
+            let pattern = pattern.trim_start_matches("./").trim_start_matches("**/");
+            pattern == "venv"
+        })
+    {
+        ignores.push("venv".to_owned());
+    }
+    ignores
 }
 
 fn start_reload_supervisors(
@@ -1671,7 +2033,13 @@ async fn changed_source_stamp(
     last_scan_error: &mut bool,
     retry_delay: &mut Duration,
 ) -> Option<FunctionsSourceStamp> {
-    let next_stamp = match scan_budget.scan(root, &codebase.ignore).await {
+    let ignores = reload_ignore_patterns(codebase);
+    let python_runtime =
+        crate::python_functions::codebase_language(codebase) == RuntimeLanguage::Python;
+    let next_stamp = match scan_budget
+        .scan_with_python_cache(root, &ignores, python_runtime)
+        .await
+    {
         Ok(stamp) => {
             *last_scan_error = false;
             *retry_delay = source_scan_retry_delay(*retry_delay, None);
@@ -1688,7 +2056,7 @@ async fn changed_source_stamp(
     }
     tokio::time::sleep(Duration::from_millis(250)).await;
     let stable_stamp = scan_budget
-        .scan(root, &codebase.ignore)
+        .scan_with_python_cache(root, &ignores, python_runtime)
         .await
         .unwrap_or(next_stamp);
     if stable_stamp != next_stamp {
@@ -1767,7 +2135,13 @@ async fn snapshot_consistent_reload_source(
     retry_delay: &mut Duration,
     last_snapshot_error: &mut bool,
 ) -> Option<FunctionsSourceSnapshot> {
-    let snapshot = match scan_budget.snapshot(root, &codebase.ignore).await {
+    let ignores = reload_ignore_patterns(codebase);
+    let python_runtime =
+        crate::python_functions::codebase_language(codebase) == RuntimeLanguage::Python;
+    let snapshot = match scan_budget
+        .snapshot_with_venv(root, &ignores, python_runtime)
+        .await
+    {
         Ok(snapshot) => {
             *last_snapshot_error = false;
             snapshot
@@ -1779,8 +2153,8 @@ async fn snapshot_consistent_reload_source(
         }
     };
     let (snapshot_stamp, current_stamp) = tokio::join!(
-        scan_budget.scan(&snapshot, &codebase.ignore),
-        scan_budget.scan(root, &codebase.ignore),
+        scan_budget.scan_with_python_cache(&snapshot, &ignores, python_runtime),
+        scan_budget.scan_with_python_cache(root, &ignores, python_runtime),
     );
     if snapshot_stamp.as_ref().map(|stamp| stamp.content_signature) != Ok(stable)
         || current_stamp.as_ref().map(|stamp| stamp.content_signature) != Ok(stable)
@@ -1844,7 +2218,11 @@ async fn supervise_codebase_reloads(
         else {
             continue;
         };
-        let _restart_guard = if let Some(port) = cfg.functions_inspect_port {
+        let fixed_inspector = cfg.functions_inspect_port.is_some()
+            && crate::python_functions::codebase_language(&codebase) != RuntimeLanguage::Python;
+        let _restart_guard = if let Some(port) =
+            cfg.functions_inspect_port.filter(|_| fixed_inspector)
+        {
             match prepare_fixed_inspector_reload(&runtime, &codebase.codebase, port).await {
                 Ok(guard) => Some(guard),
                 Err(reason) => {
@@ -1876,7 +2254,7 @@ async fn supervise_codebase_reloads(
                 }
                 report_reload_install(
                     runtime.reload_codebase_units(specs),
-                    cfg.functions_inspect_port.is_some(),
+                    fixed_inspector,
                     &codebase.codebase,
                     stable_stamp,
                     &mut observed_stamp,
@@ -1884,7 +2262,7 @@ async fn supervise_codebase_reloads(
                 );
             }
             Err(reason) => {
-                if cfg.functions_inspect_port.is_some() {
+                if fixed_inspector {
                     warn_reload_once(
                         &mut last_start_error,
                         &codebase.codebase,
@@ -3551,15 +3929,54 @@ pub async fn start(
         initial_stamps.insert(
             codebase.codebase.clone(),
             scan_budget
-                .scan(Path::new(&codebase.source), &codebase.ignore)
+                .scan_with_python_cache(
+                    Path::new(&codebase.source),
+                    &reload_ignore_patterns(codebase),
+                    crate::python_functions::codebase_language(codebase) == RuntimeLanguage::Python,
+                )
                 .await,
         );
     }
     #[cfg(unix)]
     drop(schedule_orphan_function_snapshot_sweep(std::env::temp_dir()));
+    let mut staged_codebases = codebases.clone();
+    let mut initial_snapshots = BTreeMap::new();
+    for codebase in &mut staged_codebases {
+        if crate::python_functions::codebase_language(codebase) != RuntimeLanguage::Python {
+            continue;
+        }
+        let stamp = initial_stamps
+            .get(&codebase.codebase)
+            .ok_or_else(|| {
+                format!(
+                    "functions[{}]: missing initial source scan",
+                    codebase.codebase
+                )
+            })?
+            .as_ref()
+            .map_err(Clone::clone)?;
+        let mut retry_delay = Duration::from_millis(750);
+        let snapshot = snapshot_consistent_reload_source(
+            Path::new(&codebase.source),
+            codebase,
+            &scan_budget,
+            stamp.content_signature,
+            &mut retry_delay,
+            &mut false,
+        )
+        .await
+        .ok_or_else(|| {
+            format!(
+                "functions[{}]: initial source snapshot failed or changed during capture",
+                codebase.codebase
+            )
+        })?;
+        codebase.source = snapshot.to_string_lossy().into_owned();
+        initial_snapshots.insert(codebase.codebase.clone(), snapshot);
+    }
     let starts = launch_codebases(
         cfg,
-        &codebases,
+        &staged_codebases,
         hosts,
         runner_secret,
         callable_trusted_protocol,
@@ -3577,11 +3994,16 @@ pub async fn start(
         }
         return Err(error.clone());
     }
-    let started: Vec<fireemu_adapter_functions::runtime::CodebaseSpec> = outcomes
+    let mut started: Vec<fireemu_adapter_functions::runtime::CodebaseSpec> = outcomes
         .into_iter()
         .filter_map(Result::ok)
         .flatten()
         .collect();
+    for spec in &mut started {
+        if let Some(snapshot) = initial_snapshots.get(&spec.name) {
+            spec.cleanup_dir = snapshot.cleanup_root.clone();
+        }
+    }
     let config = functions_config(cfg, hosts.functions.clone(), runner_secret);
     // A function name two codebases both export is fatal here. The runners it collided
     // between are killed rather than left behind a daemon that refuses to serve them.
@@ -3607,6 +4029,9 @@ pub async fn start(
             return Err(e);
         }
     };
+    for snapshot in initial_snapshots.into_values() {
+        let _ = snapshot.into_path();
+    }
     if let Some(verifier) = &hosts.admin_app_check {
         runtime.set_admin_app_check(verifier.clone());
     }
@@ -7697,6 +8122,13 @@ fn base64_encode(data: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    mod python_reload_tests {
+        include!("functions_python_reload_tests.rs");
+    }
+    #[cfg(unix)]
+    mod python_reload_symlink_tests {
+        include!("functions_python_symlink_tests.rs");
+    }
     use std::collections::{BTreeMap, BTreeSet};
     #[cfg(unix)]
     use std::ffi::OsString;
@@ -9771,12 +10203,15 @@ root	unchanged	small	firstGen";
         };
         let cancelled = AtomicBool::new(false);
         let mut traversal = FunctionsSourceTraversal {
-            root: &root,
             ignores: &[],
             entry_budget: FunctionsSourceEntryBudget::default(),
             byte_budget: FunctionsSourceByteBudget::default(),
             charge: &mut charge,
             cancelled: &cancelled,
+            exclude_python_cache_artifacts: false,
+            exclude_python_venv: false,
+            follow_source_symlinks: false,
+            active_directories: Vec::new(),
         };
 
         let error = traversal.copy_file(&source, &target).unwrap_err();
@@ -9960,7 +10395,7 @@ root	unchanged	small	firstGen";
         };
         let budget = Arc::new(FunctionsSourceScanBudget::new());
         let task_root = root.clone();
-        let task = tokio::spawn(async move { budget.snapshot(&task_root, &[]).await });
+        let task = tokio::spawn(async move { budget.snapshot(&task_root, &[], false).await });
         // Readiness is not a latency assertion. The copy starts only after the whole source
         // has been hashed, which takes the 2 s pacing delay when idle but has no upper bound
         // when the CPU is starved: there the hash alone outlasted a 60 s deadline and the test
@@ -12514,12 +12949,19 @@ exports.add = onCall({{}}, observe("add"));
 
     /// A scratch codebase source holding a `requirements.txt` and no `package.json`: a Python one.
     fn python_codebase(name: &str) -> (std::path::PathBuf, crate::config::FunctionsCodebase) {
-        let dir = std::env::temp_dir().join(format!(
-            "fireemu-python-start-{name}-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let dir = loop {
+            let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "fireemu-python-start-{name}-{}-{id}",
+                std::process::id()
+            ));
+            match std::fs::create_dir(&path) {
+                Ok(()) => break path,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => panic!("cannot create scratch directory: {error}"),
+            }
+        };
         std::fs::write(dir.join("requirements.txt"), "firebase-functions\n").unwrap();
         let codebase = crate::config::FunctionsCodebase {
             codebase: "py".to_owned(),
@@ -12626,15 +13068,15 @@ exports.add = onCall({{}}, observe("add"));
         };
         let (supervised, unsupervised) =
             super::split_reload(vec![python.clone(), node.clone(), python.clone()]);
-        assert_eq!(supervised, vec![node]);
-        assert_eq!(unsupervised, vec![python.clone(), python]);
+        assert_eq!(supervised, vec![python.clone(), node, python.clone()]);
+        assert!(unsupervised.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn python_reload_is_not_supervised_and_node_reload_is() {
+    fn python_and_node_reload_are_supervised() {
         let (dir, python) = python_codebase("reload");
-        assert!(!super::reload_supervised(&python));
+        assert!(super::reload_supervised(&python));
         std::fs::write(dir.join("package.json"), "{}").unwrap();
         assert!(
             super::reload_supervised(&python),
@@ -12645,7 +13087,7 @@ exports.add = onCall({{}}, observe("add"));
             ..python
         };
         assert!(
-            !super::reload_supervised(&declared),
+            super::reload_supervised(&declared),
             "a declared Python runtime wins over package.json"
         );
         let _ = std::fs::remove_dir_all(&dir);

@@ -8394,16 +8394,13 @@ async fn the_strict_server_sends_production_headers_on_framed_answers() {
         json_api.contains("access-control-allow-origin: http://localhost:5173"),
         "{json_api}"
     );
-    assert!(
-        json_api.contains("vary: origin\r\nvary: x-origin"),
-        "{json_api}"
-    );
+    assert!(json_api.contains("vary: origin, x-origin"), "{json_api}");
     assert!(!json_api.contains("x-content-type-options"), "{json_api}");
-    // With no bucket CORS entry, both dialects retain the base browser header exposure.
     assert!(
-        json_api.contains("access-control-expose-headers: content-type,x-firebase-storage-version"),
+        json_api.contains("access-control-expose-headers: cache-control, content-length, content-type, date, etag, expires, server, transfer-encoding, vary, x-guploader-uploadid, x-goog-gcs-base-ts, x-google-trace"),
         "{json_api}"
     );
+    // Firebase v0 retains its own CORS defaults independently of JSON API bucket settings.
     let firebase = get("/v0/b/demo-app.appspot.com/o/absent.bin").await;
     assert!(
         firebase.contains("access-control-allow-origin: http://localhost:5173"),
@@ -8433,14 +8430,19 @@ async fn the_strict_server_sends_production_headers_on_framed_answers() {
         !recorded_json.contains("access-control-"),
         "{recorded_json}"
     );
-    // The bucket listing has no bucket configuration and keeps the base framing.
+    // The JSON bucket listing has no object-specific expose list, so it uses the shared API defaults.
     let buckets = get("/b").await;
     assert!(
-        !buckets.contains("access-control-allow-credentials:"),
+        buckets.contains("access-control-allow-origin: http://localhost:5173"),
         "{buckets}"
     );
     assert!(
-        buckets.contains("access-control-expose-headers: content-type,x-firebase-storage-version"),
+        buckets.contains("access-control-allow-credentials: true"),
+        "{buckets}"
+    );
+    assert!(buckets.contains("vary: origin, x-origin"), "{buckets}");
+    assert!(
+        buckets.contains("access-control-expose-headers: content-type,x-firebase-storage-version,x-goog-upload-size-received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url"),
         "{buckets}"
     );
     server.abort();

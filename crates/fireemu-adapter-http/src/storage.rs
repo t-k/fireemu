@@ -7912,3 +7912,53 @@ mod end_user_read_tests {
         assert!(!is_end_user_read(true, false, true, Some("Firebase a.b.c")));
     }
 }
+
+#[cfg(test)]
+mod json_api_endpoint_tests {
+    use super::is_json_api_endpoint;
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+
+        #[test]
+        fn recognized_canonical_json_routes_stay_json_across_methods(
+            bucket in "[a-z][a-z0-9-]{0,10}",
+            object in "[a-z][a-z0-9_-]{0,10}",
+        ) {
+            let paths = [
+                format!("/storage/v1/b/{bucket}/o/{object}"),
+                format!("/storage/v1/b/{bucket}/o/{object}/acl"),
+                format!("/upload/storage/v1/b/{bucket}/o"),
+                format!("/download/storage/v1/b/{bucket}/o/{object}"),
+            ];
+            for method in ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"] {
+                for path in &paths {
+                    prop_assert!(is_json_api_endpoint(method, path), "{} {}", method, path);
+                }
+            }
+
+            let short_object = format!("/b/{bucket}/o/{object}");
+            prop_assert!(is_json_api_endpoint("GET", &short_object), "{}", short_object);
+            prop_assert!(!is_json_api_endpoint("PUT", "/b/foo"));
+        }
+
+        #[test]
+        fn canonical_looking_xml_paths_and_prefix_near_misses_stay_xml(
+            bucket in "[a-z][a-z0-9-]{0,10}",
+            object in "[a-z][a-z0-9_-]{0,10}",
+        ) {
+            let paths = [
+                format!("/storage/v1/{object}"),
+                format!("/upload/storage/v1/{object}"),
+                format!("/download/storage/v1/{object}"),
+                format!("/storage/v10/b/{bucket}/o/{object}"),
+            ];
+            for method in ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"] {
+                for path in &paths {
+                    prop_assert!(!is_json_api_endpoint(method, path), "{} {}", method, path);
+                }
+            }
+        }
+    }
+}

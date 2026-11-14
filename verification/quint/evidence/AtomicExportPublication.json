@@ -2008,11 +2008,11 @@
     },
     "crates/fireemu/src/functions_python_reload_tests.rs": {
       "kind": "sha256",
-      "value": "e3c38ff834d57c859a876c442908d5464775bd3f50b96dc3eb4f14f2dabf0f16"
+      "value": "a961ef4d379ac9dced72626eb4840f3792285a051c6beac30d0e6bcd95406b2a"
     },
     "crates/fireemu/src/functions_python_symlink_tests.rs": {
       "kind": "sha256",
-      "value": "ac462f963cdd17f228e48da6d74b5e0dfe0bba77fc6af10815ce5402792a8a3f"
+      "value": "97f34f9b063e5bde9c8c424f0b5f64be04a9426d27a11967401a03ceebd22c21"
     },
     "crates/fireemu/src/help.rs": {
       "kind": "sha256",

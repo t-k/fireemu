@@ -311,6 +311,9 @@ fn bucket_cors_for(
     if !state.is_strict() {
         return None;
     }
+    if crate::storage::is_json_api_namespace(path) {
+        return None;
+    }
     let (bucket, firebase, json_api) = crate::storage::cors_bucket(method, path)?;
     if json_api {
         return None;
@@ -780,7 +783,7 @@ async fn respond(
             ),
             ("vary".to_owned(), "Origin, X-Origin".to_owned()),
         ];
-        let exposed = if crate::storage::is_recorded_json_cors_shape(&request_method, &trace_path) {
+        let mut exposed = if crate::storage::is_recorded_json_cors_shape(&request_method, &trace_path) {
             match (media, request_method.as_str()) {
                 (true, _) => "Cache-Control, Content-Disposition, Content-Length, Content-Type, Date, ETag, Expires, Last-Modified, Pragma, Server, Transfer-Encoding, Vary, X-GUploader-UploadID, X-Goog-Gcs-Base-Ts, X-Goog-Generation, X-Goog-Hash, X-Goog-Metageneration, X-Google-Trace",
                 (_, "GET") => "Cache-Control, Content-Length, Content-Type, Date, ETag, Expires, Server, Transfer-Encoding, Vary, X-GUploader-UploadID, X-Goog-Gcs-Base-Ts, X-Google-Trace",
@@ -788,11 +791,21 @@ async fn respond(
             }
         } else {
             EXPOSED_HEADERS
-        };
-        json_headers.push((
-            "access-control-expose-headers".to_owned(),
-            exposed.to_owned(),
-        ));
+        }
+        .to_owned();
+        let resumable_json_upload = request_method == "POST"
+            && trace_path.starts_with("/upload/storage/v1/")
+            && crate::storage::query_params(&trace_query)
+                .get("uploadType")
+                .is_some_and(|kind| kind == "resumable");
+        if resumable_json_upload
+            && !exposed
+                .split(',')
+                .any(|header| header.trim().eq_ignore_ascii_case("location"))
+        {
+            exposed.push_str(", Location");
+        }
+        json_headers.push(("access-control-expose-headers".to_owned(), exposed));
         response_headers = with_bucket_cors(response_headers, Some(json_headers));
     }
     if let Some(configured) = &bucket_cors {

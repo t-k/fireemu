@@ -787,6 +787,128 @@ json omitted normal nonMatching false
     let _ = task.await;
 }
 
+#[tokio::test]
+async fn canonical_json_namespaces_keep_json_cors_for_methods_that_fall_back_to_xml() {
+    let s = state(TokenAcceptance::Verified);
+    seed(&s, "storage");
+    s.rules.set_bucket_cors(BTreeMap::from([(
+        "storage".to_owned(),
+        BucketCors::default(),
+    )]));
+    let (addr, task) = serve(s).await;
+    for (method, path) in [
+        ("HEAD", "/storage/v1/b/storage/o/a.txt"),
+        ("GET", "/storage/v1/b/storage/o/a.txt/acl"),
+    ] {
+        let bare = send(addr, method, path, &[]).await;
+        let browser = send(addr, method, path, &[("Origin", ORIGIN)]).await;
+        assert_eq!(browser.status, bare.status, "{method} {path}");
+        assert_eq!(browser.body, bare.body, "{method} {path}");
+        let without_cors = |answer: &Answer| {
+            let mut headers = answer.headers.clone();
+            headers.retain(|(name, _)| {
+                !name.to_ascii_lowercase().starts_with("access-control-")
+                    && !name.eq_ignore_ascii_case("vary")
+                    && !name.eq_ignore_ascii_case("date")
+            });
+            headers.sort();
+            headers
+        };
+        assert_eq!(
+            without_cors(&browser),
+            without_cors(&bare),
+            "{method} {path}"
+        );
+        assert_eq!(
+            browser.header("access-control-allow-origin"),
+            Some(ORIGIN),
+            "{method} {path}"
+        );
+        assert_eq!(
+            browser.header("access-control-allow-credentials"),
+            Some("true"),
+            "{method} {path}"
+        );
+    }
+
+    // A similar path outside the canonical version namespace and the ambiguous short XML form
+    // continue to use the XML bucket policy.
+    for (method, path) in [("GET", "/storage/v10/b/storage/o/a.txt"), ("PUT", "/b/foo")] {
+        let xml = send(addr, method, path, &[("Origin", ORIGIN)]).await;
+        assert_eq!(
+            xml.header("access-control-allow-credentials"),
+            None,
+            "{method} {path}"
+        );
+    }
+    task.abort();
+    let _ = task.await;
+}
+
+#[tokio::test]
+async fn json_resumable_upload_exposes_location_independently_of_bucket_cors() {
+    for config in ["empty", "matching", "mismatching"] {
+        let s = state(TokenAcceptance::Verified);
+        seed(&s, CONFIGURED);
+        let cors = match config {
+            "empty" => BucketCors::default(),
+            "matching" => BucketCors::from_json(&json!([{
+                "origin": [ORIGIN],
+                "method": ["POST"],
+                "responseHeader": ["Location"],
+            }]))
+            .unwrap(),
+            "mismatching" => BucketCors::from_json(&json!([{
+                "origin": [OTHER_ORIGIN],
+                "method": ["POST"],
+                "responseHeader": ["Location"],
+            }]))
+            .unwrap(),
+            _ => unreachable!(),
+        };
+        s.rules
+            .set_bucket_cors(BTreeMap::from([(CONFIGURED.to_owned(), cors)]));
+        let (addr, task) = serve(s).await;
+        let response = send(
+            addr,
+            "POST",
+            &format!("/upload/storage/v1/b/{CONFIGURED}/o?uploadType=resumable&name=resume.txt"),
+            &[("Origin", ORIGIN)],
+        )
+        .await;
+        assert_eq!(response.status, 200, "{config}");
+        assert!(
+            response
+                .header("location")
+                .is_some_and(|value| !value.is_empty()),
+            "{config}"
+        );
+        assert_eq!(
+            response.header("access-control-allow-origin"),
+            Some(ORIGIN),
+            "{config}"
+        );
+        assert_eq!(
+            response.header("access-control-allow-credentials"),
+            Some("true"),
+            "{config}"
+        );
+        assert!(
+            response
+                .header("access-control-expose-headers")
+                .is_some_and(|headers| {
+                    headers
+                        .split(',')
+                        .any(|header| header.trim().eq_ignore_ascii_case("location"))
+                }),
+            "{config}: {:?}",
+            response.headers
+        );
+        task.abort();
+        let _ = task.await;
+    }
+}
+
 /// The fixture omits successful metadata bodies; only recorded bodies and stable headers are compared byte for byte.
 #[tokio::test]
 #[allow(clippy::too_many_lines)]

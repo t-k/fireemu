@@ -4192,6 +4192,9 @@ pub(crate) fn is_recorded_json_cors_shape(method: &str, path: &str) -> bool {
 /// Preflights do not name their intended method, so resolve them through the API verbs they may ask
 /// the server to allow.
 pub(crate) fn is_json_api_request(method: &str, path: &str) -> bool {
+    if is_json_api_namespace(path) {
+        return true;
+    }
     let methods: &[&str] = if method == "OPTIONS" {
         &["POST", "GET", "PUT", "DELETE", "PATCH"]
     } else {
@@ -4201,6 +4204,19 @@ pub(crate) fn is_json_api_request(method: &str, path: &str) -> bool {
         .iter()
         .filter_map(|method| route(method, path).ok())
         .any(|route| is_json_api_route(&route))
+}
+
+/// Canonical JSON API endpoint prefixes. Check segment boundaries so `/storage/v10/...` remains
+/// eligible for the XML-style fallback route.
+pub(crate) fn is_json_api_namespace(path: &str) -> bool {
+    ["/storage/v1", "/upload/storage/v1", "/download/storage/v1"]
+        .into_iter()
+        .any(|prefix| {
+            path == prefix
+                || path
+                    .strip_prefix(prefix)
+                    .is_some_and(|suffix| suffix.starts_with('/'))
+        })
 }
 
 pub(crate) fn cors_bucket(method: &str, path: &str) -> Option<(String, bool, bool)> {

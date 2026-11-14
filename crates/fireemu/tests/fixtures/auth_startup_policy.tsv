@@ -1,0 +1,11 @@
+Phase	RootSetting	Namespace	TenantState	ImportedValue
+Initial	Omitted	Existing	NoTenant	Default
+PostImport	Omitted	Existing	NoTenant	Conflicting
+PostImport	Explicit	Existing	NoTenant	Conflicting
+PostImport	Explicit	Absent	NoTenant	Conflicting
+PostImport	Explicit	Existing	ImportedSameId	Conflicting
+PostImport	Omitted	Existing	DeclaredOnly	Default
+PostImport	Explicit	Absent	DeclaredOnly	Default
+PostImport	Omitted	Absent	DeclaredOnly	Conflicting
+Initial	Explicit	Absent	NoTenant	Default
+PostImport	Omitted	Absent	ImportedSameId	Default

@@ -15,17 +15,14 @@ use fireemu_adapter_grpc::service::GatewayService;
 use fireemu_adapter_http::identity_toolkit::AuthState;
 use fireemu_core_auth::jwt::IdTokenSigner;
 use fireemu_core_auth::jwt::RulesTokenPolicy;
-use fireemu_core_auth::signup_quota::{
-    QuotaAlgorithm, QuotaMode, SignupQuotaConfig, TemporaryQuota,
-};
-use fireemu_core_auth::store::{
-    AuthNamespaceConfigPatch, AuthStore, ProjectAuthConfig, ProjectAuthConfigPatch,
-};
+use fireemu_core_auth::store::AuthStore;
 use fireemu_core_firestore::index::PlanningContext;
 use fireemu_core_rules::runtime::{LoadedRules, RulesCompilationCache, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_proto_firestore::google::firestore::v1::firestore_server::FirestoreServer;
+
+mod auth_startup;
 
 use super::{
     app_check_state, bind_listeners, child_environment, clock_millis, control, control_state,
@@ -142,184 +139,6 @@ fn auth_notice_sink(
     })
 }
 
-/// Publishes password-policy overrides from the startup configuration without creating any
-/// project or tenant namespace. The registry keeps overrides for namespaces that are registered
-/// later, so a configured project or tenant receives its policy at its normal creation boundary.
-fn apply_auth_password_policy_overrides(
-    cfg: &RuntimeConfig,
-    registry: &fireemu_core_auth::store::AuthRegistry,
-) -> Result<(), String> {
-    for (index, override_config) in cfg.auth_password_policy_overrides.iter().enumerate() {
-        let policy = override_config.password_policy.to_auth_policy();
-        let applied = match override_config.tenant_id.as_deref() {
-            Some(tenant) => registry.register_tenant_password_policy_override(
-                &override_config.project_id,
-                tenant,
-                policy,
-            ),
-            None => registry
-                .register_project_password_policy_override(&override_config.project_id, policy),
-        };
-        if !applied {
-            let namespace = override_config.tenant_id.as_deref().map_or_else(
-                || override_config.project_id.clone(),
-                |tenant| format!("{}/tenants/{tenant}", override_config.project_id),
-            );
-            return Err(format!(
-                "cannot apply auth.passwordPolicyOverrides[{index}] to {namespace}"
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// Converts the canonical Auth configuration into the project-level runtime settings.
-///
-/// These values are applied only to the default project store here. Namespace-specific
-/// `configOverrides` are applied separately after the registry has been created, so a missing
-/// project or tenant is never created as a side effect of reading the configuration.
-fn auth_project_config(cfg: &RuntimeConfig) -> ProjectAuthConfig {
-    ProjectAuthConfig {
-        allow_duplicate_emails: cfg.auth_allow_duplicate_emails,
-        enable_improved_email_privacy: cfg.auth_improved_email_privacy,
-        disabled_user_signup: cfg.auth_client_permissions.disabled_user_signup,
-        disabled_user_deletion: cfg.auth_client_permissions.disabled_user_deletion,
-    }
-}
-
-/// The default project's sign-in providers: fireemu's defaults with `auth.signIn`'s members.
-fn auth_sign_in_config(cfg: &RuntimeConfig) -> fireemu_core_auth::store::SignInConfig {
-    let settings = &cfg.auth_sign_in;
-    let mut config = fireemu_core_auth::store::SignInConfig::default();
-    if let Some(value) = settings.email_enabled {
-        config.email_enabled = value;
-    }
-    if let Some(value) = settings.password_required {
-        config.password_required = value;
-    }
-    if let Some(value) = settings.anonymous_enabled {
-        config.anonymous_enabled = value;
-    }
-    if let Some(value) = settings.phone_enabled {
-        config.phone_enabled = value;
-    }
-    if let Some(numbers) = &settings.test_phone_numbers {
-        config.test_phone_numbers.clone_from(numbers);
-    }
-    config
-}
-
-fn auth_namespace_config_patch(
-    config: crate::config::AuthNamespaceConfig,
-) -> AuthNamespaceConfigPatch {
-    AuthNamespaceConfigPatch {
-        allow_duplicate_emails: None,
-        enable_improved_email_privacy: config.improved_email_privacy,
-        disabled_user_signup: config
-            .client_permissions
-            .map(|permissions| permissions.disabled_user_signup),
-        disabled_user_deletion: config
-            .client_permissions
-            .map(|permissions| permissions.disabled_user_deletion),
-    }
-}
-
-/// Applies explicitly configured non-password settings to namespaces that already exist.
-///
-/// The core registry currently exposes pending publication only for password policies. Keep
-/// absent project/tenant overrides pending at this boundary rather than creating a namespace or
-/// copying settings into an unrelated tenant. Once the registry gains the corresponding pending
-/// config API, this helper is the single daemon seam where it should be called.
-fn apply_auth_config_overrides(
-    cfg: &RuntimeConfig,
-    registry: &fireemu_core_auth::store::AuthRegistry,
-) -> Result<(), String> {
-    for (index, override_config) in cfg.auth_config_overrides.iter().enumerate() {
-        let patch = auth_namespace_config_patch(override_config.config);
-        if patch.is_empty() {
-            continue;
-        }
-        let namespace = override_config.tenant_id.as_deref().map_or_else(
-            || override_config.project_id.clone(),
-            |tenant| format!("{}/tenants/{tenant}", override_config.project_id),
-        );
-        let applied = match override_config.tenant_id.as_deref() {
-            Some(tenant) => {
-                registry.register_tenant_config_override(&override_config.project_id, tenant, patch)
-            }
-            None => registry.register_project_config_override(&override_config.project_id, patch),
-        };
-        if !applied {
-            return Err(format!(
-                "cannot apply auth.configOverrides[{index}] to {namespace}"
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// Applies only root Auth settings explicitly present in the startup file after an import.
-/// Omitted values must remain those restored from the imported namespace.
-fn reapply_explicit_auth_config(
-    cfg: &RuntimeConfig,
-    registry: &fireemu_core_auth::store::AuthRegistry,
-) -> Result<(), String> {
-    let patch = ProjectAuthConfigPatch {
-        allow_duplicate_emails: cfg
-            .auth_allow_duplicate_emails_explicit
-            .then_some(cfg.auth_allow_duplicate_emails),
-        enable_improved_email_privacy: cfg
-            .auth_improved_email_privacy_explicit
-            .then_some(cfg.auth_improved_email_privacy),
-        disabled_user_signup: cfg
-            .auth_client_permissions_explicit
-            .then_some(cfg.auth_client_permissions.disabled_user_signup),
-        disabled_user_deletion: cfg
-            .auth_client_permissions_explicit
-            .then_some(cfg.auth_client_permissions.disabled_user_deletion),
-    };
-    if !patch.is_empty()
-        && registry
-            .patch_project_config(&cfg.auth_project, patch)
-            .is_none()
-    {
-        return Err(format!(
-            "cannot apply explicit root Auth settings to {}",
-            cfg.auth_project
-        ));
-    }
-    apply_auth_config_overrides(cfg, registry)
-}
-
-fn auth_signup_quota_config(cfg: &RuntimeConfig) -> Result<SignupQuotaConfig, String> {
-    let mode = match cfg.auth_quota_simulation.mode {
-        crate::config::AuthQuotaSimulationMode::Off => QuotaMode::Off,
-        crate::config::AuthQuotaSimulationMode::Observe => QuotaMode::Observe,
-        crate::config::AuthQuotaSimulationMode::Enforce => QuotaMode::Enforce,
-    };
-    let temporary = auth_temporary_quota_config(cfg)?;
-    Ok(SignupQuotaConfig {
-        mode,
-        algorithm: QuotaAlgorithm::FixedWindowV1,
-        default_quota_per_hour: cfg.auth_quota_simulation.default_quota_per_hour,
-        max_tracked_buckets: cfg.auth_quota_simulation.max_tracked_buckets,
-        temporary,
-    })
-}
-
-fn auth_temporary_quota_config(cfg: &RuntimeConfig) -> Result<Option<TemporaryQuota>, String> {
-    cfg.auth_signup_quota
-        .as_ref()
-        .map(|value| {
-            let quota = value.quota.parse::<u64>().map_err(|_| {
-                "auth.quota.signUpQuotaConfig.quota is not a valid uint64".to_owned()
-            })?;
-            TemporaryQuota::new(quota, value.start_time, value.quota_duration)
-                .map_err(|error| format!("auth.quota.signUpQuotaConfig: {error:?}"))
-        })
-        .transpose()
-}
-
 fn blocking_auth_selection(
     selection: Option<&crate::config::BlockingFunctionTrigger>,
 ) -> fireemu_core_functions::manifest::BlockingAuthSelection {
@@ -416,72 +235,6 @@ fn blocking_auth_bridge_settings(cfg: &RuntimeConfig) -> BlockingAuthBridgeSetti
         cfg.auth_forward_inbound_credentials,
         forwarding_restrictions,
     )
-}
-
-/// Reapplies every explicitly configured password policy after an import.
-///
-/// An imported sidecar is an input for the namespace it describes, but an explicit startup
-/// configuration has higher precedence. Reapplying through the registry's normal setters keeps
-/// the update at the existing namespace boundary and leaves missing projects or tenants pending
-/// without creating them or inheriting a policy into another namespace.
-fn reapply_explicit_auth_password_policies(
-    cfg: &RuntimeConfig,
-    registry: &fireemu_core_auth::store::AuthRegistry,
-) -> Result<(), String> {
-    if let Some(policy) = &cfg.auth_password_policy {
-        if !registry.set_project_password_policy(&cfg.auth_project, policy.to_auth_policy()) {
-            return Err(format!(
-                "cannot apply auth.passwordPolicy to {}",
-                cfg.auth_project
-            ));
-        }
-    }
-    apply_auth_password_policy_overrides(cfg, registry)
-}
-
-/// Reapplies explicitly configured sign-up quota settings after an import. The quota counters are
-/// runtime state and remain with the imported namespace; only a startup file that explicitly
-/// mentions `auth.quota` or `auth.quotaSimulation` replaces the imported configuration.
-fn reapply_explicit_auth_quota(
-    cfg: &RuntimeConfig,
-    registry: &fireemu_core_auth::store::AuthRegistry,
-) -> Result<(), String> {
-    if !cfg.auth_signup_quota_explicit && !cfg.auth_quota_simulation_explicit {
-        return Ok(());
-    }
-    let applied = registry
-        .patch_project_config_with_current_settings(
-            &cfg.auth_project,
-            ProjectAuthConfigPatch::default(),
-            |_, current| {
-                let mut next = current.clone();
-                if cfg.auth_signup_quota_explicit {
-                    next.temporary = auth_temporary_quota_config(cfg)?;
-                }
-                if cfg.auth_quota_simulation_explicit {
-                    next.mode = match cfg.auth_quota_simulation.mode {
-                        crate::config::AuthQuotaSimulationMode::Off => QuotaMode::Off,
-                        crate::config::AuthQuotaSimulationMode::Observe => QuotaMode::Observe,
-                        crate::config::AuthQuotaSimulationMode::Enforce => QuotaMode::Enforce,
-                    };
-                    if cfg.auth_quota_simulation.algorithm != "fixed-window-v1" {
-                        return Err("auth.quotaSimulation.algorithm is not supported".to_owned());
-                    }
-                    next.algorithm = QuotaAlgorithm::FixedWindowV1;
-                    next.default_quota_per_hour = cfg.auth_quota_simulation.default_quota_per_hour;
-                    next.max_tracked_buckets = cfg.auth_quota_simulation.max_tracked_buckets;
-                }
-                Ok((None, Some(next)))
-            },
-        )
-        .map_err(|error| error.clone())?;
-    if applied.is_none() {
-        return Err(format!(
-            "cannot apply explicit Auth quota settings to {}",
-            cfg.auth_project
-        ));
-    }
-    Ok(())
 }
 
 /// The startup notice when neither unsigned custom tokens nor trusted signers are available.
@@ -1256,26 +1009,16 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
     }
     // Startup configuration is the final layer over imported Auth state. The import remains
     // authoritative when the corresponding setting was not explicitly configured.
-    reapply_explicit_auth_password_policies(&cfg, &registry)?;
-    reapply_explicit_auth_config(&cfg, &registry)?;
-    reapply_explicit_auth_quota(&cfg, &registry)?;
-    // The declared switch and tenants come last: an imported tenant is authoritative for its id,
-    // and a tenant the import did not carry is created as declared.
-    let seeding = cfg.tenant_seeding()?;
-    if !quiet {
-        for id in seeding.shadowed_by_existing(&registry, &cfg.auth_project) {
+    // Explicit settings override imported values; tenant declarations remain the final layer.
+    auth_startup::apply_post_import(
+        &cfg,
+        &registry,
+        (!quiet).then_some(|id: &str| {
             eprintln!(
                 "warning: auth.tenants: the imported tenant {id:?} is used and its declared settings are ignored (an --import is authoritative for a tenant of the same id)"
             );
-        }
-    }
-    seeding
-        .apply(&registry, &cfg.auth_project)
-        .map_err(|error| format!("auth.tenants: {error}"))?;
-    // A compatibility-routed project (emulator profile) gets the declaration when it is installed.
-    if !seeding.is_empty() {
-        registry.set_new_project_tenant_seed(Arc::new(seeding));
-    }
+        }),
+    )?;
     let hub_state = Arc::new(hub::HubState {
         project: cfg.auth_project.clone(),
         addr: hub_addr.unwrap_or(http_addr),
@@ -2199,28 +1942,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             cfg.auth_totp.unwrap_or_default(),
         )));
         if let Ok(mut store) = auth_store.lock() {
-            let config = auth_project_config(&cfg);
-            store.set_config(config);
-            store
-                .set_sign_in_config(auth_sign_in_config(&cfg))
-                .map_err(|error| format!("auth.signIn: {error:?}"))?;
-            // The declared initial multi-factor configuration is the project's configuration
-            // now, and what a control-plane reset returns to.
-            if let Some(mfa) = cfg.effective_auth_mfa() {
-                store.set_mfa_seed(mfa);
-            }
-            if let Some(domains) = &cfg.auth_authorized_domains {
-                store.set_authorized_domains_seed(domains.clone())
-                    .map_err(|error| format!("auth.authorizedDomains: {error:?}"))?;
-            }
-            store.set_provider_config_seeds(cfg.auth_provider_seeds.clone())
-                .map_err(|error| format!("auth.providers: {error}"))?;
-            if let Some(policy) = &cfg.auth_password_policy {
-                store.set_password_policy(policy.to_auth_policy());
-            }
-            store
-                .set_signup_quota_config(auth_signup_quota_config(&cfg)?)
-                .map_err(|error| format!("auth.quotaSimulation: {error:?}"))?;
+            auth_startup::initialize_initial_store(&cfg, &mut store)?;
         }
         if let (Some(warning), false) = (cfg.auth_totp_warning(), quiet) {
             eprintln!("warning: {warning}");
@@ -2294,12 +2016,8 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 crate::random_u128()?,
             ),
         );
-        // A project created after start begins with the declared multi-factor configuration.
-        registry.set_new_project_mfa_seed(cfg.effective_auth_mfa());
-        registry.set_new_project_authorized_domains_seed(cfg.auth_authorized_domains.clone());
-        registry.set_new_project_provider_config_seeds(cfg.auth_provider_seeds.clone());
-        apply_auth_password_policy_overrides(&cfg, &registry)?;
-        apply_auth_config_overrides(&cfg, &registry)?;
+        // A project created after start receives declared seeds before namespace overrides.
+        auth_startup::initialize_registry(&cfg, &registry)?;
         let mut compilations = RulesCompilationCache::default();
         let rules_literals = cfg.profile.lone_surrogates();
         let rules = Arc::new(
@@ -3127,12 +2845,14 @@ mod tests {
     use fireemu_core_types::time::LogicalInstant;
     use serde_json::json;
 
-    use super::{
+    use super::auth_startup::{
         apply_auth_config_overrides, apply_auth_password_policy_overrides, auth_project_config,
-        auth_sign_in_config, auth_signup_quota_config, blocking_auth_bridge_settings,
-        blocking_auth_selection, close_functions_source_admission, function_log_input,
-        idp_assertion_policy, reapply_explicit_auth_config,
+        auth_sign_in_config, auth_signup_quota_config, reapply_explicit_auth_config,
         reapply_explicit_auth_password_policies, reapply_explicit_auth_quota,
+    };
+    use super::{
+        blocking_auth_bridge_settings, blocking_auth_selection, close_functions_source_admission,
+        function_log_input, idp_assertion_policy,
     };
 
     /// The token `@firebase/rules-unit-testing`'s `authenticatedContext(sub)` sends

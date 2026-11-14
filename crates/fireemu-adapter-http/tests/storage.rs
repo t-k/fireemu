@@ -1592,13 +1592,21 @@ service firebase.storage {
   }
 }";
     let finalize = |swap: bool| {
+        static NEXT_ROOT: AtomicUsize = AtomicUsize::new(0);
         let mut s = state(Some(rules));
-        let root = std::env::temp_dir().join(format!(
-            "storage-rollback-fails-{}-{swap}",
-            std::process::id()
-        ));
+        let root = loop {
+            let id = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
+            let candidate = std::env::temp_dir().join(format!(
+                "storage-rollback-fails-{}-{swap}-{id}",
+                std::process::id()
+            ));
+            match std::fs::create_dir(&candidate) {
+                Ok(()) => break candidate,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => panic!("cannot create rollback fixture directory: {error}"),
+            }
+        };
         let dir = root.join("spill");
-        std::fs::create_dir_all(&root).unwrap();
         {
             let mut store = s.store.lock().unwrap();
             store.set_spill(Some((fireemu_core_storage::spill::SpillDir::new(&dir), 1)));
@@ -1660,7 +1668,7 @@ service firebase.storage {
             )
             .is_some();
         drop(s);
-        let _ = std::fs::remove_dir_all(&root);
+        std::fs::remove_dir_all(&root).unwrap();
         (r.status, received, published)
     };
     (finalize(false), finalize(true))
@@ -8403,6 +8411,184 @@ fn strict_answers_to_a_browser_origin_carry_the_reflection_and_the_exposed_heade
                     }
                     _ => assert_eq!(wildcard, None, "{what}"),
                 }
+            }
+        }
+    }
+}
+
+#[test]
+fn firebase_finalizing_chunk_wrong_offsets_preserve_each_profiles_error_contract() {
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let start = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?name=finalizing-offset.bin"),
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("x-goog-upload-protocol", "resumable"),
+                    ("x-goog-upload-command", "start"),
+                ],
+                b"{}",
+            ),
+        );
+        assert_eq!(start.status, 200, "{acceptance:?}");
+        let session = header(&start, "x-goog-upload-url")
+            .unwrap()
+            .strip_prefix("http://127.0.0.1:9199")
+            .unwrap();
+        let chunk = |command: &str, offset: &str, body: &[u8]| {
+            handle(
+                &s,
+                req(
+                    "POST",
+                    session,
+                    &[
+                        ("authorization", "Bearer owner"),
+                        ("x-goog-upload-command", command),
+                        ("x-goog-upload-offset", offset),
+                    ],
+                    body,
+                ),
+            )
+        };
+        assert_eq!(chunk("upload", "0", b"ab").status, 200);
+        let wrong = chunk("upload, finalize", "5", b"cd");
+        assert_eq!(wrong.status, 400, "{acceptance:?}");
+        if acceptance == TokenAcceptance::Verified {
+            assert_eq!(
+                wrong.body.as_ref(),
+                b"Client uploaded to the wrong offset (5 instead of 2)."
+            );
+            assert_eq!(
+                header(&wrong, "content-type"),
+                Some("text/plain; charset=utf-8")
+            );
+        } else {
+            assert_eq!(
+                json_body(&wrong),
+                json!({"error": {"code": 400, "message": "upload offset mismatch, expected 2"}})
+            );
+            assert_eq!(
+                header(&wrong, "content-type"),
+                Some("application/json; charset=utf-8")
+            );
+        }
+        assert_eq!(header(&wrong, "x-goog-upload-status"), None);
+        let query = chunk("query", "0", b"");
+        assert_eq!(query.status, 200);
+        assert_eq!(header(&query, "x-goog-upload-status"), Some("active"));
+        assert_eq!(header(&query, "x-goog-upload-size-received"), Some("2"));
+        assert!(s
+            .store
+            .lock()
+            .unwrap()
+            .get(
+                &BucketName::try_new(BUCKET).unwrap(),
+                &ObjectName::try_new("finalizing-offset.bin").unwrap(),
+            )
+            .is_none());
+        assert_eq!(chunk("upload, finalize", "2", b"cd").status, 200);
+        let download = handle(
+            &s,
+            req(
+                "GET",
+                &format!("/v0/b/{BUCKET}/o/finalizing-offset.bin?alt=media"),
+                &[("authorization", "Bearer owner")],
+                b"",
+            ),
+        );
+        assert_eq!(download.status, 200);
+        assert_eq!(download.body.as_ref(), b"abcd");
+    }
+}
+
+#[test]
+fn firebase_finalizing_chunks_into_terminal_or_missing_sessions_keep_bare_errors() {
+    for acceptance in BOTH_PROFILES {
+        for phase in ["finalized", "cancelled", "missing"] {
+            let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+            let start = handle(
+                &s,
+                req(
+                    "POST",
+                    &format!("/v0/b/{BUCKET}/o?name=terminal-chunk.bin"),
+                    &[
+                        ("authorization", "Bearer owner"),
+                        ("x-goog-upload-protocol", "resumable"),
+                        ("x-goog-upload-command", "start"),
+                    ],
+                    b"{}",
+                ),
+            );
+            assert_eq!(start.status, 200, "{acceptance:?} {phase}");
+            let session = header(&start, "x-goog-upload-url")
+                .unwrap()
+                .strip_prefix("http://127.0.0.1:9199")
+                .unwrap();
+            let missing = format!("/v0/b/{BUCKET}/o?upload_id=missing");
+            let session = if phase == "missing" {
+                &missing
+            } else {
+                session
+            };
+            let send = |command: &str, body: &[u8]| {
+                handle(
+                    &s,
+                    req(
+                        "POST",
+                        session,
+                        &[
+                            ("authorization", "Bearer owner"),
+                            ("x-goog-upload-command", command),
+                            ("x-goog-upload-offset", "0"),
+                        ],
+                        body,
+                    ),
+                )
+            };
+            match phase {
+                "finalized" => assert_eq!(send("upload, finalize", b"ab").status, 200),
+                "cancelled" => assert_eq!(send("cancel", b"").status, 200),
+                "missing" => {}
+                _ => unreachable!(),
+            }
+            let refused = send("upload, finalize", b"zz");
+            assert_eq!(
+                refused.status,
+                if phase == "missing" { 404 } else { 400 },
+                "{acceptance:?} {phase}"
+            );
+            assert_eq!(
+                refused.body.as_ref(),
+                if phase == "missing" {
+                    b"Not Found".as_slice()
+                } else {
+                    b"Bad Request".as_slice()
+                },
+                "{acceptance:?} {phase}"
+            );
+            assert_eq!(
+                header(&refused, "content-type"),
+                Some("text/plain; charset=utf-8"),
+                "{acceptance:?} {phase}"
+            );
+            assert_eq!(header(&refused, "x-goog-upload-status"), None);
+            let download = handle(
+                &s,
+                req(
+                    "GET",
+                    &format!("/v0/b/{BUCKET}/o/terminal-chunk.bin?alt=media"),
+                    &[("authorization", "Bearer owner")],
+                    b"",
+                ),
+            );
+            if phase == "finalized" {
+                assert_eq!(download.status, 200);
+                assert_eq!(download.body.as_ref(), b"ab");
+            } else {
+                assert_eq!(download.status, 404);
             }
         }
     }

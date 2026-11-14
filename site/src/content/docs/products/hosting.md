@@ -1,15 +1,15 @@
 ---
 title: Firebase Hosting
-description: Serve one Firebase Hosting site locally from firebase.json, with redirects, rewrites, headers, clean URLs, localization and rewrites to local functions.
+description: Serve Firebase Hosting sites locally from firebase.json, with redirects, rewrites, headers, clean URLs, localization and rewrites to local functions.
 ---
 
-Fireemu serves one Firebase Hosting site from the `hosting` entry of `firebase.json`: static files, redirects, rewrites, custom headers, clean URLs, trailing-slash handling and localized content. A rewrite can send a request to a function of a Functions codebase in the same run. Hosting is **verified against production for its recorded cases**: the `strict` profile, the default, answers as Firebase Hosting answered 279 requests recorded twice on preview channels (a 201-request corpus and a 78-request follow-up corpus), apart from the known differences listed below, and the `emulator` profile is compared offline with `firebase-tools` 15.28.2 on a finite set of cases and makes no production claim (see [Profiles](#profiles) and [Verification status](#verification-status)).
+Fireemu serves Firebase Hosting sites from the `hosting` entry of `firebase.json`: static files, redirects, rewrites, custom headers, clean URLs, trailing-slash handling and localized content. Each configured site has its own local listener. A rewrite can send a request to a function of a Functions codebase in the same run. Hosting is **verified against production for its recorded cases**: the `strict` profile, the default, answers as Firebase Hosting answered 279 requests recorded twice on preview channels (a 201-request corpus and a 78-request follow-up corpus), apart from the known differences listed below, and the `emulator` profile is compared offline with `firebase-tools` 15.28.2 on a finite set of cases and makes no production claim (see [Profiles](#profiles) and [Verification status](#verification-status)).
 
 Hosting is available since v0.45.0. Behaviour that changed in a later release is listed under [Changes in v0.47.0](#changes-in-v0470) and [Changes in v0.49.0](#changes-in-v0490) below.
 
 ## Start Hosting
 
-Hosting starts when `firebase.json` has a `hosting` object with a `public` directory. No other setting is needed:
+Hosting starts when `firebase.json` has a `hosting` object with a `public` directory, or an array of site objects. A single site needs no selector:
 
 ```json
 {
@@ -23,9 +23,34 @@ Hosting starts when `firebase.json` has a `hosting` object with a `public` direc
 npx fireemu up
 ```
 
+For multiple sites, give each entry a `site` or `target`. Targets resolve through `.firebaserc` for the selected Firebase project:
+
+```json
+{
+  "hosting": [
+    { "target": "app", "public": "public/app" },
+    { "site": "docs-site-id", "public": "public/docs" }
+  ]
+}
+```
+
+```json
+{
+  "targets": {
+    "my-project": {
+      "hosting": {
+        "app": ["app-site-id"]
+      }
+    }
+  }
+}
+```
+
+The first site uses the configured Hosting port (default 5000); following sites use the Firebase CLI local convention starting four ports after the primary, skipping 5001 and occupied ports. `GET /emulators` on the Emulator Hub reports secondary ports in `reservedPorts`, and startup output prints each site's URL. The readiness descriptor retains `hostingUrl` for the first site and adds `hostingSites` with all site URLs.
+
 - The default port is 5000. If the port is busy and you did not configure one, Fireemu searches upward and never takes 5001, as `firebase-tools` does. A port you set is never moved. Set it with `emulators.hosting.port` in `firebase.json`, `daemon.hostingPort` in a Fireemu configuration file, or `--hosting-port`.
-- The Emulator Hub lists the bound address under `hosting` (`GET /emulators` on the Hub).
-- `--only` selects services as for the other products: `--only hosting` serves only Hosting and refuses to start when there is no `hosting.public`. A run that does not name Hosting keeps starting when its `hosting` entry is one Fireemu cannot serve (for example a list of sites), notes the entry and does not start Hosting; add `hosting` to `--only` to make that an error.
+- The Emulator Hub lists the primary bound address under `hosting` (`GET /emulators` on the Hub) and secondary ports in `reservedPorts`.
+- `--only` selects services as for the other products: `--only hosting` serves configured sites and refuses to start when a selected site's `public` key is missing.
 - `hosting.public` is resolved from the directory of `firebase.json`. A missing directory is not an error, as in `firebase-tools`: the site starts and answers 404.
 
 ## What `firebase.json` can set
@@ -111,7 +136,6 @@ Some strict answers come from a reading of the recordings, not from an observati
 
 ## Not supported
 
-- More than one site: a `hosting` list, `site` and `target`. A list is refused with `hosting must be one site object; multiple sites are not implemented` when Hosting is named in `--only`.
 - `hosting.source` (web frameworks) and any site without `public`.
 - App Hosting. `--only apphosting` is refused as deferred; see [Limitations](../../compatibility/limitations/).
 - Keys other than those in the table above are not acted on. `appAssociation: "AUTO"` generates the two association documents under `strict` only; a file you place in `public` is served like any other.

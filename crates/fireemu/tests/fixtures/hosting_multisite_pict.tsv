@@ -1,0 +1,8 @@
+HostingForm	Selector	TargetMapping
+single	implicit	notNeeded
+single	site	notNeeded
+single	target	resolved
+single	target	missing
+multi	site	notNeeded
+multi	target	resolved
+multi	target	missing

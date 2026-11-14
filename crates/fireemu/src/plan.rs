@@ -712,7 +712,7 @@ fn path_rows(cfg: &RuntimeConfig, facts: &Facts, starts: &ServiceStarts) -> Vec<
     if let Some(hosting) = &cfg.hosting {
         rows.push(path_row(
             "hosting.public",
-            &hosting.public().to_string_lossy(),
+            &hosting[0].public().to_string_lossy(),
             None,
             facts,
         ));
@@ -1331,6 +1331,7 @@ mod tests {
             storage: loopback(9199),
             functions: loopback(5001),
             hosting: loopback(5000),
+            hosting_sites: Vec::new(),
             eventarc: loopback(9299),
             tasks: loopback(9499),
             pubsub: loopback(8085),
@@ -1480,6 +1481,7 @@ mod tests {
                         storage: None,
                         functions: None,
                         hosting: None,
+                        hosting_sites: Vec::new(),
                         eventarc: None,
                         tasks: None,
                         pubsub: None,
@@ -1567,8 +1569,9 @@ mod tests {
             cfg.pubsub_enabled = pubsub_enabled;
             cfg.database_enabled = database_enabled;
             cfg.functions_source = functions_source.then(|| ".".to_owned());
-            cfg.hosting = hosting
-                .then(|| crate::hosting::Config::parse(&json!({"public": "public"}), Path::new(".")).unwrap());
+            cfg.hosting = hosting.then(|| {
+                vec![crate::hosting::Config::parse(&json!({"public": "public"}), Path::new(".")).unwrap()]
+            });
 
             let decided = ServiceStarts::resolve(&cfg, &only);
             let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
@@ -1580,7 +1583,7 @@ mod tests {
                     prop_assert_eq!(starts.auth, listeners.auth_selected);
                     prop_assert_eq!(starts.storage, listeners.storage.is_some());
                     prop_assert_eq!(starts.functions, listeners.functions.is_some());
-                    prop_assert_eq!(starts.hosting, listeners.hosting.is_some());
+                    prop_assert_eq!(starts.hosting, !listeners.hosting.is_empty());
                     prop_assert_eq!(starts.eventarc, listeners.eventarc.is_some());
                     prop_assert_eq!(starts.tasks, listeners.tasks.is_some());
                     prop_assert_eq!(starts.pubsub, listeners.pubsub.is_some());

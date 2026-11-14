@@ -617,7 +617,7 @@
     },
     "crates/fireemu-adapter-functions/src/runtime.rs": {
       "kind": "sha256",
-      "value": "29e82aa2844f74007a6fa4b7fb46beec61f685d89074ae878c559f80aa6f44b4"
+      "value": "6507fbcc550087954c235cb59212509142e63ee48841340d2af5c990a0f22b91"
     },
     "crates/fireemu-adapter-functions/src/runtime/event_frame_member_tests.rs": {
       "kind": "sha256",
@@ -641,11 +641,11 @@
     },
     "crates/fireemu-adapter-functions/src/task_raw_body_tests.rs": {
       "kind": "sha256",
-      "value": "f88ac2fd2fbd16550a2451b813e136cd986e6366c20a1f10b86591ce0178d148"
+      "value": "a2eca8ae045ca1ce3a78a2af5f4252722af2e1265a82f666d2e771139e88a49f"
     },
     "crates/fireemu-adapter-functions/src/task_scheduler.rs": {
       "kind": "sha256",
-      "value": "3470225d6d97c9070f069fc884c88241c74a2a06ead125cdeccaf07e3d6110e6"
+      "value": "d81a0df1f00092c8798e03eec10075d20e71ae0998d26fc1434fc237c2977411"
     },
     "crates/fireemu-adapter-functions/src/tasks.rs": {
       "kind": "sha256",
@@ -653,7 +653,7 @@
     },
     "crates/fireemu-adapter-functions/src/tasks_production.rs": {
       "kind": "sha256",
-      "value": "cafb79ba26b1588befc7c6ead375bf78be39c24e6928a69dd448c4a35436a50b"
+      "value": "d9b66f76e8977daeebc7108fdebc07f48a59d1d0c5683d7b3e3a2e295e5a7d27"
     },
     "crates/fireemu-adapter-functions/src/zone.rs": {
       "kind": "sha256",
@@ -1977,7 +1977,7 @@
     },
     "crates/fireemu/src/config.rs": {
       "kind": "sha256",
-      "value": "23a0435396e3af4151df0b7882f939a284bdc3df9ac1a124d168332627ec2aa6"
+      "value": "0c80aff5d940d23b26372bf173e52a7e7e37742ed05dc14f81751f580d3584ac"
     },
     "crates/fireemu/src/config_discovery.rs": {
       "kind": "sha256",
@@ -2089,7 +2089,7 @@
     },
     "crates/fireemu/src/plan.rs": {
       "kind": "sha256",
-      "value": "c20d1be22941f8a0779f198064b7b16e1d4d338f65fec7fe0089705e0e1dc818"
+      "value": "3fe55dc61ccf1a86362823c729439512c8a4d4d88fa48cf15cc30928dc45ad94"
     },
     "crates/fireemu/src/python_functions.rs": {
       "kind": "sha256",

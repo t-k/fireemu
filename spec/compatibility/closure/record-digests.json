@@ -114,7 +114,7 @@
     "conformance/task-queue-production-burst-run-comparison.json": "b56e1962070a576339cd20abfdab642bc53e489b0d24beb6e442767ebc1e70de",
     "conformance/task-queue-production-burst-strict-vs-pass-1.json": "b56e1962070a576339cd20abfdab642bc53e489b0d24beb6e442767ebc1e70de",
     "conformance/task-queue-production-burst-strict-vs-pass-2.json": "5eb2bc23fc145ed4fe601525cb8f1df0bbd3ca379e60df54e33f7aab8fabfd9c",
-    "conformance/task-queue-production-local-strict.json": "eb4646dd9c23531f9db5df04f06015500193965fdc75389bb9cb0eca0a437cab",
+    "conformance/task-queue-production-local-strict.json": "d7767756ec6f07b57ac5f2bd7b0b2433b0f280a8b14a35876934ba5e1e2c313e",
     "conformance/task-queue-production-pass-1.json": "9741ceb6a713a90a671a6f0253f91ec2f841450c315f6f5488f34efd63e38409",
     "conformance/task-queue-production-pass-2.json": "385b47fe438c15e370dbca30f28ef69aaa66311d39c81d3e94fc9a8366850273",
     "conformance/task-queue-production-run-comparison.json": "39ca48e2dabde013b4bea5155b51872cfd84d5374ac8a0d75fc157d8cd1a6e27",

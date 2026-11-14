@@ -1545,18 +1545,37 @@ mod tests {
     }
 
     #[test]
-    fn a_request_with_no_schedule_is_stamped_with_its_own_microsecond() {
-        let admitted = admit(
-            QUEUE,
-            &json!({ "task": base() }),
-            NOW + 789,
-            1,
-            DEFAULT_DEADLINE_SECONDS,
-            || 100,
-        )
-        .unwrap();
-        assert_eq!(admitted.schedule_nanos, NOW);
-        assert_eq!(admitted.schedule_time, "2026-11-11T09:06:59.589154Z");
+    fn past_or_missing_schedule_preserves_request_microseconds_at_millisecond_boundaries() {
+        for task in [
+            base(),
+            with(json!({"scheduleTime": "2026-11-11T08:06:59Z"})),
+        ] {
+            for (now, expected_nanos, expected_time) in [
+                (NOW + 789, NOW, "2026-11-11T09:06:59.589154Z"),
+                (
+                    1_794_388_019_588_999_999,
+                    1_794_388_019_588_999_000,
+                    "2026-11-11T09:06:59.588999Z",
+                ),
+                (
+                    1_794_388_019_589_000_789,
+                    1_794_388_019_589_000_000,
+                    "2026-11-11T09:06:59.589Z",
+                ),
+            ] {
+                let admitted = admit(
+                    QUEUE,
+                    &json!({ "task": task }),
+                    now,
+                    1,
+                    DEFAULT_DEADLINE_SECONDS,
+                    || 100,
+                )
+                .unwrap();
+                assert_eq!(admitted.schedule_nanos, expected_nanos);
+                assert_eq!(admitted.schedule_time, expected_time);
+            }
+        }
     }
 
     // ---- a duration of any length is refused, never a panic or a wrap (review S1 of 2026-11-12) ------------------------------

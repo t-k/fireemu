@@ -1781,7 +1781,7 @@
     },
     "localStrictReplay": {
       "path": "conformance/task-queue-production-local-strict.json",
-      "sha256": "eb4646dd9c23531f9db5df04f06015500193965fdc75389bb9cb0eca0a437cab",
+      "sha256": "d7767756ec6f07b57ac5f2bd7b0b2433b0f280a8b14a35876934ba5e1e2c313e",
       "binarySha256": "4b046f2b9adda877c3f1c8e74fd07914c40e72d40bc6011d9805536050f2dc01"
     }
   },

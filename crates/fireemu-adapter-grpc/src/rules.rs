@@ -1718,6 +1718,44 @@ pub fn write_guard<'a>(
     }
 }
 
+/// Build the read guard shared by local unary gRPC and REST requests.
+pub(crate) fn unary_read_guard<'a>(
+    rules: Option<&'a Arc<RulesEnforcer>>,
+    principal: &'a Principal,
+    local: Option<Arc<crate::local::LocalBackend>>,
+    epoch: u64,
+) -> BoxedReadGuard<'a> {
+    let inner = read_guard(rules, principal);
+    let Some(local) = local else {
+        return inner;
+    };
+    let barrier = local.barrier();
+    Box::new(move |db, version, check| {
+        same_epoch(&barrier, epoch)?;
+        inner(db, version, check)
+    })
+}
+
+/// Build the write guard shared by local unary gRPC and REST requests.
+pub(crate) fn unary_write_guard<'a>(
+    rules: Option<&'a Arc<RulesEnforcer>>,
+    principal: &'a Principal,
+    local: Option<Arc<crate::local::LocalBackend>>,
+    epoch: u64,
+) -> BoxedWriteGuard<'a> {
+    let inner = write_guard(rules, principal);
+    let Some(local) = local else {
+        return inner;
+    };
+    let barrier = local.barrier();
+    let actor = crate::local::Actor::from_principal(principal);
+    Box::new(move |db, writes, now| {
+        same_epoch(&barrier, epoch)?;
+        local.set_actor(actor.clone());
+        inner(db, writes, now)
+    })
+}
+
 /// The `resource` every document matching `disjunction` is known to look like: a partial
 /// map of the constrained fields (equality, `array-contains` as a partial list, `is null`),
 /// an undetermined id and name. Everything else is undetermined, so a rule that depends on

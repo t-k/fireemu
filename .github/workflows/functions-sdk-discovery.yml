@@ -15,6 +15,8 @@ on:
       - crates/fireemu/src/daemon.rs
       - crates/fireemu/src/hub.rs
       - crates/fireemu/src/functions*.rs
+      - crates/fireemu/src/functions/**
+      - crates/fireemu/tests/functions_isolation.rs
       - crates/fireemu/tests/functions_discovery.rs
       - crates/fireemu/tests/functions_codebases.rs
       - crates/fireemu/tests/functions_environment.rs
@@ -45,6 +47,8 @@ on:
       - crates/fireemu/src/daemon.rs
       - crates/fireemu/src/hub.rs
       - crates/fireemu/src/functions*.rs
+      - crates/fireemu/src/functions/**
+      - crates/fireemu/tests/functions_isolation.rs
       - crates/fireemu/tests/functions_discovery.rs
       - crates/fireemu/tests/functions_codebases.rs
       - crates/fireemu/tests/functions_environment.rs
@@ -101,6 +105,8 @@ jobs:
         run: pnpm -C conformance install --frozen-lockfile
       - name: install the real Functions SDK fixture
         run: npm ci --prefix tools/sdk-smoke --ignore-scripts
+      - name: verify Functions environment isolation
+        run: cargo test -p fireemu --test functions_isolation -- --include-ignored --test-threads=1
       - name: run every real SDK discovery scenario
         run: cargo test -p fireemu --test functions_discovery -- --ignored --test-threads=1
       - name: run every real SDK multi-codebase scenario

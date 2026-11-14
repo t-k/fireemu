@@ -83,6 +83,15 @@ await Promise.all([
 
 Create the world in a fixture, give each test its own named Admin SDK app, and delete the app at teardown. After `reset()`, delete the app, read `world.endpoints` again and create a new app. The default Admin app is cached process-wide and cannot be redirected to a world.
 
+Firebase Admin's Firestore SDK gives `FIRESTORE_EMULATOR_HOST` precedence over `db.settings({ host })`. Run Vitest and Playwright directly, without wrapping the runner in an outer `fireemu exec`, and clear the inherited host once in the dedicated runner process before it starts workers. For example, on POSIX shells:
+
+```sh
+env -u FIRESTORE_EMULATOR_HOST npx vitest run
+env -u FIRESTORE_EMULATOR_HOST npx playwright test
+```
+
+The fixture guards below fail before connecting if a worker still has that variable. Do not change the shared `process.env` from each test. When a test intentionally keeps an emulator host in its environment, run that test through `world.run()` so its child receives the world's endpoints.
+
 ```ts
 // Vitest: test/world.ts
 import { test as base } from 'vitest';
@@ -90,8 +99,15 @@ import { createTestWorld, type TestWorld } from 'fireemu/testing';
 import { initializeApp, deleteApp, type App } from 'firebase-admin/app';
 import { getFirestore, type Firestore } from 'firebase-admin/firestore';
 
+function assertFirestoreHostIsNotInherited() {
+  if ('FIRESTORE_EMULATOR_HOST' in process.env) {
+    throw new Error('Start Vitest with FIRESTORE_EMULATOR_HOST cleared before workers start');
+  }
+}
+
 export const test = base.extend<{ world: TestWorld; admin: { db: () => Firestore; reset: () => Promise<Firestore> } }>({
   world: async ({}, use) => {
+    assertFirestoreHostIsNotInherited();
     const world = await createTestWorld({ services: ['auth', 'firestore'] });
     try {
       await use(world);
@@ -100,6 +116,7 @@ export const test = base.extend<{ world: TestWorld; admin: { db: () => Firestore
     }
   },
   admin: async ({ world }, use) => {
+    assertFirestoreHostIsNotInherited();
     let app: App | undefined;
     let db: Firestore;
     const connect = () => {
@@ -134,9 +151,16 @@ import { createTestWorld, type TestWorld } from 'fireemu/testing';
 import { initializeApp, deleteApp } from 'firebase-admin/app';
 import { getFirestore, type Firestore } from 'firebase-admin/firestore';
 
+function assertFirestoreHostIsNotInherited() {
+  if ('FIRESTORE_EMULATOR_HOST' in process.env) {
+    throw new Error('Start Playwright with FIRESTORE_EMULATOR_HOST cleared before workers start');
+  }
+}
+
 export const test = base.extend<{ db: Firestore }, { world: TestWorld }>({
   world: [
     async ({}, use) => {
+      assertFirestoreHostIsNotInherited();
       const world = await createTestWorld({ services: ['auth', 'firestore'] });
       try {
         await use(world);
@@ -147,6 +171,7 @@ export const test = base.extend<{ db: Firestore }, { world: TestWorld }>({
     { scope: 'worker' },
   ],
   db: async ({ world }, use, testInfo) => {
+    assertFirestoreHostIsNotInherited();
     await world.reset(); // endpoints below are read after the reset
     const { host, port } = world.endpoints.firestore!;
     const app = initializeApp({ projectId: world.projectId }, `test-${testInfo.testId}-${world.generation}`);

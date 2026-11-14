@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use fireemu_core_auth::{mfa::TotpPolicy, store::AuthStore};
 use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
-use fireemu_core_firestore::store::FirestoreState;
+use fireemu_core_firestore::store::{FirestoreState, Write, WriteOp};
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::SplitMix64;
@@ -128,7 +128,6 @@ fn local_write_commit_publishes_the_owner_actor() {
 
 #[test]
 fn local_and_upstream_guards_still_run_rules_after_epoch_admission() {
-    let state = state();
     let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
     let rules = Arc::new(crate::rules::RulesEnforcer::new(
         Arc::new(RulesetSlot::new(
@@ -152,37 +151,52 @@ fn local_and_upstream_guards_still_run_rules_after_epoch_admission() {
         "guard/read",
     )
     .unwrap();
-    let local_read = crate::rules::unary_read_guard(
-        Some(&rules),
-        &principal,
-        Some(state.local.clone()),
-        state.local.barrier().epoch(),
-    );
-    assert_eq!(
-        local_read(
-            &db,
-            None,
-            ReadCheck::Document {
-                path: &path,
-                snapshot: None,
-            },
-        )
-        .unwrap_err()
-        .code(),
-        Code::PermissionDenied
-    );
-    let upstream_read = crate::rules::unary_read_guard(Some(&rules), &principal, None, 0);
-    assert_eq!(
-        upstream_read(
-            &db,
-            None,
-            ReadCheck::Document {
-                path: &path,
-                snapshot: None,
-            },
-        )
-        .unwrap_err()
-        .code(),
-        Code::PermissionDenied
-    );
+    let writes = [Write {
+        op: WriteOp::Set {
+            path: path.clone(),
+            fields: std::collections::BTreeMap::default(),
+            update_mask: None,
+        },
+        precondition: None,
+        transforms: Vec::new(),
+    }];
+    for is_local in [true, false] {
+        for stale in [false, true] {
+            let state = state();
+            let epoch = state.local.barrier().epoch();
+            if stale {
+                drop(state.local.barrier().exclusive());
+            }
+            let local = is_local.then(|| state.local.clone());
+            let expected = if is_local && stale {
+                Code::Unavailable
+            } else {
+                Code::PermissionDenied
+            };
+            let read =
+                crate::rules::unary_read_guard(Some(&rules), &principal, local.clone(), epoch);
+            assert_eq!(
+                read(
+                    &db,
+                    None,
+                    ReadCheck::Document {
+                        path: &path,
+                        snapshot: None,
+                    },
+                )
+                .unwrap_err()
+                .code(),
+                expected,
+                "read: local={is_local}, stale={stale}"
+            );
+            let write = crate::rules::unary_write_guard(Some(&rules), &principal, local, epoch);
+            assert_eq!(
+                write(&db, &writes, LogicalInstant::UNIX_EPOCH)
+                    .unwrap_err()
+                    .code(),
+                expected,
+                "write: local={is_local}, stale={stale}"
+            );
+        }
+    }
 }

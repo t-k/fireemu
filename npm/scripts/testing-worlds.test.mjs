@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { generateKeyPairSync, createSign, createHash } from 'node:crypto';
 import { mkdtemp, readFile, writeFile, rm, stat, mkdir, chmod, open } from 'node:fs/promises';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -19,6 +20,86 @@ function copyFileByFile(t) {
   t.after(() => Object.assign(cloneSupport, saved));
 }
 const options = { binaryPath: binary, env:{...process.env,NODE_PATH:''}, projectId: 'demo-test-worlds', clockStart: '2026-01-31T23:59:00Z', services: ['auth','firestore'], config: { schemaVersion:1, firestore:{edition:'standard'} } };
+
+function signedReadUrl({ privateKey, host, bucket, object }) {
+  const method = 'GET';
+  const date = '20260131T235900Z';
+  const expires = '3600';
+  const email = 'signed-url-test@demo-test-worlds.iam.gserviceaccount.com';
+  const scope = `${date.slice(0, 8)}/auto/storage/goog4_request`;
+  const path = `/${bucket}/${encodeURIComponent(object)}`;
+  const encode = value => encodeURIComponent(value).replace(/[!'()*]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+  const parameters = [
+    ['X-Goog-Algorithm', 'GOOG4-RSA-SHA256'],
+    ['X-Goog-Credential', `${email}/${scope}`],
+    ['X-Goog-Date', date],
+    ['X-Goog-Expires', expires],
+    ['X-Goog-SignedHeaders', 'host'],
+  ].sort(([left], [right]) => left.localeCompare(right));
+  const query = parameters.map(([name, value]) => `${encode(name)}=${encode(value)}`).join('&');
+  const canonical = `${method}\n${path}\n${query}\nhost:${host}\n\nhost\nUNSIGNED-PAYLOAD`;
+  const toSign = `GOOG4-RSA-SHA256\n${date}\n${scope}\n${createHash('sha256').update(canonical).digest('hex')}`;
+  const signature = createSign('RSA-SHA256').update(toSign).sign(privateKey, 'hex');
+  return `${path}?${query}&X-Goog-Signature=${signature}`;
+}
+
+test('Storage signed URL keys are snapshotted for daemon startup and world reset', native, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'fireemu-world-signed-key-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const keyDirectory = join(root, 'keys');
+  await mkdir(keyDirectory);
+  const publicKeyPath = join(keyDirectory, 'public.pem');
+  const { publicKey, privateKey } = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  });
+  const replacementKey = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  }).publicKey;
+  await writeFile(publicKeyPath, publicKey);
+  const world = await createTestWorld({
+    ...options,
+    cwd: root,
+    services: ['storage'],
+    config: { schemaVersion: 1, profile: 'strict', storage: { signedUrlKeys: ['keys/public.pem'] } },
+  });
+  try {
+    const bucket = `${world.projectId}.appspot.com`;
+    const object = 'snapshot-key.txt';
+    const uploadObject = async () => {
+      const upload = await fetch(`${world.endpoints.storage.url}/upload/storage/v1/b/${bucket}/o?uploadType=media&name=${object}`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer owner', 'content-type': 'text/plain' },
+        body: 'creation bytes',
+      });
+      assert.ok(upload.ok, `upload returned ${upload.status}: ${await upload.text()}`);
+    };
+    const verifySignedRead = async label => {
+      const host = new URL(world.endpoints.storage.url).host;
+      const signedUrl = signedReadUrl({ privateKey, host, bucket, object });
+      const response = await fetch(new URL(signedUrl, world.endpoints.storage.url));
+      assert.equal(response.status, 200, `signed read ${label} returned ${response.status}`);
+      assert.equal(await response.text(), 'creation bytes');
+    };
+    await uploadObject();
+    await verifySignedRead('before reset');
+
+    await writeFile(publicKeyPath, replacementKey);
+    await world.reset();
+    await uploadObject();
+    await verifySignedRead('after editing the source key and resetting');
+
+    await rm(publicKeyPath);
+    await world.reset();
+    await uploadObject();
+    await verifySignedRead('after deleting the source key and resetting');
+  } finally {
+    await world.dispose();
+  }
+});
 
 async function uiConfig(world) {
   const response = await fetch(world.uiUrl);

@@ -300,9 +300,8 @@ fn cors(
 }
 
 /// The bucket CORS configuration that decides the CORS headers of a request: under the strict
-/// profile, the one `storage.cors` lists for the request's bucket. The Firebase API sends its own
-/// CORS headers on everything but its media reads (the answers a download URL serves), so only
-/// those follow the bucket's configuration there.
+/// profile, the one `storage.cors` lists for an XML or Firebase media request. The JSON API has
+/// its own default CORS policy and does not consult the bucket configuration.
 fn bucket_cors_for(
     state: &StorageState,
     method: &str,
@@ -313,14 +312,7 @@ fn bucket_cors_for(
         return None;
     }
     let (bucket, firebase, json_api) = crate::storage::cors_bucket(method, path)?;
-    // C6-C8 recorded JSON API CORS only with nonempty bucket rules. Absent and empty entries retain the base behavior.
-    if json_api
-        && crate::storage::is_recorded_json_cors_shape(method, path)
-        && state
-            .rules
-            .bucket_cors(&bucket)
-            .is_some_and(|cors| !cors.is_empty())
-    {
+    if json_api {
         return None;
     }
     if firebase
@@ -513,19 +505,10 @@ async fn respond(
         req.uri().query().unwrap_or(""),
     );
     let json_api_cors = state.is_strict()
-        && crate::storage::is_recorded_json_cors_shape(req.method().as_str(), req.uri().path())
-        && crate::storage::cors_bucket(req.method().as_str(), req.uri().path()).is_some_and(
-            |(bucket, _, json_api)| {
-                json_api
-                    && state
-                        .rules
-                        .bucket_cors(&bucket)
-                        .is_some_and(|cors| !cors.is_empty())
-            },
-        );
+        && crate::storage::is_json_api_request(req.method().as_str(), req.uri().path());
     if req.method() == hyper::Method::OPTIONS {
         if json_api_cors {
-            // RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, case C8): JSON API preflight with nonempty bucket CORS rules.
+            // The JSON API's built-in CORS policy applies regardless of bucket storage.cors.
             let mut builder = Response::builder()
                 .status(200)
                 .header("content-type", "application/octet-stream")
@@ -781,24 +764,36 @@ async fn respond(
     let body = body_of(&response);
     let mut response_headers = response.headers;
     if let Some(origin) = origin.as_deref().filter(|_| json_api_cors) {
-        // RECORDED (STORAGE-STRICTNESS-OBS run ss-48adbd8e, cases C6-C7): object GETs (metadata and media) only;
-        // replace only CORS headers and keep the route's base JSON layout, caching and other framing.
+        // Preserve recorded object-read expose headers while applying the JSON API's shared CORS
+        // defaults to every JSON route. This changes only CORS headers, not route framing.
         let media = request_method == "GET"
             && crate::storage::query_params(&trace_query)
                 .get("alt")
                 .map(String::as_str)
                 == Some("media");
         response_headers.retain(|(name, _)| !name.eq_ignore_ascii_case("vary"));
-        response_headers = with_bucket_cors(response_headers, Some(vec![
+        let mut json_headers = vec![
             ("access-control-allow-origin".to_owned(), origin.to_owned()),
-            ("access-control-allow-credentials".to_owned(), "true".to_owned()),
+            (
+                "access-control-allow-credentials".to_owned(),
+                "true".to_owned(),
+            ),
             ("vary".to_owned(), "Origin, X-Origin".to_owned()),
-            ("access-control-expose-headers".to_owned(), match (media, request_method.as_str()) {
+        ];
+        let exposed = if crate::storage::is_recorded_json_cors_shape(&request_method, &trace_path) {
+            match (media, request_method.as_str()) {
                 (true, _) => "Cache-Control, Content-Disposition, Content-Length, Content-Type, Date, ETag, Expires, Last-Modified, Pragma, Server, Transfer-Encoding, Vary, X-GUploader-UploadID, X-Goog-Gcs-Base-Ts, X-Goog-Generation, X-Goog-Hash, X-Goog-Metageneration, X-Google-Trace",
                 (_, "GET") => "Cache-Control, Content-Length, Content-Type, Date, ETag, Expires, Server, Transfer-Encoding, Vary, X-GUploader-UploadID, X-Goog-Gcs-Base-Ts, X-Google-Trace",
                 _ => EXPOSED_HEADERS,
-            }.to_owned()),
-        ]));
+            }
+        } else {
+            EXPOSED_HEADERS
+        };
+        json_headers.push((
+            "access-control-expose-headers".to_owned(),
+            exposed.to_owned(),
+        ));
+        response_headers = with_bucket_cors(response_headers, Some(json_headers));
     }
     if let Some(configured) = &bucket_cors {
         let mut matched = origin

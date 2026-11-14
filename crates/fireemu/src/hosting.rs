@@ -1703,6 +1703,14 @@ mod redirect_tests {
     use proptest::prelude::*;
     use serde_json::json;
 
+    #[test]
+    fn an_empty_hosting_array_reports_the_site_count_error() {
+        assert_eq!(
+            Config::parse_many(&json!([]), Path::new("/project")),
+            Err("hosting must contain at least one site".to_owned())
+        );
+    }
+
     fn location(destination: &str, raw_path: &str, raw_query: &str) -> Option<Result<String, ()>> {
         let rule = json!({"source": "/go/:name", "destination": destination, "type": 302});
         let decoded = files::decode_uri(raw_path).expect("well-formed test path");

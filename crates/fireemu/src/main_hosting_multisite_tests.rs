@@ -151,3 +151,71 @@ async fn an_overflowing_secondary_port_releases_the_primary_listener() {
         .contains("no available Hosting site port"));
     assert!(std::net::TcpListener::bind(format!("127.0.0.1:{primary_port}")).is_ok());
 }
+
+#[tokio::test]
+async fn a_secondary_site_skips_a_configured_service_port() {
+    let mut cfg = multisite(hosting_only("127.0.0.1:49000".to_owned(), true));
+    cfg.firestore_addr = "127.0.0.1:49005".to_owned();
+    let listeners = bind_hosting(&cfg, &Selection::parse("hosting").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(listeners[0].local_addr().unwrap().port(), 49000);
+    assert_eq!(listeners[1].local_addr().unwrap().port(), 49006);
+}
+
+#[tokio::test]
+async fn a_busy_secondary_site_port_retries_the_next_candidate() {
+    let _busy = std::net::TcpListener::bind("127.0.0.1:65534").unwrap();
+    let cfg = multisite(hosting_only("127.0.0.1:65529".to_owned(), true));
+    let listeners = bind_hosting(&cfg, &Selection::parse("hosting").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(listeners[1].local_addr().unwrap().port(), 65535);
+}
+
+#[tokio::test]
+async fn a_busy_maximum_secondary_site_port_preserves_the_bind_error() {
+    let _busy = std::net::TcpListener::bind("127.0.0.1:65535").unwrap();
+    let bind_error = std::net::TcpListener::bind("127.0.0.1:65535").unwrap_err();
+    assert_eq!(bind_error.kind(), std::io::ErrorKind::AddrInUse);
+    let cfg = multisite(hosting_only("127.0.0.1:65530".to_owned(), true));
+    let error = bind_hosting(&cfg, &Selection::parse("hosting").unwrap())
+        .await
+        .unwrap_err();
+    assert_eq!(error, format!("bind 127.0.0.1:65535: {bind_error}"));
+    assert!(std::net::TcpListener::bind("127.0.0.1:65530").is_ok());
+}
+
+#[test]
+fn hub_reserved_ports_belong_only_to_multisite_hosting() {
+    let primary = "127.0.0.1:5000".parse().unwrap();
+    let secondary = "127.0.0.1:5005".parse().unwrap();
+    for sites in [vec![], vec![primary], vec![primary, secondary]] {
+        let addrs = BoundAddrs {
+            firestore: None,
+            auth: None,
+            storage: None,
+            functions: None,
+            hosting: Some(primary),
+            hosting_sites: sites.clone(),
+            eventarc: None,
+            tasks: None,
+            pubsub: None,
+            database: None,
+            hub: Some("127.0.0.1:4400".parse().unwrap()),
+            ui: None,
+            logging: None,
+            control: "127.0.0.1:9000".parse().unwrap(),
+        };
+        let entries = hub_emulators(&addrs);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].name, "hosting");
+        assert_eq!(entries[0].addr, primary);
+        assert_eq!(
+            entries[0].reserved_ports,
+            (sites.len() > 1).then(|| vec![5005])
+        );
+        assert_eq!(entries[1].name, "hub");
+        assert_eq!(entries[1].reserved_ports, None);
+    }
+}

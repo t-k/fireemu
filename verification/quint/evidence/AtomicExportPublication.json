@@ -992,7 +992,7 @@
     },
     "crates/fireemu-adapter-http/src/storage.rs": {
       "kind": "sha256",
-      "value": "bb10ddae599db0ea3e6bceaab6c7613798ca317a1ab4d9ca236da9cd4505178e"
+      "value": "3b67bda7d86578c6fe6e791a7332e0591c41e5b027cc0d8ee4c61210b1855ba2"
     },
     "crates/fireemu-adapter-http/src/storage_cors.rs": {
       "kind": "sha256",
@@ -1004,7 +1004,7 @@
     },
     "crates/fireemu-adapter-http/src/storage_server.rs": {
       "kind": "sha256",
-      "value": "679d6db55ab39aac2d4f122486b432f3698439b1d2bb4991daf29cb419f22e04"
+      "value": "1e248d16ad132951a8794ee614507d4084c0792157294492177d8b60f8078e0f"
     },
     "crates/fireemu-adapter-http/src/storage_signature.rs": {
       "kind": "sha256",

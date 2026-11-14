@@ -222,34 +222,23 @@ impl GatewayService {
     /// Read guard for the local backend (runs inside the read's critical section, after
     /// admission: a caller from a previous epoch is refused there).
     fn read_guard<'a>(&'a self, caller: &'a Caller) -> crate::rules::BoxedReadGuard<'a> {
-        let inner = crate::rules::read_guard(self.rules.as_ref(), &caller.principal);
-        let Some(local) = self.local_backend() else {
-            return inner;
-        };
-        let barrier = local.barrier();
-        let epoch = caller.epoch;
-        Box::new(move |db, version, check| {
-            same_epoch(&barrier, epoch)?;
-            inner(db, version, check)
-        })
+        crate::rules::unary_read_guard(
+            self.rules.as_ref(),
+            &caller.principal,
+            self.local_backend().cloned(),
+            caller.epoch,
+        )
     }
 
     /// Write guard for the local backend (runs inside the commit critical section, after
     /// admission: a caller from a previous epoch is refused there).
     fn write_guard<'a>(&'a self, caller: &'a Caller) -> crate::rules::BoxedWriteGuard<'a> {
-        let inner = crate::rules::write_guard(self.rules.as_ref(), &caller.principal);
-        let Some(local) = self.local_backend() else {
-            return inner;
-        };
-        let barrier = local.barrier();
-        let epoch = caller.epoch;
-        let actor = crate::local::Actor::from_principal(&caller.principal);
-        let local = local.clone();
-        Box::new(move |db, writes, now| {
-            same_epoch(&barrier, epoch)?;
-            local.set_actor(actor.clone());
-            inner(db, writes, now)
-        })
+        crate::rules::unary_write_guard(
+            self.rules.as_ref(),
+            &caller.principal,
+            self.local_backend().cloned(),
+            caller.epoch,
+        )
     }
 
     fn client(&self) -> Result<FirestoreClient<Channel>, Status> {

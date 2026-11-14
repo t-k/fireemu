@@ -22,6 +22,8 @@ mod admin_inventory_tests;
 mod pipeline_selector_tests;
 #[cfg(test)]
 mod transaction_tests;
+#[cfg(test)]
+mod unary_guard_tests;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -740,26 +742,21 @@ impl RestState {
     }
 
     fn write_guard<'a>(&'a self, caller: &'a Caller) -> rules::BoxedWriteGuard<'a> {
-        let inner = rules::write_guard(self.rules.as_ref(), &caller.principal);
-        let barrier = self.local.barrier();
-        let epoch = caller.epoch;
-        let actor = crate::local::Actor::from_principal(&caller.principal);
-        let local = self.local.clone();
-        Box::new(move |db, writes, now| {
-            rules::same_epoch(&barrier, epoch)?;
-            local.set_actor(actor.clone());
-            inner(db, writes, now)
-        })
+        rules::unary_write_guard(
+            self.rules.as_ref(),
+            &caller.principal,
+            Some(self.local.clone()),
+            caller.epoch,
+        )
     }
 
     fn read_guard<'a>(&'a self, caller: &'a Caller) -> rules::BoxedReadGuard<'a> {
-        let inner = rules::read_guard(self.rules.as_ref(), &caller.principal);
-        let barrier = self.local.barrier();
-        let epoch = caller.epoch;
-        Box::new(move |db, version, check| {
-            rules::same_epoch(&barrier, epoch)?;
-            inner(db, version, check)
-        })
+        rules::unary_read_guard(
+            self.rules.as_ref(),
+            &caller.principal,
+            Some(self.local.clone()),
+            caller.epoch,
+        )
     }
 
     /// The App Check decision of one REST request (specification sections 12 and 13.1).

@@ -116,6 +116,8 @@
     "crates/fireemu-adapter-grpc/src/rest/pipeline_selector_tests.rs",
     "crates/fireemu-adapter-grpc/src/rest/transaction_tests.rs",
     "crates/fireemu-adapter-grpc/src/rest/transcode.rs",
+    "crates/fireemu-adapter-grpc/src/rest/unary_guard_tests.rs",
+    "crates/fireemu-adapter-grpc/src/rest/unary_guards.tsv",
     "crates/fireemu-adapter-grpc/src/rules.rs",
     "crates/fireemu-adapter-grpc/src/serve.rs",
     "crates/fireemu-adapter-grpc/src/service.rs",
@@ -820,7 +822,7 @@
     },
     "crates/fireemu-adapter-grpc/src/rest/mod.rs": {
       "kind": "sha256",
-      "value": "63fb2f7e68b996ca516dcdb0ec19982ee9e212e75c96b01df3743aaeade09d00"
+      "value": "3d765901169b63d24afc8c00b82ed8201eccb2b9e0cbd01c4923b6b3a5a87f05"
     },
     "crates/fireemu-adapter-grpc/src/rest/pipeline_json.rs": {
       "kind": "sha256",
@@ -842,9 +844,17 @@
       "kind": "sha256",
       "value": "0aae1c523eedba83a454f4d41edb54b22f4dd1ee9beeb72e5312b6f7784069af"
     },
+    "crates/fireemu-adapter-grpc/src/rest/unary_guard_tests.rs": {
+      "kind": "sha256",
+      "value": "6889fd906bca8ee19353d3810a5e3ade81c8ef9c07770059178be1e782973585"
+    },
+    "crates/fireemu-adapter-grpc/src/rest/unary_guards.tsv": {
+      "kind": "sha256",
+      "value": "0033df11f75970382d92490ee06ed7c85d2585ebbf02bba4223838e93e429bab"
+    },
     "crates/fireemu-adapter-grpc/src/rules.rs": {
       "kind": "sha256",
-      "value": "097e0b09259296e590125dd1587b5b3d49f768826635103614611e8371d00558"
+      "value": "ba46ef7d1f4b8ecd429113d87db085a094ec0a2f939638f44f7150451e049c72"
     },
     "crates/fireemu-adapter-grpc/src/serve.rs": {
       "kind": "sha256",
@@ -852,7 +862,7 @@
     },
     "crates/fireemu-adapter-grpc/src/service.rs": {
       "kind": "sha256",
-      "value": "d0fb43d48eb4833efb31745c6f4c3e75acf59c75622980535867e6f86b9b99e0"
+      "value": "576f58b110de9eb6641cf35cff9758f08fd144386a5aeff50258bc0cf077775c"
     },
     "crates/fireemu-adapter-grpc/src/service/explain.rs": {
       "kind": "sha256",

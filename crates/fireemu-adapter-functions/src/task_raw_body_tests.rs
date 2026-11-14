@@ -100,8 +100,18 @@ proptest::proptest! {
     }
 }
 
-#[test]
-fn generated_pict_rows_drive_body_and_view_contracts() {
+#[tokio::test]
+async fn generated_pict_rows_drive_body_and_view_contracts() {
+    use crate::http::FunctionsHttpProfile;
+    use crate::runtime::{CodebaseSpec, FunctionsConfig, FunctionsRuntime};
+    use crate::task_scheduler::{NameState, TaskScheduler};
+    use fireemu_core_functions::manifest::{
+        FunctionGeneration, FunctionManifest, FunctionSpec, PlatformOptions, TaskRateLimits,
+        TaskRetryConfig, Trigger,
+    };
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
     const CASES: &str = include_str!("../tests/data/task-get-raw-body-pict.tsv");
     let mut lines = CASES.lines();
     assert_eq!(lines.next(), Some("Operation\tBody\tView\tProfile"));
@@ -119,36 +129,147 @@ fn generated_pict_rows_drive_body_and_view_contracts() {
             "empty" => b"".as_slice(),
             other => panic!("unexpected body value {other}"),
         };
-        let request = enqueue_body(&encode(raw));
-        let task = crate::tasks::accept("p", "us-central1", "q", "http://function", &request, 1)
-            .expect("PICT body is base64");
-        assert_eq!(task.delivery_body(), raw, "{line}");
-        if *profile == "emulator" && *body_kind != "json" {
-            assert!(task.body_json_error.is_some(), "{line}");
+        let profile = match *profile {
+            "strict" => FunctionsHttpProfile::Strict,
+            "emulator" => FunctionsHttpProfile::Emulator,
+            other => panic!("unexpected profile value {other}"),
+        };
+        let manifest = FunctionManifest {
+            functions: vec![FunctionSpec {
+                name: "q".to_owned(),
+                region: "us-central1".to_owned(),
+                entry_point: "q".to_owned(),
+                trigger: Trigger::TaskQueue {
+                    retry: TaskRetryConfig::default(),
+                    rate_limits: TaskRateLimits::default(),
+                },
+                timeout_seconds: 60,
+                retry: false,
+                generation: FunctionGeneration::Second,
+                concurrency: None,
+                platform_options: PlatformOptions::default(),
+            }],
+            ignored: Vec::new(),
+        };
+        let now = Instant::now();
+        let mut scheduler = TaskScheduler::from_manifest(&manifest, now);
+        let runtime = FunctionsRuntime::with_codebases(
+            vec![CodebaseSpec {
+                name: "default".to_owned(),
+                function: None,
+                manifest,
+                runner: Arc::new(crate::runner::Runner::unstarted("pict")),
+                spawn: None,
+                cleanup_dir: None,
+            }],
+            FunctionsConfig {
+                project: "p".to_owned(),
+                functions_host: Some("127.0.0.1:5001".to_owned()),
+                ..FunctionsConfig::for_tests(1, "test-only".to_owned())
+            },
+            Arc::new(Mutex::new(fireemu_core_session::clock::VirtualClock::new(
+                fireemu_core_types::time::LogicalInstant::from_unix_seconds(1_788_004_860),
+            ))),
+            profile,
+        )
+        .unwrap();
+        let mut request = enqueue_body(&encode(raw));
+        let name = "projects/p/locations/us-central1/queues/q/tasks/pict";
+        request["task"]["name"] = json!(if *operation == "get_missing" {
+            "projects/p/locations/us-central1/queues/q/tasks/other"
+        } else {
+            name
+        });
+        let admitted = runtime.enqueue_task("p", "us-central1", "q", &request);
+        if profile == FunctionsHttpProfile::Emulator && *body_kind != "json" {
+            let error = admitted.expect_err("emulator admission rejects non-JSON bodies");
+            assert_eq!(error.status, 400, "{line}");
+            assert_eq!(
+                error.body,
+                format!(
+                    "the task's httpRequest body is not JSON: {}",
+                    serde_json::from_slice::<Value>(raw).unwrap_err()
+                ),
+                "{line}"
+            );
+        } else {
+            admitted.unwrap_or_else(|error| panic!("{line}: {}", error.body));
+            let task =
+                crate::tasks::accept("p", "us-central1", "q", "http://function", &request, 1)
+                    .unwrap();
+            assert_eq!(task.delivery_body(), raw, "{line}");
+            scheduler
+                .enqueue_at("q", task, TaskRetryConfig::default(), 256, now)
+                .unwrap();
         }
-        let target = match *view {
-            "BASIC" => "/task?responseView=BASIC",
-            "FULL" => "/task?responseView=FULL",
-            "invalid_or_absent" => "/task",
+        if *operation == "get_dispatched" {
+            let (dispatches, _) = scheduler.dispatch_ready(
+                now + Duration::from_secs(1),
+                "p",
+                |_| Some("us-central1".to_owned()),
+                1,
+            );
+            assert_eq!(dispatches.len(), 1, "{line}");
+            scheduler.record_dispatch_attempt(&dispatches[0], "2026-08-29T10:41:00Z".to_owned());
+        }
+        // The combined PICT level represents both query cases; execute both for every such row.
+        let targets: &[&str] = match *view {
+            "BASIC" => &["/task?responseView=BASIC"],
+            "FULL" => &["/task?responseView=FULL"],
+            "invalid_or_absent" => &["/task?responseView=bad", "/task"],
             other => panic!("unexpected view value {other}"),
         };
-        let full = crate::tasks::response_view(target).unwrap_or(false);
-        if *operation != "get_missing" {
-            let observation = crate::task_scheduler::TaskObservation {
-                task: std::sync::Arc::new(task),
-                schedule_time: None,
-                dispatch_count: 0,
-                response_count: 0,
-                first_attempt: None,
-                last_attempt: None,
-            };
+        for target in targets {
+            let parsed = crate::tasks::response_view(target);
+            if target.contains("=bad") {
+                assert!(parsed.is_err(), "{line}");
+                continue;
+            }
+            let full = parsed.unwrap();
+            assert_eq!(full, *view == "FULL", "{line}");
+            let observation = scheduler.get_task("q", name, now);
+            if *operation == "get_missing"
+                || (profile == FunctionsHttpProfile::Emulator && *body_kind != "json")
+            {
+                assert_eq!(observation.unwrap_err(), NameState::Free, "{line}");
+                let error = runtime
+                    .get_task_strict("p", "us-central1", "q", "pict", full)
+                    .unwrap_err();
+                assert_eq!(error.status, 404, "{line}");
+                assert_eq!(
+                    serde_json::from_str::<Value>(&error.body).unwrap(),
+                    json!({"error": {
+                        "code": 404, "message": "Requested entity was not found.", "status": "NOT_FOUND"
+                    }}),
+                    "{line}"
+                );
+                continue;
+            }
+            let observation = observation.unwrap();
             let answer = crate::tasks_production::get_answer(&observation, full);
+            if *operation == "get_dispatched" {
+                assert_eq!(answer["dispatchCount"], 1, "{line}");
+                assert_eq!(
+                    answer["firstAttempt"]["dispatchTime"], "2026-08-29T10:41:00Z",
+                    "{line}"
+                );
+                assert!(
+                    answer["lastAttempt"].get("responseTime").is_none(),
+                    "{line}"
+                );
+            } else {
+                assert!(answer.get("dispatchCount").is_none(), "{line}");
+                assert!(answer.get("firstAttempt").is_none(), "{line}");
+                assert!(answer.get("lastAttempt").is_none(), "{line}");
+            }
+            assert!(answer.get("responseCount").is_none(), "{line}");
             if full {
                 assert_eq!(answer["httpRequest"]["body"], encode(raw), "{line}");
             } else {
                 assert!(answer["httpRequest"].get("body").is_none(), "{line}");
             }
         }
+        runtime.shutdown().await;
         rows += 1;
     }
     assert_eq!(rows, 21);

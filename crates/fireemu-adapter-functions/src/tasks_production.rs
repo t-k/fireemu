@@ -850,14 +850,18 @@ pub(crate) fn get_answer(
         result.insert("createTime".to_owned(), json!(create_time));
     }
     result.insert("dispatchDeadline".to_owned(), json!(task.dispatch_deadline));
-    result.insert(
-        "dispatchCount".to_owned(),
-        json!(observation.dispatch_count),
-    );
-    result.insert(
-        "responseCount".to_owned(),
-        json!(observation.response_count),
-    );
+    if observation.dispatch_count != 0 {
+        result.insert(
+            "dispatchCount".to_owned(),
+            json!(observation.dispatch_count),
+        );
+    }
+    if observation.response_count != 0 {
+        result.insert(
+            "responseCount".to_owned(),
+            json!(observation.response_count),
+        );
+    }
     if let Some(attempt) = &observation.first_attempt {
         result.insert(
             "firstAttempt".to_owned(),

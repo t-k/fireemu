@@ -1,5 +1,6 @@
 import "./record/isolation.mjs";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -591,4 +592,35 @@ test("a layout rule that changed something is counted although the part ends as 
   );
   assert.equal(result.rows[0].structure, "KNOWN_DIFFERENCE");
   assert.equal(result.layoutRules.find((rule) => rule.id === "numeric-id-length").rows, 1);
+});
+
+test("recorded getTask counters, errors and layout are compared without a blanket exclusion", () => {
+  for (const pass of [1, 2]) {
+    const recording = JSON.parse(readFileSync(new URL(`../../task-queue-production-pass-${pass}.json`, import.meta.url), "utf8"));
+    for (const key of ["get-dup-sched", "get-dup-first"]) {
+      const original = recording.cases[key];
+      assert.equal(verdictOf({ [key]: original }, { [key]: original }, { knownDifferences: KNOWN_DIFFERENCES }).structure, "MATCH");
+      const changes = key === "get-dup-sched"
+        ? [
+            (row) => { row.admission.body.dispatchCount = 0; },
+            (row) => { row.admission.body.responseCount = 0; },
+            (row) => { row.admission.body.view = "FULL"; },
+            (row) => { row.admission.body.httpRequest.oidcToken.audience = "wrong"; },
+          ]
+        : [(row) => { row.admission.error.message = "Requested entity was not found."; }];
+      changes.push(
+        (row) => { row.admission.status = 405; },
+        (row) => { row.admission.layout.style = "compact"; },
+      );
+      for (const change of changes) {
+        const changed = structuredClone(original);
+        change(changed);
+        assert.equal(verdictOf({ [key]: original }, { [key]: changed }, { knownDifferences: KNOWN_DIFFERENCES }).structure, "MISMATCH", `${pass}: ${key}`);
+      }
+    }
+    const pending = recording.cases["get-dup-sched"];
+    const local = structuredClone(pending);
+    local.admission.body.httpRequest.url = "http://127.0.0.1:5001/demo/us-central1/tqdef";
+    assert.equal(verdictOf({ "get-dup-sched": pending }, { "get-dup-sched": local }, { knownDifferences: KNOWN_DIFFERENCES }).structure, "KNOWN_DIFFERENCE");
+  }
 });

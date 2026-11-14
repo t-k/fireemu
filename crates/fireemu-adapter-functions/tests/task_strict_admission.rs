@@ -1482,8 +1482,8 @@ async fn strict_get_task_returns_pending_task_with_basic_and_full_views() {
     let (pending_status, _, pending_text) = wire(addr, "GET", &task_path, b"").await;
     assert_eq!(pending_status, 200, "{pending_text}");
     let pending: Value = serde_json::from_str(&pending_text).unwrap();
-    assert_eq!(pending["dispatchCount"], 0);
-    assert_eq!(pending["responseCount"], 0);
+    assert!(pending.get("dispatchCount").is_none());
+    assert!(pending.get("responseCount").is_none());
     assert!(pending.get("firstAttempt").is_none());
     assert_eq!(pending["scheduleTime"], schedule_time);
     assert_eq!(pending["dispatchDeadline"], "15.500s");
@@ -1504,7 +1504,7 @@ async fn strict_get_task_returns_pending_task_with_basic_and_full_views() {
     let basic: Value = serde_json::from_str(&basic_text).unwrap();
     assert_eq!(basic["name"], name);
     assert_eq!(basic["dispatchCount"], 1);
-    assert_eq!(basic["responseCount"], 0);
+    assert!(basic.get("responseCount").is_none());
     assert!(basic["firstAttempt"].get("dispatchTime").is_some());
     assert!(basic["lastAttempt"].get("responseTime").is_none());
     assert!(basic["httpRequest"].get("body").is_none());
@@ -1759,8 +1759,8 @@ async fn capacity_waits_are_not_counted_as_task_attempts() {
     let (status, _, text) = wire(addr, "GET", &path, b"").await;
     assert_eq!(status, 200, "{text}");
     let blocked: Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(blocked["dispatchCount"], 0);
-    assert_eq!(blocked["responseCount"], 0);
+    assert!(blocked.get("dispatchCount").is_none());
+    assert!(blocked.get("responseCount").is_none());
 
     std::fs::write(release_task_b, "").unwrap();
     for blocker in blockers {
@@ -1782,10 +1782,191 @@ async fn capacity_waits_are_not_counted_as_task_attempts() {
     assert_eq!(status, 200, "{text}");
     let delivered: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(delivered["dispatchCount"], 1);
-    assert_eq!(delivered["responseCount"], 0);
+    assert!(delivered.get("responseCount").is_none());
 
     std::fs::write(release_task_a, "").unwrap();
     h.idle().await;
     server.abort();
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn strict_get_distinguishes_recent_completion_and_deletion_from_unknown_names() {
+    for reuse in [
+        NameReuse::Immediate,
+        NameReuse::Retained,
+        NameReuse::Window(Duration::from_secs(3600)),
+    ] {
+        let h = start(
+            "strict-get-recent",
+            FunctionsHttpProfile::Strict,
+            reuse,
+            600,
+        )
+        .await;
+        let (addr, server) = tasks_listener(&h).await;
+        let completed = body_of(&json!({"name": format!("{BASE}/tasks/completed")}));
+        h.runtime
+            .enqueue_task("demo-app", "us-central1", "taskA", &completed)
+            .unwrap();
+        h.idle().await;
+        let deleted = body_of(&json!({
+            "name": format!("{BASE}/tasks/deleted"),
+            "scheduleTime": (chrono::Utc::now() + chrono::Duration::days(7)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        }));
+        h.runtime
+            .enqueue_task("demo-app", "us-central1", "taskA", &deleted)
+            .unwrap();
+        assert_eq!(
+            wire(addr, "DELETE", &format!("{TASKS}/deleted"), b"")
+                .await
+                .0,
+            200
+        );
+        for recording in [
+            include_str!("../../../conformance/task-queue-production-pass-1.json"),
+            include_str!("../../../conformance/task-queue-production-pass-2.json"),
+        ] {
+            let recording: Value = serde_json::from_str(recording).unwrap();
+            for (id, case) in [
+                ("completed", "get-dup-first"),
+                ("deleted", "get-dup-first"),
+                ("never-existed", "del-missing"),
+            ] {
+                let expected = &recording["cases"][case]["admission"];
+                let (status, headers, text) =
+                    wire(addr, "GET", &format!("{TASKS}/{id}"), b"").await;
+                assert_eq!(
+                    status,
+                    expected["status"].as_u64().unwrap() as u16,
+                    "{reuse:?}: {id}"
+                );
+                assert!(
+                    headers.contains(expected["layout"]["contentType"].as_str().unwrap()),
+                    "{headers}"
+                );
+                assert_eq!(
+                    serde_json::from_str::<Value>(&text).unwrap(),
+                    json!({"error": expected["error"]}),
+                    "{reuse:?}: {id}"
+                );
+                assert_eq!(text, format!("{{\n  \"error\": {{\n    \"code\": 404,\n    \"message\": {},\n    \"status\": \"NOT_FOUND\"\n  }}\n}}\n", expected["error"]["message"]));
+            }
+        }
+        if reuse == NameReuse::Immediate {
+            h.runtime
+                .enqueue_task("demo-app", "us-central1", "taskA", &deleted)
+                .expect("lookup history does not reserve a reusable name");
+            assert_eq!(
+                wire(addr, "GET", &format!("{TASKS}/deleted"), b"").await.0,
+                200
+            );
+        }
+        server.abort();
+        let _ = server.await;
+        h.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn strict_raw_bodies_reach_the_function_with_exact_bytes_and_content_type() {
+    let h = start(
+        "strict-raw-delivery",
+        FunctionsHttpProfile::Strict,
+        NameReuse::Immediate,
+        600,
+    )
+    .await;
+    for (index, (raw, content_type)) in [
+        (b"".as_slice(), "application/octet-stream"),
+        (
+            "plain text\r\nこんにちは".as_bytes(),
+            "text/plain; charset=utf-8",
+        ),
+        (
+            &[0xff, 0xfe, 0x00, 0x7f, b'{', b'}'],
+            "application/octet-stream",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let body = json!({"task": {"name": format!("{BASE}/tasks/raw-{index}"), "httpRequest": {
+            "url": "", "body": base64(raw), "headers": {"Content-Type": content_type}
+        }}});
+        h.runtime
+            .enqueue_task("demo-app", "us-central1", "taskA", &body)
+            .unwrap();
+        h.idle().await;
+        let received: Vec<Value> = std::fs::read_to_string(&h.log)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(received.len(), index + 1);
+        let received = &received[index];
+        let expected_hex: String = raw.iter().map(|byte| format!("{byte:02x}")).collect();
+        assert_eq!(received["bodyHex"], expected_hex);
+        assert_eq!(received["headers"]["content-type"], content_type);
+    }
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn strict_raw_body_size_boundaries_include_headers_and_base64_padding() {
+    let h = start(
+        "strict-raw-size",
+        FunctionsHttpProfile::Strict,
+        NameReuse::Immediate,
+        600,
+    )
+    .await;
+    let schedule_time = (chrono::Utc::now() + chrono::Duration::days(7))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    // A text/plain header costs 22 bytes. The existing size estimate rounds decoded bytes up to a base64 group.
+    // 1,048,554 body bytes plus that header is exactly one mebibyte; padding does not change this estimate.
+    for (index, (size, extra_header, accepted)) in [
+        (1_048_551, false, true),
+        (1_048_552, false, true),
+        (1_048_553, false, true),
+        (1_048_554, false, true),
+        (1_048_555, false, false),
+        (1_048_556, false, false),
+        (1_048_557, false, false),
+        (1_048_554, true, false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for byte in [b'x', 0xff] {
+            let mut body = json!({"task": {
+                "name": format!("{BASE}/tasks/size-{index}-{byte}"), "scheduleTime": schedule_time,
+                "httpRequest": {"url": "", "body": base64(&vec![byte; size]), "headers": {"Content-Type": "text/plain"}}
+            }});
+            if extra_header {
+                body["task"]["httpRequest"]["headers"]["x"] = json!("");
+            }
+            let result = h
+                .runtime
+                .enqueue_task("demo-app", "us-central1", "taskA", &body);
+            if accepted {
+                result.unwrap_or_else(|error| panic!("size {size}: {}", error.body));
+                h.runtime
+                    .delete_task_strict(
+                        "demo-app",
+                        "us-central1",
+                        "taskA",
+                        &format!("size-{index}-{byte}"),
+                    )
+                    .unwrap();
+            } else {
+                let error = result.unwrap_err();
+                assert_eq!(error.status, 400);
+                let body: Value = serde_json::from_str(&error.body).unwrap();
+                assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
+                assert_eq!(body["error"]["message"], "Task size too large");
+            }
+        }
+    }
     h.stop().await;
 }

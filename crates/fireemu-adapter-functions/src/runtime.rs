@@ -4028,14 +4028,24 @@ impl FunctionsRuntime {
             return Err(missing());
         }
         let name = format!("projects/{project}/locations/{location}/queues/{queue}/tasks/{id}");
-        let inner = self.inner.lock().map_err(|_| EnqueueRefusal {
+        let now_task = self.task_now();
+        let mut inner = self.inner.lock().map_err(|_| EnqueueRefusal {
             status: 500,
             body: "runtime poisoned".to_owned(),
         })?;
         let task = inner
             .task_scheduler
-            .get_task(queue, &name)
-            .ok_or_else(missing)?;
+            .get_task(queue, &name, now_task)
+            .map_err(|state| {
+                let mut refusal = Refusal::task_not_found();
+                if state == crate::task_scheduler::NameState::Finished {
+                    refusal.message = "The task no longer exists, though a task with this name existed recently. The task either successfully completed or was deleted.".to_owned();
+                }
+                EnqueueRefusal {
+                    status: refusal.http,
+                    body: refusal.body().to_string(),
+                }
+            })?;
         Ok(crate::tasks_production::get_answer(&task, full))
     }
 

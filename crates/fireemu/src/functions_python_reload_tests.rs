@@ -1,10 +1,22 @@
 use std::path::Path;
 
+fn scratch(label: &str) -> std::path::PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    loop {
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let root =
+            std::env::temp_dir().join(format!("fireemu-{label}-{}-{id}", std::process::id()));
+        match std::fs::create_dir(&root) {
+            Ok(()) => return root,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => panic!("cannot create scratch directory: {error}"),
+        }
+    }
+}
+
 #[test]
 fn python_codebases_are_supervised_for_source_reload() {
-    let root =
-        std::env::temp_dir().join(format!("fireemu-python-reload-test-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    let root = scratch("python-reload-test");
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("requirements.txt"), "firebase-functions\n").unwrap();
     let codebase = crate::config::FunctionsCodebase {
@@ -20,11 +32,7 @@ fn python_codebases_are_supervised_for_source_reload() {
 #[cfg(unix)]
 #[tokio::test]
 async fn python_reload_snapshot_links_the_venv_and_excludes_it_from_the_copy() {
-    let root = std::env::temp_dir().join(format!(
-        "fireemu-python-snapshot-test-{}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&root);
+    let root = scratch("python-snapshot-test");
     let source = root.join("source");
     std::fs::create_dir_all(source.join("venv/bin")).unwrap();
     std::fs::write(source.join("venv/bin/python"), "interpreter").unwrap();
@@ -48,10 +56,12 @@ async fn python_reload_snapshot_links_the_venv_and_excludes_it_from_the_copy() {
         super::super::snapshot_functions_source_with_linked_venv(&source, &ignores).unwrap();
     let snapshot_source = snapshot.to_path_buf();
     let venv = snapshot_source.join("venv");
-    assert!(std::fs::symlink_metadata(&venv)
-        .unwrap()
-        .file_type()
-        .is_symlink());
+    assert!(
+        std::fs::symlink_metadata(&venv)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
     assert_eq!(
         std::fs::read_link(&venv).unwrap(),
         std::fs::canonicalize(source.join("venv")).unwrap()
@@ -111,11 +121,7 @@ fn python_reload_excludes_runtime_environment_and_cache_artifacts() {
 #[cfg(unix)]
 #[test]
 fn node_reload_snapshot_keeps_python_named_runtime_assets() {
-    let root = std::env::temp_dir().join(format!(
-        "fireemu-node-cache-snapshot-{}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&root);
+    let root = scratch("node-cache-snapshot");
     let source = root.join("source");
     std::fs::create_dir_all(source.join("__pycache__")).unwrap();
     std::fs::write(source.join("__pycache__/handler.pyc"), "node asset").unwrap();
@@ -152,9 +158,7 @@ fn node_reload_snapshot_keeps_python_named_runtime_assets() {
 
 #[test]
 fn python_cache_exclusion_uses_exact_components_and_tracks_similarly_named_sources() {
-    let root =
-        std::env::temp_dir().join(format!("fireemu-python-cache-paths-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    let root = scratch("python-cache-paths");
     std::fs::create_dir_all(root.join("my__pycache__")).unwrap();
     std::fs::create_dir_all(root.join("__pycache__")).unwrap();
     std::fs::write(root.join("my__pycache__/source.py"), "one").unwrap();
@@ -201,11 +205,7 @@ async fn pict_generated_reload_cases_exercise_snapshot_and_language_behaviors() 
             .collect::<Vec<_>>()
             .try_into()
             .expect("each PICT row has four factors");
-        let root = std::env::temp_dir().join(format!(
-            "fireemu-python-reload-pict-{}-{index}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&root);
+        let root = scratch(&format!("python-reload-pict-{index}"));
         let source = root.join("source");
         std::fs::create_dir_all(&source).unwrap();
         let python = language == "Python";
@@ -297,10 +297,12 @@ async fn pict_generated_reload_cases_exercise_snapshot_and_language_behaviors() 
                     staged_venv.is_dir(),
                     "Node venv-named runtime input is copied for {row}"
                 );
-                assert!(!std::fs::symlink_metadata(&staged_venv)
-                    .unwrap()
-                    .file_type()
-                    .is_symlink());
+                assert!(
+                    !std::fs::symlink_metadata(&staged_venv)
+                        .unwrap()
+                        .file_type()
+                        .is_symlink()
+                );
             }
             snapshot.remove().await.unwrap();
         } else {

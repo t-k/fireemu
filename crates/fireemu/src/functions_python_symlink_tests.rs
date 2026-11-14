@@ -4,9 +4,12 @@ fn temp_tree(label: &str) -> std::path::PathBuf {
     let root = std::env::temp_dir().join(format!(
         "fireemu-python-link-{label}-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
     ));
-    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir(&root).unwrap();
     root
 }
 

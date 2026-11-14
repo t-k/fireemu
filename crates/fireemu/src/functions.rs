@@ -3939,9 +3939,44 @@ pub async fn start(
     }
     #[cfg(unix)]
     drop(schedule_orphan_function_snapshot_sweep(std::env::temp_dir()));
+    let mut staged_codebases = codebases.clone();
+    let mut initial_snapshots = BTreeMap::new();
+    for codebase in &mut staged_codebases {
+        if crate::python_functions::codebase_language(codebase) != RuntimeLanguage::Python {
+            continue;
+        }
+        let stamp = initial_stamps
+            .get(&codebase.codebase)
+            .ok_or_else(|| {
+                format!(
+                    "functions[{}]: missing initial source scan",
+                    codebase.codebase
+                )
+            })?
+            .as_ref()
+            .map_err(Clone::clone)?;
+        let mut retry_delay = Duration::from_millis(750);
+        let snapshot = snapshot_consistent_reload_source(
+            Path::new(&codebase.source),
+            codebase,
+            &scan_budget,
+            stamp.content_signature,
+            &mut retry_delay,
+            &mut false,
+        )
+        .await
+        .ok_or_else(|| {
+            format!(
+                "functions[{}]: initial source snapshot failed or changed during capture",
+                codebase.codebase
+            )
+        })?;
+        codebase.source = snapshot.to_string_lossy().into_owned();
+        initial_snapshots.insert(codebase.codebase.clone(), snapshot);
+    }
     let starts = launch_codebases(
         cfg,
-        &codebases,
+        &staged_codebases,
         hosts,
         runner_secret,
         callable_trusted_protocol,
@@ -3959,11 +3994,16 @@ pub async fn start(
         }
         return Err(error.clone());
     }
-    let started: Vec<fireemu_adapter_functions::runtime::CodebaseSpec> = outcomes
+    let mut started: Vec<fireemu_adapter_functions::runtime::CodebaseSpec> = outcomes
         .into_iter()
         .filter_map(Result::ok)
         .flatten()
         .collect();
+    for spec in &mut started {
+        if let Some(snapshot) = initial_snapshots.get(&spec.name) {
+            spec.cleanup_dir = snapshot.cleanup_root.clone();
+        }
+    }
     let config = functions_config(cfg, hosts.functions.clone(), runner_secret);
     // A function name two codebases both export is fatal here. The runners it collided
     // between are killed rather than left behind a daemon that refuses to serve them.
@@ -3989,6 +4029,9 @@ pub async fn start(
             return Err(e);
         }
     };
+    for snapshot in initial_snapshots.into_values() {
+        let _ = snapshot.into_path();
+    }
     if let Some(verifier) = &hosts.admin_app_check {
         runtime.set_admin_app_check(verifier.clone());
     }
@@ -12906,12 +12949,19 @@ exports.add = onCall({{}}, observe("add"));
 
     /// A scratch codebase source holding a `requirements.txt` and no `package.json`: a Python one.
     fn python_codebase(name: &str) -> (std::path::PathBuf, crate::config::FunctionsCodebase) {
-        let dir = std::env::temp_dir().join(format!(
-            "fireemu-python-start-{name}-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let dir = loop {
+            let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "fireemu-python-start-{name}-{}-{id}",
+                std::process::id()
+            ));
+            match std::fs::create_dir(&path) {
+                Ok(()) => break path,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => panic!("cannot create scratch directory: {error}"),
+            }
+        };
         std::fs::write(dir.join("requirements.txt"), "firebase-functions\n").unwrap();
         let codebase = crate::config::FunctionsCodebase {
             codebase: "py".to_owned(),

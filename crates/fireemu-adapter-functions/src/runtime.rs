@@ -1203,7 +1203,10 @@ impl RestartBudget {
 }
 
 impl Codebase {
-    fn from_spec(spec: CodebaseSpec) -> Self {
+    fn from_spec(
+        spec: CodebaseSpec,
+        cleanups: &mut BTreeMap<std::path::PathBuf, Arc<CleanupDir>>,
+    ) -> Self {
         Self {
             name: spec.name,
             function: spec.function,
@@ -1215,7 +1218,7 @@ impl Codebase {
                 revision: 0,
                 runner: spec.runner,
                 spawn: spec.spawn,
-                cleanup_dir: CodebaseGeneration::cleanup(spec.cleanup_dir),
+                cleanup_dir: CodebaseGeneration::cleanup_shared(spec.cleanup_dir, cleanups),
                 blocking_restart_ticket: None,
             }),
         }
@@ -1346,16 +1349,6 @@ impl Codebase {
 }
 
 impl CodebaseGeneration {
-    fn cleanup(path: Option<std::path::PathBuf>) -> Option<Arc<CleanupDir>> {
-        path.map(|path| {
-            Arc::new(CleanupDir(
-                path,
-                Mutex::new(true),
-                std::sync::atomic::AtomicUsize::new(1),
-            ))
-        })
-    }
-
     /// The directory of a unit of a group: one `CleanupDir` per path, one more member for each unit.
     fn cleanup_shared(
         path: Option<std::path::PathBuf>,
@@ -1688,7 +1681,13 @@ impl FunctionsRuntime {
             config,
             profile,
             clock,
-            codebases: codebases.into_iter().map(Codebase::from_spec).collect(),
+            codebases: {
+                let mut cleanups = BTreeMap::new();
+                codebases
+                    .into_iter()
+                    .map(|spec| Codebase::from_spec(spec, &mut cleanups))
+                    .collect()
+            },
             owner,
             eventarc_registry: Mutex::new(eventarc_registry),
             schedule_sweep: Mutex::new(()),

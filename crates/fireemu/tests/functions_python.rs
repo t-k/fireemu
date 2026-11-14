@@ -25,10 +25,17 @@ fn interpreter() -> PathBuf {
 }
 
 fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("fireemu-py-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    loop {
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("fireemu-py-{name}-{}-{id}", std::process::id()));
+        match std::fs::create_dir(&dir) {
+            Ok(()) => return dir,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => panic!("cannot create scratch directory: {error}"),
+        }
+    }
 }
 
 fn runner_script() -> PathBuf {
@@ -657,16 +664,8 @@ fn run_python_source_reload_scenario(with_fixed_inspector: bool) {
     std::fs::create_dir_all(&source).unwrap();
     std::fs::write(source.join("requirements.txt"), "firebase-functions\n").unwrap();
     std::os::unix::fs::symlink(fixture().join("venv"), source.join("venv")).unwrap();
-    let write_handler = |revision: &str| {
-        std::fs::write(
-            source.join("main.py"),
-            format!(
-                "import os\nfrom firebase_functions import https_fn\n@https_fn.on_request()\ndef hello(request):\n    return {{'revision': '{revision}', 'pid': os.getpid()}}\n"
-            ),
-        )
-        .unwrap();
-    };
-    write_handler("initial");
+    std::fs::write(source.join("helper.py"), "VALUE = 'last-good'\n").unwrap();
+    std::fs::write(source.join("main.py"), "from firebase_functions import https_fn\n@https_fn.on_request()\ndef hello(request):\n    import helper\n    return {'revision': helper.VALUE}\n").unwrap();
     let firebase = firebase_json(&dir, &source, None);
     let controller = r#"
 import json, os, pathlib, sys, time, urllib.request
@@ -695,14 +694,23 @@ def wait_revision(revision, old_pid=None):
             pass
         time.sleep(.1)
     raise AssertionError('timed out waiting for revision ' + revision)
+(source / 'main.py').write_text("def broken(:\n")
+time.sleep(3)
+(source / 'helper.py').write_text("VALUE =\n")
+assert get()['revision'] == 'last-good', 'generation 0 read a later edit through a lazy import'
+(source / 'helper.py').write_text("VALUE = 'last-good'\n")
+(source / 'main.py').write_text("import os\nfrom firebase_functions import https_fn\n@https_fn.on_request()\ndef hello(request):\n    return {'revision': 'initial', 'pid': os.getpid()}\n")
 initial = wait_revision('initial')
-(source / 'venv' / '.fireemu-cache-marker').write_text('changed')
+marker = source / 'venv' / ('.fireemu-cache-marker-' + source.parent.name)
+with marker.open('x') as file:
+    file.write('changed')
 (source / '__pycache__').mkdir(exist_ok=True)
 (source / '__pycache__' / 'module.pyc').write_text('root cache')
 (source / 'nested' / '__pycache__').mkdir(parents=True, exist_ok=True)
 (source / 'nested' / '__pycache__' / 'module.pyo').write_text('nested cache')
 time.sleep(2)
 assert get()['pid'] == initial['pid'], 'a venv or Python cache change restarted the Python process'
+marker.unlink()
 (source / 'main.py').write_text("import os\nfrom firebase_functions import https_fn\n@https_fn.on_request()\ndef hello(request):\n    return {'revision': 'revised', 'pid': os.getpid()}\n")
 valid = wait_revision('revised', initial['pid'])
 wait_dead(initial['pid'])

@@ -1582,8 +1582,7 @@ impl fireemu_core_rules::eval::DocumentAccess for SwapsSpillDirectory {
 /// be shortened the client is told the spill storage is unavailable (503), not that the bound was
 /// hit (402): the offset has advanced and a retry of the chunk must not be answered as a refusal.
 #[cfg(unix)]
-#[test]
-fn a_rollback_that_fails_answers_the_spill_error_instead_of_the_bound() {
+fn rollback_failure_statuses() -> ((u16, String, bool), (u16, String, bool)) {
     let rules = "rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
@@ -1644,19 +1643,36 @@ service firebase.storage {
                 b"123456",
             ),
         );
+        let status = handle(
+            &s,
+            req("POST", &session, &[("x-goog-upload-command", "query")], b""),
+        );
+        let received = header(&status, "x-goog-upload-size-received")
+            .unwrap()
+            .to_owned();
+        let published = s
+            .store
+            .lock()
+            .unwrap()
+            .get(
+                &BucketName::try_new(BUCKET).unwrap(),
+                &ObjectName::try_new("gated/a.bin").unwrap(),
+            )
+            .is_some();
         drop(s);
         let _ = std::fs::remove_dir_all(&root);
-        r.status
+        (r.status, received, published)
     };
+    (finalize(false), finalize(true))
+}
+
+#[cfg(unix)]
+#[test]
+fn a_rollback_that_fails_answers_the_spill_error_instead_of_the_bound() {
     assert_eq!(
-        finalize(false),
-        402,
-        "without the swap the bound is reported"
-    );
-    assert_eq!(
-        finalize(true),
-        503,
-        "a rollback that fails is reported as such"
+        rollback_failure_statuses(),
+        ((402, "0".to_owned(), false), (503, "6".to_owned(), false)),
+        "a successful rollback restores the offset; a failed rollback reports its error without publishing"
     );
 }
 
@@ -7485,6 +7501,198 @@ fn a_refused_finalizing_chunk_leaves_the_json_api_resumable_session_where_it_was
     let done = put("bytes 2-3/4", b"cd");
     assert_eq!(done.status, 200, "{}", String::from_utf8_lossy(&done.body));
     assert_eq!(json_body(&done)["size"], "4");
+}
+
+#[cfg(unix)]
+fn execute_firebase_pict_case(
+    s: &StorageState,
+    request: &str,
+    bounded: bool,
+    name: &str,
+    line: &str,
+) {
+    let start = handle(
+        s,
+        req(
+            "POST",
+            &format!("/v0/b/{BUCKET}/o?name={name}"),
+            &[
+                ("authorization", "Bearer owner"),
+                ("x-goog-upload-protocol", "resumable"),
+                ("x-goog-upload-command", "start"),
+            ],
+            b"{}",
+        ),
+    );
+    assert_eq!(start.status, 200, "PICT row {line}");
+    let session = header(&start, "x-goog-upload-url")
+        .unwrap()
+        .strip_prefix("http://127.0.0.1:9199")
+        .unwrap()
+        .to_owned();
+    let chunk = |command: &str, offset: &str, body: &[u8]| {
+        handle(
+            s,
+            req(
+                "POST",
+                &session,
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("x-goog-upload-command", command),
+                    ("x-goog-upload-offset", offset),
+                ],
+                body,
+            ),
+        )
+    };
+    let bucket = BucketName::try_new(BUCKET).unwrap();
+    let object = ObjectName::try_new(name).unwrap();
+    if request == "FinalizeOnly" {
+        assert_eq!(chunk("upload", "0", b"ab").status, 200, "PICT row {line}");
+        let result = chunk("finalize", "0", b"");
+        if bounded {
+            assert_eq!(result.status, 402, "PICT row {line}");
+            let status = chunk("query", "0", b"");
+            assert_eq!(header(&status, "x-goog-upload-size-received"), Some("2"));
+            assert!(s.store.lock().unwrap().get(&bucket, &object).is_none());
+            delete_a(s);
+            let done = chunk("finalize", "0", b"");
+            assert_eq!(done.status, 200, "PICT row {line}");
+            assert_eq!(json_body(&done)["size"], "2");
+        } else {
+            assert_eq!(result.status, 200, "PICT row {line}");
+            assert_eq!(json_body(&result)["size"], "2");
+        }
+        let replay = chunk("finalize", "0", b"");
+        assert_eq!(replay.status, 200, "PICT row {line}");
+        assert_eq!(header(&replay, "x-goog-upload-status"), Some("final"));
+    } else if bounded {
+        assert_eq!(chunk("upload", "0", b"ab").status, 200, "PICT row {line}");
+        let refused = chunk("upload, finalize", "2", b"cd");
+        assert_eq!(refused.status, 402, "PICT row {line}");
+        let status = chunk("query", "0", b"");
+        assert_eq!(header(&status, "x-goog-upload-size-received"), Some("2"));
+        assert!(s.store.lock().unwrap().get(&bucket, &object).is_none());
+        delete_a(s);
+        let done = chunk("upload, finalize", "2", b"cd");
+        assert_eq!(done.status, 200, "PICT row {line}");
+        assert_eq!(json_body(&done)["size"], "4");
+    } else {
+        let done = chunk("upload, finalize", "0", b"abcd");
+        assert_eq!(done.status, 200, "PICT row {line}");
+        assert_eq!(json_body(&done)["size"], "4");
+    }
+}
+
+#[cfg(unix)]
+fn execute_gcs_pict_case(s: &StorageState, bounded: bool, name: &str, line: &str) {
+    let start = handle(
+        s,
+        req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&name={name}"),
+            &[
+                ("authorization", "Bearer owner"),
+                ("content-type", "application/json"),
+            ],
+            b"{}",
+        ),
+    );
+    assert_eq!(start.status, 200, "PICT row {line}");
+    let location = header(&start, "location")
+        .unwrap()
+        .strip_prefix("http://127.0.0.1:9199")
+        .unwrap()
+        .to_owned();
+    let put = |range: &str, body: &[u8]| {
+        handle(
+            s,
+            req(
+                "PUT",
+                &location,
+                &[("authorization", "Bearer owner"), ("content-range", range)],
+                body,
+            ),
+        )
+    };
+    if bounded {
+        assert_eq!(put("bytes 0-1/*", b"ab").status, 308, "PICT row {line}");
+        let refused = put("bytes 2-3/4", b"cd");
+        assert_eq!(refused.status, 402, "PICT row {line}");
+        let status = put("bytes */*", b"");
+        assert_eq!(status.status, 308, "PICT row {line}");
+        assert_eq!(header(&status, "range"), Some("bytes=0-1"));
+        assert!(s
+            .store
+            .lock()
+            .unwrap()
+            .get(
+                &BucketName::try_new(BUCKET).unwrap(),
+                &ObjectName::try_new(name).unwrap(),
+            )
+            .is_none());
+        delete_a(s);
+        let done = put("bytes 2-3/4", b"cd");
+        assert_eq!(done.status, 200, "PICT row {line}");
+        assert_eq!(json_body(&done)["size"], "4");
+    } else {
+        let done = put("bytes 0-3/4", b"abcd");
+        assert_eq!(done.status, 200, "PICT row {line}");
+        assert_eq!(json_body(&done)["size"], "4");
+    }
+}
+
+/// Executes all generated PICT rows through the real adapter; GCS rollback-failure injection has no deterministic trigger.
+#[cfg(unix)]
+#[test]
+fn pict_generated_finalizing_chunk_cases_preserve_offsets_and_publication() {
+    const ROWS: &str = "Protocol\tRequest\tFinalize\tRollback\n\
+Firebase\tFinalizingChunk\tSuccess\tNotApplicable\n\
+GCS\tFinalizingChunk\tSuccess\tNotApplicable\n\
+Firebase\tFinalizingChunk\tStoredBytesLimit\tSucceeds\n\
+Firebase\tFinalizingChunk\tStoredBytesLimit\tFails\n\
+GCS\tFinalizingChunk\tStoredBytesLimit\tSucceeds\n\
+Firebase\tFinalizeOnly\tSuccess\tNotApplicable\n\
+Firebase\tFinalizeOnly\tStoredBytesLimit\tNotApplicable";
+    let lines: Vec<_> = ROWS.lines().collect();
+    assert_eq!(lines[0], "Protocol\tRequest\tFinalize\tRollback");
+    assert_eq!(lines.len(), 8);
+
+    for (index, line) in lines.iter().skip(1).enumerate() {
+        let fields: Vec<_> = line.split('\t').collect();
+        assert_eq!(fields.len(), 4, "PICT row {}: {line}", index + 1);
+        let [protocol, request, finalize, rollback]: [&str; 4] = fields.try_into().unwrap();
+        if rollback == "Fails" {
+            assert_eq!(protocol, "Firebase");
+            assert_eq!(request, "FinalizingChunk");
+            assert_eq!(finalize, "StoredBytesLimit");
+            assert_eq!(
+                rollback_failure_statuses(),
+                ((402, "0".to_owned(), false), (503, "6".to_owned(), false)),
+                "PICT row {line}"
+            );
+            continue;
+        }
+
+        let bounded = finalize == "StoredBytesLimit";
+        let s = if bounded {
+            bounded_state_holding_five_bytes()
+        } else {
+            state(Some(ALLOW_ALL_RULES))
+        };
+        if request == "FinalizeOnly" && bounded {
+            s.store.lock().unwrap().set_stored_bytes_limit(Some(5));
+        }
+        let name = format!("pict-{index}.bin");
+        match protocol {
+            "Firebase" => execute_firebase_pict_case(&s, request, bounded, &name, line),
+            "GCS" => {
+                assert_eq!(request, "FinalizingChunk", "PICT row {line}");
+                execute_gcs_pict_case(&s, bounded, &name, line);
+            }
+            other => panic!("unknown PICT protocol {other:?}"),
+        }
+    }
 }
 
 /// A copy, a rewrite and an XML-style form upload past the bound answer the same 402, with

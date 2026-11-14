@@ -8,13 +8,19 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.51.0] - 2026-11-14
+
 ### Added
 
 - Task queues: under the strict profile a queue with `maxDispatchesPerSecond` 1 starts with a burst of 10 dispatches and then refills at 1 per second, as a production recording of 120 tasks due at one instant showed (2026-11-13); a rate of 500 has a burst of 100 (production's read-back). Under the strict profile a due task is dispatched at its `scheduleTime` without waiting for a process start (accepting a task now starts its function's process if it is not running), and the bucket refills continuously at the rate (each token period rounded up to a whole nanosecond), so dispatches do not drift; in the recording's local replay the burst started 24-56 ms after the due time and the 120th task at +110.0 s. Other strict rates use a whole-token capacity of `floor(max(rate, 1.1))` and start empty (their burst is unrecorded). The emulator profile keeps the official emulator's bucket and its one-second refresh.
-- Task queues: the emulator profile deletes pending tasks and returns the official emulator's success response; GET and PUT on task routes return its 404 response. A task already dispatched can also be deleted once, as in firebase-tools 15.28.2; the second delete of a name returns 404.
+- Task queues: the emulator profile deletes pending tasks by their exact enqueued name and returns the official emulator's success response; GET and PUT on task routes return its 404 response. A task already dispatched can also be deleted once, as in firebase-tools 15.28.2; the second delete of a name returns 404.
 - Storage: `storage.spillObjectBytes` (unset by default) keeps committed objects of at least that many bytes in temporary files under the daemon's temp root instead of memory. Reads, ranges, digests, generations, preconditions and the stored-bytes limit are unchanged. A failed spill write answers 503 with `Retry-After: 1` and logs the cause; the temporary directory is removed at clean shutdown and stale ones from dead processes are removed at the next start. A resumable upload session keeps its received bytes in a temporary file once they reach that size (offsets, retries, budgets, checkpoints, digests, finalize and abort are unchanged, a finalized session hands its file to the object, and a snapshot copies the file so a live session and its snapshot never share one; a copy that fails answers the snapshot or restore with an error and changes nothing). A single-shot upload is buffered by the HTTP adapter before the store sees it, so one large single-shot upload does not lower the resident memory after it commits (the allocator can keep one freed body resident; spilling helps when many large objects are stored).
 
 - Functions: `functions.isolation` chooses between `"codebase"` (the default, unchanged: one runner process serves every function of a codebase) and `"function"` (one dedicated runner process per function, as production gives each function its own instance; `productionExact` selects it). A dedicated process starts with its function's `FUNCTION_TARGET`, `FUNCTION_SIGNATURE_TYPE` and `K_SERVICE` and the local secrets that function declares already in its environment, has its own module graph, serves calls of its one function concurrently, and restarts or reloads without touching another function. It starts on the first request, event or task for its function (work that arrives meanwhile waits and is delivered once, in order); Blocking Auth functions, and every function under `--inspect-functions`, start with the codebase. Node and Python codebases. Measured on 10 to 22 functions: about 120 MiB resident memory per started process and 1.0 to 1.9 s more to start and stop when every function is started. Refused above 64 functions per codebase, and, when written explicitly, with `functions.runner` or a fixed `--inspect-functions` port.
+
+- Emulator UI, both profiles: the Firestore database picker offers known and recent databases, refreshes the catalog, and distinguishes a failed catalog request from an absent database. Query drafts stay with their database, and a Node.js SDK reproduction script preserves typed query values and IPv6 loopback addresses.
+- Emulator UI, both profiles: the connection badge reports control API checks and announces changes; Functions filters and event links can be shared, event links restore their session on browser Back and Forward, and an expired event is reported. Search text is shared only when explicitly included. The Overview page offers manual copying when clipboard access fails.
+- Emulator UI, both profiles: Firestore views refresh by changed document path, retain pending updates across membership refreshes, and avoid replacing newer rows with older reads; rows without a usable update time trigger a membership refresh.
 
 ### Changed
 
@@ -25,6 +31,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 - Pub/Sub: two v5 REST negative-cache recordings refine the variable window edge and record the recent-200 exemption at seven seconds; the deterministic model remains unchanged and the remaining open cases are documented.
 
 - Functions: a callable nested in an HTTP function refuses App Check tokens the daemon did not verify when App Check is enabled.
+- Functions, both profiles: function environments remove inherited names of local secrets before adding the secrets declared for that function. On Windows, the reload snapshot ACL check has a 30-second bound, matching snapshot creation, so a slow PowerShell startup does not prematurely fail the check.
+- Storage export, both profiles: capture only committed objects; pending resumable upload sessions, including spilled session files, are not copied into an export.
 - Storage, strict profile: match STORAGE-STRICTNESS-OBS run `ss-48adbd8e` for missing-bucket JSON, media, XML and Firebase answers, XML bucket CORS and independent JSON API CORS; confirm malformed Firebase credentials are anonymous for Rules evaluation and send `Content-Length: 0` on Firebase DELETE. The emulator profile is unchanged.
 
 ## [0.50.0] - 2026-11-12
@@ -1342,7 +1350,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/fireemu/fireemu/compare/v0.50.0...HEAD
+[Unreleased]: https://github.com/fireemu/fireemu/compare/v0.51.0...HEAD
+[0.51.0]: https://github.com/fireemu/fireemu/compare/v0.50.0...v0.51.0
 [0.50.0]: https://github.com/fireemu/fireemu/compare/v0.49.0...v0.50.0
 [0.49.0]: https://github.com/fireemu/fireemu/compare/v0.48.0...v0.49.0
 [0.48.0]: https://github.com/fireemu/fireemu/compare/v0.47.0...v0.48.0

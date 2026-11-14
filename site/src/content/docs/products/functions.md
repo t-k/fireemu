@@ -69,6 +69,7 @@ Production observations of Realtime Database triggers cover fixed administrator 
 
 - Having both `.env.<projectId>` and `.env.<alias>` stops startup, as `firebase deploy` does.
 - Fireemu never contacts Secret Manager. A secret a function declares but `.secret.local` lacks reads as the empty string, and a startup warning names the secret and the functions.
+- In both profiles, inherited environment variables whose names occur in `.secret.local` are removed before the secrets declared by a function are supplied.
 - `.runtimeconfig.json` is passed to the code as `CLOUD_RUNTIME_CONFIG` for a codebase that reads it. `firebase-functions` v7 has removed `functions.config()`, so a v7 codebase does not read it.
 
 ## Who can call a function
@@ -80,6 +81,8 @@ A function whose `invoker` is `"private"` or a list of service accounts, and eve
 Task queue functions are verified for the recorded cases (TASK-QUEUE-FUNCTIONS), with the known differences listed in the [record](https://github.com/fireemu/fireemu/blob/main/spec/compatibility/closure/TASK-QUEUE-FUNCTIONS.json). For a strict dispatch with a daemon-issued identity token, the Node SDK constructs `request.auth`, while the handler and its timers continue to see `FUNCTIONS_EMULATOR="true"`; the emulator profile leaves `request.auth` unset.
 
 A task enqueued with a `scheduleTime` (or `scheduleDelaySeconds`) waits until then under `strict`, as it does in Cloud Tasks, and a `scheduleTime` that is not RFC 3339, or more than 720 hours ahead, is refused with 400. The `emulator` profile dispatches at once, as the official emulator does. To test a delayed task without waiting, set `functions.clock.tasks` to `"virtual"` and move the clock (see [Time and scheduled functions](../../guides/time/)), or release the waiting tasks: the Functions page of the Emulator UI lists them with their due time and a **Run now** button, and the control API takes `POST /v1/sessions/default/functions/{queue}:run` (all waiting tasks) or the same with `{"task": "<task id>"}` (one task). Rate limits and concurrency still apply to a released task.
+
+Accepting a task starts its function's runner if needed. Under `strict`, token refill uses whole-nanosecond periods and wakes at the token and schedule deadlines. Production recordings of 120 tasks due at once showed a starting burst of 10 at rate 1; a rate of 500 read back a burst of 100. Other rates start empty with a whole-token capacity of `floor(max(rate, 1.1))`; their production burst is unrecorded. The `emulator` profile retains its one-second refresh and deletes a task by its exact enqueued name, including an already-dispatched task once, as firebase-tools 15.28.2 does.
 
 In both profiles, task dispatch preserves the enqueued JSON body's bytes, including member order and whitespace; non-JSON bodies are still refused. Under `strict`, `X-CloudTasks-QueueName` is the bare queue ID, `X-CloudTasks-TaskETA` is Unix seconds with six decimal places, and `User-Agent` is `Google-Cloud-Tasks`. Task-supplied headers cannot override that user agent or the `X-CloudTasks-*`, `X-Google-*` and `X-AppEngine-*` families. The `emulator` profile retains the official emulator's internal queue name and header overrides.
 
@@ -146,7 +149,7 @@ Function logs and runner standard error are forwarded to the local logs. If the 
 
 Node codebases reload source changes automatically. Already-admitted invocations finish on their selected generation, subject to their invocation deadlines. A retired generation that does not finish is stopped one second after its latest outstanding invocation deadline, except in debugger mode. Edits before the watcher's first scan are detected, and reload snapshots are removed at shutdown. Changing the discovered trigger manifest requires restarting Fireemu; a rejected reload normally keeps the previous generation. A fixed `--inspect-functions <port>` is an exception: the previous runner must stop before the replacement can bind that port. Python codebases still require a restart.
 
-On Windows, reload snapshots are created with a protected DACL before source or local secret files are copied. Fireemu checks the snapshot directory, temporary parent and ancestors for unsafe permissions or reparse points, and refuses the snapshot if it cannot verify them. This requires Windows PowerShell; see [Troubleshooting](../../guides/troubleshooting/).
+On Windows, reload snapshots are created with a protected DACL before source or local secret files are copied. Fireemu checks the snapshot directory, temporary parent and ancestors for unsafe permissions or reparse points, and refuses the snapshot if it cannot verify them within 30 seconds. This requires Windows PowerShell; see [Troubleshooting](../../guides/troubleshooting/).
 
 ## Process isolation (`functions.isolation`)
 

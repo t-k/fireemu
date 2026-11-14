@@ -88,6 +88,8 @@ maxStoredBytes = 1073741824
 | `storage.bufferedBodyBudgetBytes` | Process-wide budget for buffered request bodies, default 1 GiB. A request past it gets HTTP 503 with `Retry-After: 1`. |
 | `storage.spillObjectBytes` | Committed objects at least this many bytes are kept in temporary files instead of memory. Unset by default; production has no such setting. A resumable upload session keeps its received bytes in a temporary file once they reach that size. A single-shot upload is still buffered in memory before it is stored, so a single large upload keeps one body resident after it commits; the setting helps when many large objects are stored. |
 
+Spill directories are removed on clean shutdown and stale directories from dead processes are swept on startup. A failed spill write returns HTTP 503 with `Retry-After: 1`. Export captures committed objects only, not pending resumable upload sessions.
+
 ## Buckets that do not exist
 
 Production answers 404 `The specified bucket does not exist.` for an object operation on a bucket nobody created. The Storage emulator serves it instead, and creates the bucket on the first write, so a test needs no setup; `storage.undeclaredBuckets` changes that under `strict`. Under `strict` with `storage.undeclaredBuckets: "warn"` it prints one `note:` line on standard error the first time an object is written to a bucket that is not a default bucket of the project (`<project>.appspot.com` or `<project>.firebasestorage.app`), a `firebase.json` storage target, imported data, a bucket a deployed Storage trigger names, or listed in the configuration. A typo in a bucket name is visible that way. To silence the note for a bucket that exists in production, list it in `storage.buckets` ([Configure](#configure)).

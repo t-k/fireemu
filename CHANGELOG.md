@@ -8,6 +8,11 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Fixed
+
+- Storage in the strict profile answers JSON API and upload CORS independently of `storage.cors` bucket rules, which apply to the XML API (signed URLs and the form upload). Location is exposed on resumable uploads. Cases without a production recording are listed under the compatibility limitations.
+- `fireemu/testing` snapshots copy Storage signed-URL key files with mode 0600, so resets keep verifying signed URLs and later edits or deletion of the source key do not affect the snapshot.
+
 ## [0.52.0] - 2026-11-14
 
 ### Added

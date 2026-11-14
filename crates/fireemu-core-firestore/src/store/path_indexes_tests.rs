@@ -4,7 +4,7 @@ use fireemu_core_types::ids::{CollectionId, DatabaseId, DocumentId, ProjectId};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use super::super::{FirestoreState, Write, WriteOp};
+use super::super::{CommitVersion, FirestoreState, Write, WriteOp};
 use crate::field_path::FieldPath;
 use crate::query::{Cursor, Direction, OrderClause, Query, QueryScope};
 use crate::value::Value;
@@ -158,7 +158,13 @@ fn assert_generated_pict_row(row: &str, all_paths: &[DocumentPath]) {
         .collect::<Vec<_>>()
         .try_into()
         .expect("PICT table has five columns");
-    let (state, model) = state_for_lifecycle(all_paths, lifecycle);
+    let (state, model, snapshot_version, snapshot_model) =
+        state_for_lifecycle(all_paths, lifecycle);
+    let (version, model) = match read {
+        "latest" => (None, model),
+        "snapshot" => (Some(snapshot_version), snapshot_model),
+        other => panic!("unknown PICT read selector {other}"),
+    };
     let query_scope = query_scope_for(scope);
     let direction = match order {
         "asc" => Direction::Ascending,
@@ -182,11 +188,6 @@ fn assert_generated_pict_row(row: &str, all_paths: &[DocumentPath]) {
         });
         expected.remove(0);
     }
-    let version = match read {
-        "latest" => None,
-        "snapshot" => Some(state.current_version()),
-        other => panic!("unknown PICT read selector {other}"),
-    };
     let actual = state
         .run_query(&query, version)
         .expect("execute PICT query")
@@ -194,18 +195,40 @@ fn assert_generated_pict_row(row: &str, all_paths: &[DocumentPath]) {
         .map(|document| document.path)
         .collect::<Vec<_>>();
     assert_eq!(actual, expected, "PICT row: {row}");
+    if read == "snapshot" && matches!(lifecycle, "deleted" | "revived") {
+        assert!(
+            snapshot_version < state.current_version(),
+            "PICT row: {row}"
+        );
+        if scope != "collection" {
+            let latest = state
+                .run_query(&query, None)
+                .expect("execute latest query for comparison")
+                .into_iter()
+                .map(|document| document.path)
+                .collect::<Vec<_>>();
+            assert_ne!(actual, latest, "snapshot must differ from latest: {row}");
+        }
+    }
 }
 
 fn state_for_lifecycle(
     all_paths: &[DocumentPath],
     lifecycle: &str,
-) -> (FirestoreState, BTreeSet<DocumentPath>) {
+) -> (
+    FirestoreState,
+    BTreeSet<DocumentPath>,
+    CommitVersion,
+    BTreeSet<DocumentPath>,
+) {
     let mut state = FirestoreState::new();
     let writes = all_paths.iter().cloned().map(set_write).collect::<Vec<_>>();
     state
         .commit(&writes, None, LogicalInstant::UNIX_EPOCH)
         .expect("create query fixtures");
     let mut model = all_paths.iter().cloned().collect::<BTreeSet<_>>();
+    let mut snapshot_version = state.current_version();
+    let mut snapshot_model = model.clone();
     let deleted_path = path("root/a/children/x");
     match lifecycle {
         "live" => {}
@@ -227,6 +250,8 @@ fn state_for_lifecycle(
                     LogicalInstant::from_unix_seconds(1),
                 )
                 .expect("delete before revival");
+            snapshot_version = state.current_version();
+            snapshot_model.remove(&deleted_path);
             state
                 .commit(
                     &[set_write(deleted_path)],
@@ -247,10 +272,12 @@ fn state_for_lifecycle(
                 super::super::READ_TIME_RETENTION_SECONDS + 2,
             ));
             model.remove(&deleted_path);
+            snapshot_version = state.current_version();
+            snapshot_model.clone_from(&model);
         }
         other => panic!("unknown PICT lifecycle {other}"),
     }
-    (state, model)
+    (state, model, snapshot_version, snapshot_model)
 }
 
 fn query_scope_for(scope: &str) -> QueryScope {

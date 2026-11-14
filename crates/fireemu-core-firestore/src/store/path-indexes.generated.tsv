@@ -11,3 +11,5 @@ collection	snapshot	desc	present	revived
 collection_group	latest	asc	present	compacted
 kindless	latest	asc	present	deleted
 kindless	latest	asc	absent	live
+collection_group	snapshot	asc	absent	revived
+kindless	snapshot	desc	absent	deleted

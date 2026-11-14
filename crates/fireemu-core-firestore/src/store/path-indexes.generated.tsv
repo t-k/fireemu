@@ -1,0 +1,15 @@
+Scope	Read	Order	Cursor	Lifecycle
+collection	latest	asc	absent	live
+collection_group	snapshot	desc	present	deleted
+kindless	latest	asc	present	revived
+collection	latest	desc	present	compacted
+collection_group	latest	asc	absent	revived
+collection_group	snapshot	desc	present	live
+kindless	latest	desc	absent	compacted
+collection	snapshot	asc	absent	deleted
+collection	snapshot	desc	present	revived
+collection_group	latest	asc	present	compacted
+kindless	latest	asc	present	deleted
+kindless	latest	asc	absent	live
+collection_group	snapshot	asc	absent	revived
+kindless	snapshot	desc	absent	deleted

@@ -115,7 +115,8 @@ fn import_fields(state: &mut FirestoreState, index: usize, fields: BTreeMap<Stri
 fn assert_index(state: &FirestoreState) {
     for (group, index) in &state.ttl_expiry_indexes {
         let expected: BTreeSet<_> = state
-            .live_collection_group_paths
+            .path_indexes
+            .live_collection_group_paths()
             .get(group)
             .into_iter()
             .flatten()

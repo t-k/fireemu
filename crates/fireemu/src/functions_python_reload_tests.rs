@@ -191,7 +191,7 @@ fn python_cache_exclusion_uses_exact_components_and_tracks_similarly_named_sourc
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // Exercise the complete generated PICT table in one test.
 async fn pict_generated_reload_cases_exercise_snapshot_and_language_behaviors() {
-    let cases = include_str!("../tests/fixtures/python_reload_pict.tsv");
+    let cases = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/python_reload_pict.tsv")).unwrap();
     let mut lines = cases.lines();
     assert_eq!(
         lines.next(),

@@ -253,7 +253,7 @@ async fn python_capture_rejects_link_content_edits_and_retargets_during_capture(
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // Keep generated PICT cases and their assertions together.
 async fn pict_generated_python_symlink_cases_exercise_scan_and_snapshot() {
-    let table = include_str!("../tests/fixtures/python_reload_symlink_pict.tsv");
+    let table = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/python_reload_symlink_pict.tsv")).unwrap();
     let mut rows = table.lines();
     let header = rows.next().unwrap();
     assert_eq!(header, "LinkKind\tTargetLocation\tLinkSpelling\tOperation\tMutationPhase");

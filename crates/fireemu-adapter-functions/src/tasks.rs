@@ -38,15 +38,23 @@ pub struct Task {
     pub headers: BTreeMap<String, String>,
     /// The decoded body -- `{"data": payload}` for anything the Admin SDK enqueued.
     pub body: Value,
+    /// The original JSON parser failure, retained for the emulator profile's current refusal.
+    pub body_json_error: Option<String>,
     /// The decoded bytes exactly as the enqueuer wrote them. Production delivers these (member
     /// order and spacing included); `body` is only the parsed echo of the enqueue response.
     pub(crate) raw_body: Vec<u8>,
+    /// `createTime` supplied by the strict Cloud Tasks surface.
+    pub create_time: Option<String>,
     /// `scheduleTime`, echoed into `X-CloudTasks-TaskETA`. Native task mode does not delay dispatch:
     /// nothing in the official `dispatchTasks` or `runTask` consults it either.
     /// Explicit virtual task mode gates eligibility on this value.
     pub schedule_time: Option<String>,
     /// The abort deadline, in seconds; `dispatchDeadline` without its trailing `s`, else 60.
     pub dispatch_deadline_seconds: u64,
+    /// Exact accepted protobuf duration spelling, including fractional seconds.
+    pub dispatch_deadline: String,
+    /// Accepted `httpRequest.oauthToken` configuration, echoed by getTask.
+    pub oauth_token: Option<Value>,
     /// `httpRequest.oidcToken`: the service account and audience the task names. Cloud Tasks delivers an
     /// `Authorization: Bearer` OIDC token for them; the strict profile delivers an emulator-issued token of the same
     /// shape.
@@ -88,6 +96,16 @@ impl Task {
             )
             .saturating_add(serde_json::to_vec(&self.body).map_or(usize::MAX, |body| body.len()))
             .saturating_add(self.raw_body.len())
+            .saturating_add(self.create_time.as_ref().map_or(0, String::len))
+            .saturating_add(self.dispatch_deadline.len())
+            .saturating_add(
+                self.oauth_token
+                    .as_ref()
+                    .and_then(|token| serde_json::to_vec(token).ok())
+                    .map_or(0, |encoded| encoded.len()),
+            )
+            // Reserve the bounded dispatch/response attempt snapshot retained while active.
+            .saturating_add(256)
     }
 }
 
@@ -100,6 +118,79 @@ pub struct EnqueueRefusal {
     /// SDK reports them as `Unexpected response with status: N and body: ...` rather than a
     /// mapped code -- except 409, which it special-cases to `task-already-exists`.
     pub body: String,
+}
+
+/// Encodes a task request body for the Cloud Tasks JSON representation.
+pub(crate) fn encode_base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = chunk.iter().enumerate().fold(0_u32, |acc, (index, byte)| {
+            acc | (u32::from(*byte) << (16 - 8 * index))
+        });
+        for index in 0..4 {
+            if index <= chunk.len() {
+                out.push(char::from(TABLE[((n >> (18 - 6 * index)) & 63) as usize]));
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+/// Parses Cloud Tasks' `responseView` query parameter, defaulting to BASIC.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InvalidResponseView;
+
+pub(crate) fn response_view(target: &str) -> Result<bool, InvalidResponseView> {
+    let Some((_, query)) = target.split_once('?') else {
+        return Ok(false);
+    };
+    for pair in query.split('&') {
+        let Some((key, value)) = pair.split_once('=') else {
+            continue;
+        };
+        if decode_query_component(key).map_err(|()| InvalidResponseView)? != b"responseView" {
+            continue;
+        }
+        return match decode_query_component(value)
+            .map_err(|()| InvalidResponseView)?
+            .as_slice()
+        {
+            b"BASIC" | b"VIEW_UNSPECIFIED" => Ok(false),
+            b"FULL" => Ok(true),
+            _ => Err(InvalidResponseView),
+        };
+    }
+    Ok(false)
+}
+
+fn decode_query_component(value: &str) -> Result<Vec<u8>, ()> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => decoded.push(b' '),
+            b'%' if index + 2 < bytes.len() => {
+                let hex = |byte: u8| match byte {
+                    b'0'..=b'9' => Some(byte - b'0'),
+                    b'a'..=b'f' => Some(byte - b'a' + 10),
+                    b'A'..=b'F' => Some(byte - b'A' + 10),
+                    _ => None,
+                };
+                let high = hex(bytes[index + 1]).ok_or(())?;
+                let low = hex(bytes[index + 2]).ok_or(())?;
+                decoded.push((high << 4) | low);
+                index += 2;
+            }
+            b'%' => return Err(()),
+            byte => decoded.push(byte),
+        }
+        index += 1;
+    }
+    Ok(decoded)
 }
 
 /// The route a functions-port path names, if it is one of the Cloud Tasks routes.
@@ -227,10 +318,10 @@ pub fn accept(
         status: 400,
         body: "the task's httpRequest body is not base64".to_owned(),
     })?;
-    let body: Value = serde_json::from_slice(&decoded).map_err(|e| EnqueueRefusal {
-        status: 400,
-        body: format!("the task's httpRequest body is not JSON: {e}"),
-    })?;
+    let (body, body_json_error) = match serde_json::from_slice(&decoded) {
+        Ok(body) => (body, None),
+        Err(error) => (Value::Null, Some(error.to_string())),
+    };
     let mut headers = BTreeMap::new();
     if let Some(map) = http.get("headers").and_then(Value::as_object) {
         for (k, v) in map {
@@ -239,10 +330,13 @@ pub fn accept(
             }
         }
     }
-    let dispatch_deadline_seconds = task
+    let dispatch_deadline = task
         .get("dispatchDeadline")
         .and_then(Value::as_str)
-        .and_then(|d| d.trim_end_matches('s').parse::<u64>().ok())
+        .map_or_else(|| "60s".to_owned(), str::to_owned);
+    let dispatch_deadline_seconds = dispatch_deadline
+        .trim_end_matches('s')
+        .parse::<u64>()
         .unwrap_or(60);
     let oidc = http
         .get("oidcToken")
@@ -263,12 +357,16 @@ pub fn accept(
         url,
         headers,
         body,
+        body_json_error,
         raw_body: decoded,
+        create_time: None,
         schedule_time: task
             .get("scheduleTime")
             .and_then(Value::as_str)
             .map(str::to_owned),
         dispatch_deadline_seconds,
+        dispatch_deadline,
+        oauth_token: http.get("oauthToken").cloned(),
         oidc,
     })
 }
@@ -529,6 +627,31 @@ mod tests {
     use serde_json::Value;
 
     #[test]
+    fn query_components_decode_every_hex_byte_with_prefixes_and_both_cases() {
+        for (prefix, decoded_prefix) in [("", b"".as_slice()), ("x", b"x"), ("+", b" ")] {
+            for byte in 0..=u8::MAX {
+                for escape in [format!("%{byte:02x}"), format!("%{byte:02X}")] {
+                    let input = format!("{prefix}{escape}");
+                    let mut expected = decoded_prefix.to_vec();
+                    expected.push(byte);
+                    assert_eq!(
+                        super::decode_query_component(&input),
+                        Ok(expected),
+                        "{input}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn query_components_reject_truncated_percent_escapes() {
+        for input in ["%", "%0", "x%", "x%0", "%41%", "%41%0"] {
+            assert_eq!(super::decode_query_component(input), Err(()), "{input}");
+        }
+    }
+
+    #[test]
     fn task_identity_filter_removes_mixed_case_and_preserves_order() {
         let headers = vec![
             ("first".into(), "a".into()),
@@ -557,23 +680,8 @@ mod tests {
 
     /// Standard base64 with padding.
     fn b64(bytes: &[u8]) -> String {
-        const TABLE: &[u8; 64] =
-            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut out = String::new();
-        for chunk in bytes.chunks(3) {
-            let n = chunk
-                .iter()
-                .enumerate()
-                .fold(0u32, |acc, (i, b)| acc | (u32::from(*b) << (16 - 8 * i)));
-            for i in 0..4 {
-                if i <= chunk.len() {
-                    out.push(TABLE[((n >> (18 - 6 * i)) & 63) as usize] as char);
-                } else {
-                    out.push('=');
-                }
-            }
-        }
-        out
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(bytes)
     }
 
     fn enqueue_body() -> serde_json::Value {
@@ -731,13 +839,6 @@ mod tests {
         assert_eq!(task.delivery_body(), text.as_bytes());
         // The echo of the enqueue keeps the decoded JSON, as before.
         assert_eq!(task.body["data"]["label"], json!("l"));
-    }
-
-    #[test]
-    fn a_task_body_that_is_not_utf8_json_is_still_refused() {
-        let mut body = enqueue_body();
-        body["task"]["httpRequest"]["body"] = json!(b64(&[0xff, 0xfe]));
-        assert!(accept("demo", "us-central1", "onJob", "http://unused", &body, 1).is_err());
     }
 
     #[test]

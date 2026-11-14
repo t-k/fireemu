@@ -1203,7 +1203,10 @@ impl RestartBudget {
 }
 
 impl Codebase {
-    fn from_spec(spec: CodebaseSpec) -> Self {
+    fn from_spec(
+        spec: CodebaseSpec,
+        cleanups: &mut BTreeMap<std::path::PathBuf, Arc<CleanupDir>>,
+    ) -> Self {
         Self {
             name: spec.name,
             function: spec.function,
@@ -1215,7 +1218,7 @@ impl Codebase {
                 revision: 0,
                 runner: spec.runner,
                 spawn: spec.spawn,
-                cleanup_dir: CodebaseGeneration::cleanup(spec.cleanup_dir),
+                cleanup_dir: CodebaseGeneration::cleanup_shared(spec.cleanup_dir, cleanups),
                 blocking_restart_ticket: None,
             }),
         }
@@ -1346,16 +1349,6 @@ impl Codebase {
 }
 
 impl CodebaseGeneration {
-    fn cleanup(path: Option<std::path::PathBuf>) -> Option<Arc<CleanupDir>> {
-        path.map(|path| {
-            Arc::new(CleanupDir(
-                path,
-                Mutex::new(true),
-                std::sync::atomic::AtomicUsize::new(1),
-            ))
-        })
-    }
-
     /// The directory of a unit of a group: one `CleanupDir` per path, one more member for each unit.
     fn cleanup_shared(
         path: Option<std::path::PathBuf>,
@@ -1379,6 +1372,15 @@ fn epoch_millis() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
+fn task_timestamp_from_nanos(nanos: i128) -> String {
+    let seconds = i64::try_from(nanos.div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
+    let subsecond = u32::try_from(nanos.rem_euclid(1_000_000_000)).unwrap_or(0);
+    chrono::DateTime::from_timestamp(seconds, subsecond).map_or_else(
+        || "1970-01-01T00:00:00.000000Z".to_owned(),
+        |time| time.to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+    )
 }
 
 /// Where the message of a first-generation schedule goes. In production Cloud Scheduler publishes one message to the
@@ -1688,7 +1690,13 @@ impl FunctionsRuntime {
             config,
             profile,
             clock,
-            codebases: codebases.into_iter().map(Codebase::from_spec).collect(),
+            codebases: {
+                let mut cleanups = BTreeMap::new();
+                codebases
+                    .into_iter()
+                    .map(|spec| Codebase::from_spec(spec, &mut cleanups))
+                    .collect()
+            },
             owner,
             eventarc_registry: Mutex::new(eventarc_registry),
             schedule_sweep: Mutex::new(()),
@@ -1831,6 +1839,22 @@ impl FunctionsRuntime {
         } else {
             epoch_millis()
         }
+    }
+
+    fn task_timestamp(&self) -> String {
+        let nanos = self.task_epoch_nanos().unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .and_then(|duration| i128::try_from(duration.as_nanos()).ok())
+                .unwrap_or(0)
+        });
+        let seconds = i64::try_from(nanos.div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
+        let subsecond = u32::try_from(nanos.rem_euclid(1_000_000_000)).unwrap_or(0);
+        chrono::DateTime::from_timestamp(seconds, subsecond).map_or_else(
+            || "1970-01-01T00:00:00.000000Z".to_owned(),
+            |time| time.to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+        )
     }
 
     async fn wait_task_until(&self, deadline: crate::task_scheduler::TaskTime) {
@@ -3694,6 +3718,7 @@ impl FunctionsRuntime {
     /// `defaultUri` is that function's own `/{project}/{region}/{name}` URL. There is nothing
     /// to create here, so the queue exists exactly while the function does, and an enqueue
     /// against a name that is not one answers the official `404`.
+    #[allow(clippy::too_many_lines)]
     pub fn enqueue_task(
         self: &Arc<Self>,
         project: &str,
@@ -3751,6 +3776,12 @@ impl FunctionsRuntime {
             inner.next_task
         };
         let mut task = crate::tasks::accept(project, location, queue, &default_uri, body, next_id)?;
+        if let Some(error) = task.body_json_error.as_deref() {
+            return Err(refuse(
+                400,
+                &format!("the task's httpRequest body is not JSON: {error}"),
+            ));
+        }
         self.check_schedule_time(&mut task)?;
         // A task may name its own URL (`opts.uri`). Only this emulator's own function URLs
         // are accepted: the official emulator will POST a task to any address, and a local
@@ -3900,7 +3931,9 @@ impl FunctionsRuntime {
             })?;
         task.name.clone_from(&admitted.name);
         task.schedule_time = Some(admitted.schedule_time.clone());
+        task.create_time = Some(admitted.create_time.clone());
         task.dispatch_deadline_seconds = admitted.deadline_seconds;
+        task.dispatch_deadline.clone_from(&admitted.deadline_text);
         if task.url != default_uri {
             return Err(json(Refusal {
                 http: 400,
@@ -3970,6 +4003,49 @@ impl FunctionsRuntime {
         let empty = serde_json::Map::new();
         let http = request.and_then(Value::as_object).unwrap_or(&empty);
         Ok(production::answer(&admitted, &default_uri, http, encoded))
+    }
+
+    /// Returns an existing strict task in BASIC or FULL view.
+    pub fn get_task_strict(
+        &self,
+        project: &str,
+        location: &str,
+        queue: &str,
+        id: &str,
+        full: bool,
+    ) -> Result<Value, crate::tasks::EnqueueRefusal> {
+        use crate::tasks::EnqueueRefusal;
+        use crate::tasks_production::Refusal;
+        let missing = || EnqueueRefusal {
+            status: 404,
+            body: Refusal::task_not_found().body().to_string(),
+        };
+        let served = self.manifest.get(queue).is_some_and(|f| {
+            matches!(f.trigger, Trigger::TaskQueue { .. }) && f.region == location
+        }) && project == self.config.project;
+        if !served {
+            return Err(missing());
+        }
+        let name = format!("projects/{project}/locations/{location}/queues/{queue}/tasks/{id}");
+        let now_task = self.task_now();
+        let mut inner = self.inner.lock().map_err(|_| EnqueueRefusal {
+            status: 500,
+            body: "runtime poisoned".to_owned(),
+        })?;
+        let task = inner
+            .task_scheduler
+            .get_task(queue, &name, now_task)
+            .map_err(|state| {
+                let mut refusal = Refusal::task_not_found();
+                if state == crate::task_scheduler::NameState::Finished {
+                    "The task no longer exists, though a task with this name existed recently. The task either successfully completed or was deleted.".clone_into(&mut refusal.message);
+                }
+                EnqueueRefusal {
+                    status: refusal.http,
+                    body: refusal.body().to_string(),
+                }
+            })?;
+        Ok(crate::tasks_production::get_answer(&task, full))
     }
 
     /// Removes a pending task; the profile determines the refusal format.
@@ -4084,6 +4160,7 @@ impl FunctionsRuntime {
 
     async fn invoke_task_http(
         self: &Arc<Self>,
+        dispatch: &crate::task_scheduler::Dispatch,
         target: &HttpTarget,
         path: &str,
         headers: &[(String, String)],
@@ -4111,6 +4188,7 @@ impl FunctionsRuntime {
                      callable; the dispatch fails and is retried under the queue's retry policy",
                     target.function
                 );
+                self.record_task_attempt_start(dispatch);
                 return Ok(ProxiedResponse {
                     status: 401,
                     headers: vec![(
@@ -4144,6 +4222,7 @@ impl FunctionsRuntime {
             &headers,
             body,
             FunctionsHttpProfile::Emulator,
+            Some(dispatch),
         )
         .await
     }
@@ -4226,9 +4305,12 @@ impl FunctionsRuntime {
             let attempt_started = self.task_now();
             let outcome = tokio::time::timeout(
                 Duration::from_secs(task.dispatch_deadline_seconds),
-                self.invoke_task_http(&target, &path, &headers, &body),
+                self.invoke_task_http(dispatch, &target, &path, &headers, &body),
             )
             .await;
+            if let Ok(Ok(response)) = &outcome {
+                self.record_task_attempt_response(dispatch, response.status);
+            }
             let status = match outcome {
                 Ok(Ok(response)) if (200..300).contains(&response.status) => return false,
                 Ok(Ok(response)) => Some(response.status),
@@ -4291,6 +4373,7 @@ impl FunctionsRuntime {
             let backoff_deadline = self.task_now() + backoff;
             let deadline =
                 retry_deadline.map_or(backoff_deadline, |expiry| expiry.min(backoff_deadline));
+            self.set_task_retry_schedule(dispatch, backoff);
             self.set_task_phase(dispatch, ActivePhase::Retry(deadline));
             self.wait_task_until(deadline).await;
             if !self.wait_for_task_token(dispatch, retry_deadline).await {
@@ -4302,6 +4385,44 @@ impl FunctionsRuntime {
     fn set_task_phase(&self, dispatch: &crate::task_scheduler::Dispatch, phase: ActivePhase) {
         if let Ok(mut inner) = self.inner.lock() {
             inner.task_scheduler.set_phase(dispatch, phase);
+        }
+        self.idle.notify_waiters();
+    }
+
+    fn record_task_attempt_start(&self, dispatch: &crate::task_scheduler::Dispatch) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner
+                .task_scheduler
+                .record_dispatch_attempt(dispatch, self.task_timestamp());
+        }
+        self.idle.notify_waiters();
+    }
+
+    fn record_task_attempt_response(
+        &self,
+        dispatch: &crate::task_scheduler::Dispatch,
+        status: u16,
+    ) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner
+                .task_scheduler
+                .record_attempt_response(dispatch, self.task_timestamp(), status);
+        }
+        self.idle.notify_waiters();
+    }
+
+    fn set_task_retry_schedule(&self, dispatch: &crate::task_scheduler::Dispatch, delay: Duration) {
+        let now = self.task_epoch_nanos().unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .and_then(|duration| i128::try_from(duration.as_nanos()).ok())
+                .unwrap_or(0)
+        });
+        let next = now.saturating_add(i128::try_from(delay.as_nanos()).unwrap_or(i128::MAX));
+        let timestamp = task_timestamp_from_nanos(next);
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.task_scheduler.set_retry_schedule(dispatch, timestamp);
         }
         self.idle.notify_waiters();
     }
@@ -6452,6 +6573,7 @@ impl FunctionsRuntime {
             &crate::tasks::without_task_identity(headers),
             body,
             profile,
+            None,
         )
         .await
         .map_err(HttpInvokeError::into_message)
@@ -6654,6 +6776,7 @@ impl FunctionsRuntime {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn invoke_http_classified(
         self: &Arc<Self>,
         target: &HttpTarget,
@@ -6662,6 +6785,7 @@ impl FunctionsRuntime {
         headers: &[(String, String)],
         body: &[u8],
         profile: FunctionsHttpProfile,
+        task_dispatch: Option<&crate::task_scheduler::Dispatch>,
     ) -> Result<ProxiedResponse, HttpInvokeError> {
         if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
             return Err(HttpInvokeError::Message(
@@ -6678,6 +6802,9 @@ impl FunctionsRuntime {
         // error answers instead of the handler, a delay moves the clock first, a crash
         // takes the runner down.
         if let Some(faulted) = self.http_faults(&target.function) {
+            if let Some(dispatch) = task_dispatch {
+                self.record_task_attempt_start(dispatch);
+            }
             if let Ok(mut inner) = self.inner.lock() {
                 if inner.epoch == fault_epoch {
                     inner.next_event += 1;
@@ -6727,6 +6854,9 @@ impl FunctionsRuntime {
             runtime: self.clone(),
             key,
         };
+        if let Some(dispatch) = task_dispatch {
+            self.record_task_attempt_start(dispatch);
+        }
         let addr = match self
             .http_addr_or_response(target, deadline, epoch, id, timeout, profile)
             .await

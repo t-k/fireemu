@@ -37,6 +37,8 @@ fn response(status: u16, body: impl Into<Bytes>, content_type: Option<&str>) -> 
 pub struct Config {
     data: Value,
     public: PathBuf,
+    site: Option<String>,
+    target: Option<String>,
 }
 impl Config {
     /// The `hosting` object as written in `firebase.json`.
@@ -51,15 +53,83 @@ impl Config {
         &self.public
     }
 
+    /// The resolved Hosting site identifier, when the configuration names one.
+    #[must_use]
+    pub fn site(&self) -> Option<&str> {
+        self.site.as_deref()
+    }
+
+    /// The Firebase CLI deploy target, before `.firebaserc` resolution.
+    #[must_use]
+    pub fn target(&self) -> Option<&str> {
+        self.target.as_deref()
+    }
+
+    /// Replaces this site's target with its resolved Firebase Hosting site.
+    pub fn resolve_target(&mut self, site: String) {
+        self.site = Some(site.clone());
+        self.target = None;
+        if let Some(object) = self.data.as_object_mut() {
+            object.insert("site".to_owned(), Value::String(site));
+            object.remove("target");
+        }
+    }
+
+    /// Parses either the historic object form or the Firebase CLI multisite array.
+    pub fn parse_many(data: &Value, base: &Path) -> Result<Vec<Self>, String> {
+        match data {
+            Value::Object(_) => {
+                let config = Self::parse(data, base)?;
+                if config.site().is_some() && config.target().is_some() {
+                    return Err("hosting must specify either site or target, not both".to_owned());
+                }
+                Ok(vec![config])
+            }
+            Value::Array(entries) if !entries.is_empty() => entries
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| {
+                    let config = Self::parse(entry, base)
+                        .map_err(|error| format!("hosting[{index}]: {error}"))?;
+                    match (config.site(), config.target()) {
+                        (Some(_), None) | (None, Some(_)) => Ok(config),
+                        (Some(_), Some(_)) => Err(format!(
+                            "hosting[{index}] must specify either site or target, not both"
+                        )),
+                        (None, None) => {
+                            Err(format!("hosting[{index}] must specify site or target"))
+                        }
+                    }
+                })
+                .collect(),
+            Value::Array(_) => Err("hosting must contain at least one site".to_owned()),
+            _ => Err("hosting must be an object or an array of site objects".to_owned()),
+        }
+    }
+
     /// Loads one configured site without reading its public files or any credentials.
     pub fn parse(data: &Value, base: &Path) -> Result<Self, String> {
-        let object = data
-            .as_object()
-            .ok_or("hosting must be one site object; multiple sites are not implemented")?;
+        let object = data.as_object().ok_or("hosting site must be an object")?;
         let public = object
             .get("public")
             .and_then(Value::as_str)
             .ok_or("hosting.public must be a string")?;
+        let site = object
+            .get("site")
+            .and_then(Value::as_str)
+            .filter(|site| !site.is_empty())
+            .map(str::to_owned);
+        let target = object
+            .get("target")
+            .and_then(Value::as_str)
+            .filter(|target| !target.is_empty())
+            .map(str::to_owned);
+        if object.get("site").is_some_and(|_| site.is_none()) {
+            return Err("hosting.site must be a string".to_owned());
+        }
+        if object.get("target").is_some_and(|_| target.is_none()) {
+            return Err("hosting.target must be a string".to_owned());
+        }
         for key in ["cleanUrls", "trailingSlash"] {
             if object.get(key).is_some_and(|v| !v.is_boolean()) {
                 return Err(format!("hosting.{key} must be a boolean"));
@@ -84,6 +154,8 @@ impl Config {
         Ok(Self {
             data: data.clone(),
             public: base.join(public),
+            site,
+            target,
         })
     }
 }
@@ -1630,6 +1702,14 @@ mod redirect_tests {
     use super::*;
     use proptest::prelude::*;
     use serde_json::json;
+
+    #[test]
+    fn an_empty_hosting_array_reports_the_site_count_error() {
+        assert_eq!(
+            Config::parse_many(&json!([]), Path::new("/project")),
+            Err("hosting must contain at least one site".to_owned())
+        );
+    }
 
     fn location(destination: &str, raw_path: &str, raw_query: &str) -> Option<Result<String, ()>> {
         let rule = json!({"source": "/go/:name", "destination": destination, "type": 302});

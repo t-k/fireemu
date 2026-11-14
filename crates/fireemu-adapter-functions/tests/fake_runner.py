@@ -76,6 +76,7 @@ class Echo(http.server.BaseHTTPRequestHandler):
                     "path": self.path,
                     "headers": {k.lower(): v for k, v in self.headers.items()},
                     "body": body.decode("utf-8", "replace"),
+                    "bodyHex": body.hex(),
                 }
                 log.write(json.dumps(entry) + "\n")
         task_probe = os.environ.get("FIREEMU_FAKE_TASK_PROBE")

@@ -8,6 +8,14 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.52.0] - 2026-11-14
+
+### Added
+
+- Hosting supports multiple firebase.json sites, including .firebaserc deploy targets, with separate local listeners and content roots. Startup and Hub discovery expose the additional endpoints.
+- Cloud Tasks in the strict profile supports getTask with BASIC and FULL response views, including pending and active tasks, and accepts non-JSON request bodies without changing their bytes. Pending answers omit zero counters and recent completion/deletion returns the recorded 404 message. Immediate name reuse remains available while bounded lookup history distinguishes recently used names from unknown ones. FULL, active/retry, invalid-view and unknown-name GET behavior is not recorded. The emulator profile retains its existing behavior.
+- Python Functions source changes reload through a fresh runner while retaining the codebase virtual environment. Invalid candidates keep the last working generation; Python bytecode caches do not trigger reloads. Ordinary source symlinks to files or directories are watched and materialized in each snapshot, including targets outside the source directory; cyclic, dangling and special-file targets are refused.
+
 ## [0.51.0] - 2026-11-14
 
 ### Added
@@ -1350,7 +1358,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/fireemu/fireemu/compare/v0.51.0...HEAD
+[Unreleased]: https://github.com/fireemu/fireemu/compare/v0.52.0...HEAD
+[0.52.0]: https://github.com/fireemu/fireemu/compare/v0.51.0...v0.52.0
 [0.51.0]: https://github.com/fireemu/fireemu/compare/v0.50.0...v0.51.0
 [0.50.0]: https://github.com/fireemu/fireemu/compare/v0.49.0...v0.50.0
 [0.49.0]: https://github.com/fireemu/fireemu/compare/v0.48.0...v0.49.0

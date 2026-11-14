@@ -1239,7 +1239,7 @@ pub struct RuntimeConfig {
     /// Whether the Hosting port was configured; firebase-tools moves only a default port.
     pub hosting_addr_explicit: bool,
     /// The site configuration loaded from firebase.json.
-    pub hosting: Option<crate::hosting::Config>,
+    pub hosting: Option<Vec<crate::hosting::Config>>,
     /// Eventarc HTTP bind address. The pinned official suite starts this dependency only
     /// when a Functions codebase is loaded; its default port is 9299.
     pub eventarc_addr: String,
@@ -2353,6 +2353,52 @@ pub fn explicit_no_effect_keys(input: &Value) -> Vec<&'static str> {
 }
 
 impl RuntimeConfig {
+    /// Resolves Firebase Hosting deploy targets through `.firebaserc` for the selected project.
+    pub fn resolve_hosting_targets(
+        &mut self,
+        rc: Option<&Value>,
+        project: &str,
+    ) -> Result<(), ConfigError> {
+        let Some(sites) = &mut self.hosting else {
+            return Ok(());
+        };
+        for site in sites {
+            let Some(target) = site.target().map(str::to_owned) else {
+                if site.site().is_none() {
+                    site.resolve_target(project.to_owned());
+                }
+                continue;
+            };
+            let matches = rc
+                .and_then(|rc| rc.get("targets"))
+                .and_then(|targets| targets.get(project))
+                .and_then(|targets| targets.get("hosting"))
+                .and_then(|hosting| hosting.get(&target))
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    ConfigError(format!(
+                        "Deploy target {target} not configured for project {project}. Configure with:\n\n  firebase target:apply hosting {target} <site>"
+                    ))
+                })?;
+            if matches.len() != 1 {
+                return Err(ConfigError(format!(
+                    "Hosting target {target} is linked to {} sites; exactly one is required",
+                    matches.len()
+                )));
+            }
+            let resolved = matches[0]
+                .as_str()
+                .filter(|site| !site.is_empty())
+                .ok_or_else(|| {
+                    ConfigError(format!(
+                    ".firebaserc: targets.{project}.hosting.{target}[0] must be a non-empty string"
+                ))
+                })?;
+            site.resolve_target(resolved.to_owned());
+        }
+        Ok(())
+    }
+
     /// Every schema leaf with its parsed effective value, provenance and description.
     #[allow(clippy::too_many_lines)]
     pub fn config_show(&self, input: &Value) -> Vec<Value> {
@@ -3833,7 +3879,7 @@ impl RuntimeConfig {
         if only.hosting {
             match obj
                 .get("hosting")
-                .map(|value| crate::hosting::Config::parse(value, base))
+                .map(|value| crate::hosting::Config::parse_many(value, base))
                 .transpose()
             {
                 Ok(hosting) => self.hosting = hosting,
@@ -14455,12 +14501,19 @@ mod hosting_selection_tests {
         let only = Selection::parse("hosting").unwrap();
         for firebase in [
             json!({"hosting": {"public": "public"}, "emulators": {"hosting": {"host": "0.0.0.0"}}}),
-            json!({"hosting": [{"target": "a", "public": "a"}, {"target": "b", "public": "b"}]}),
             json!({"hosting": {"source": "."}}),
+            json!({"hosting": {"site": "site-a", "target": "web", "public": "public"}}),
+            json!({"hosting": [{"public": "public"}]}),
         ] {
             let (_, result) = apply(&firebase, &only);
             assert!(result.is_err(), "{firebase}");
         }
+        let (cfg, result) = apply(
+            &json!({"hosting": [{"site": "site-a", "public": "a"}, {"site": "site-b", "public": "b"}]}),
+            &only,
+        );
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(cfg.hosting.as_ref().map(Vec::len), Some(2));
     }
 
     // firebase-tools 15.28.2 starts Hosting for these shapes; before Hosting existed, fireemu
@@ -14469,7 +14522,6 @@ mod hosting_selection_tests {
     fn default_selection_notes_unsupported_hosting_instead_of_refusing_startup() {
         for firebase in [
             json!({"hosting": {"public": "public"}, "emulators": {"hosting": {"host": "0.0.0.0"}}}),
-            json!({"hosting": [{"target": "a", "public": "a"}, {"target": "b", "public": "b"}]}),
             json!({"hosting": {"source": "."}}),
             json!({"hosting": {"public": "public", "rewrites": [{"regex": "(", "destination": "/"}]}}),
         ] {
@@ -14483,6 +14535,12 @@ mod hosting_selection_tests {
                 report.notices
             );
         }
+        let (cfg, result) = apply(
+            &json!({"hosting": [{"site": "site-a", "public": "a"}, {"site": "site-b", "public": "b"}]}),
+            &Selection::default(),
+        );
+        assert!(result.unwrap().notices.is_empty());
+        assert_eq!(cfg.hosting.as_ref().map(Vec::len), Some(2));
         let (cfg, result) = apply(
             &json!({"hosting": {"public": "public"}, "emulators": {"hosting": {"port": 5005}}}),
             &Selection::default(),

@@ -43,7 +43,7 @@ pub struct Refusal {
 }
 
 impl Refusal {
-    fn invalid(message: impl Into<String>) -> Self {
+    pub(crate) fn invalid(message: impl Into<String>) -> Self {
         Self {
             http: 400,
             status: "INVALID_ARGUMENT",
@@ -799,6 +799,119 @@ pub fn answer(
     })
 }
 
+/// Returns the stored HTTP task in the requested Cloud Tasks response view.
+#[must_use]
+pub(crate) fn get_answer(
+    observation: &crate::task_scheduler::TaskObservation,
+    full: bool,
+) -> Value {
+    let task = &observation.task;
+    let mut headers = Map::new();
+    for (name, value) in &task.headers {
+        let lower = name.to_ascii_lowercase();
+        if lower == "user-agent"
+            || lower.starts_with("x-google-")
+            || lower.starts_with("x-appengine-")
+        {
+            continue;
+        }
+        headers.insert(name.clone(), json!(value));
+    }
+    headers.insert("User-Agent".to_owned(), json!("Google-Cloud-Tasks"));
+    let mut http = Map::new();
+    http.insert("url".to_owned(), json!(task.url));
+    http.insert("httpMethod".to_owned(), json!("POST"));
+    http.insert("headers".to_owned(), Value::Object(headers));
+    if full {
+        http.insert(
+            "body".to_owned(),
+            json!(crate::tasks::encode_base64(task.delivery_body())),
+        );
+    }
+    if let Some(oidc) = &task.oidc {
+        http.insert(
+            "oidcToken".to_owned(),
+            json!({
+                "serviceAccountEmail": oidc.service_account_email,
+                "audience": oidc.audience,
+            }),
+        );
+    }
+    if let Some(oauth_token) = &task.oauth_token {
+        http.insert("oauthToken".to_owned(), oauth_token.clone());
+    }
+    let mut result = Map::new();
+    result.insert("name".to_owned(), json!(task.name));
+    result.insert("httpRequest".to_owned(), Value::Object(http));
+    if let Some(schedule_time) = &observation.schedule_time {
+        result.insert("scheduleTime".to_owned(), json!(schedule_time));
+    }
+    if let Some(create_time) = &task.create_time {
+        result.insert("createTime".to_owned(), json!(create_time));
+    }
+    result.insert("dispatchDeadline".to_owned(), json!(task.dispatch_deadline));
+    if observation.dispatch_count != 0 {
+        result.insert(
+            "dispatchCount".to_owned(),
+            json!(observation.dispatch_count),
+        );
+    }
+    if observation.response_count != 0 {
+        result.insert(
+            "responseCount".to_owned(),
+            json!(observation.response_count),
+        );
+    }
+    if let Some(attempt) = &observation.first_attempt {
+        result.insert(
+            "firstAttempt".to_owned(),
+            json!({"dispatchTime": attempt.dispatch_time}),
+        );
+    }
+    if let Some(attempt) = &observation.last_attempt {
+        let mut last = Map::new();
+        if let Some(schedule_time) = &attempt.schedule_time {
+            last.insert("scheduleTime".to_owned(), json!(schedule_time));
+        }
+        last.insert("dispatchTime".to_owned(), json!(attempt.dispatch_time));
+        if let Some(response_time) = &attempt.response_time {
+            last.insert("responseTime".to_owned(), json!(response_time));
+        }
+        if let Some(status) = attempt.response_status {
+            last.insert(
+                "responseStatus".to_owned(),
+                json!({
+                    "code": rpc_code_for_http(status),
+                    "message": format!("HTTP response status {status}"),
+                }),
+            );
+        }
+        result.insert("lastAttempt".to_owned(), Value::Object(last));
+    }
+    result.insert(
+        "view".to_owned(),
+        json!(if full { "FULL" } else { "BASIC" }),
+    );
+    Value::Object(result)
+}
+
+fn rpc_code_for_http(status: u16) -> u8 {
+    match status {
+        200..=299 => 0, // OK
+        400 => 3,       // INVALID_ARGUMENT
+        401 => 16,      // UNAUTHENTICATED
+        403 => 7,       // PERMISSION_DENIED
+        404 => 5,       // NOT_FOUND
+        409 => 6,       // ALREADY_EXISTS
+        429 => 8,       // RESOURCE_EXHAUSTED
+        500 => 13,      // INTERNAL
+        501 => 12,      // UNIMPLEMENTED
+        503 => 14,      // UNAVAILABLE
+        504 => 4,       // DEADLINE_EXCEEDED
+        _ => 2,         // UNKNOWN
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1432,18 +1545,37 @@ mod tests {
     }
 
     #[test]
-    fn a_request_with_no_schedule_is_stamped_with_its_own_microsecond() {
-        let admitted = admit(
-            QUEUE,
-            &json!({ "task": base() }),
-            NOW + 789,
-            1,
-            DEFAULT_DEADLINE_SECONDS,
-            || 100,
-        )
-        .unwrap();
-        assert_eq!(admitted.schedule_nanos, NOW);
-        assert_eq!(admitted.schedule_time, "2026-11-11T09:06:59.589154Z");
+    fn past_or_missing_schedule_preserves_request_microseconds_at_millisecond_boundaries() {
+        for task in [
+            base(),
+            with(json!({"scheduleTime": "2026-11-11T08:06:59Z"})),
+        ] {
+            for (now, expected_nanos, expected_time) in [
+                (NOW + 789, NOW, "2026-11-11T09:06:59.589154Z"),
+                (
+                    1_794_388_019_588_999_999,
+                    1_794_388_019_588_999_000,
+                    "2026-11-11T09:06:59.588999Z",
+                ),
+                (
+                    1_794_388_019_589_000_789,
+                    1_794_388_019_589_000_000,
+                    "2026-11-11T09:06:59.589Z",
+                ),
+            ] {
+                let admitted = admit(
+                    QUEUE,
+                    &json!({ "task": task }),
+                    now,
+                    1,
+                    DEFAULT_DEADLINE_SECONDS,
+                    || 100,
+                )
+                .unwrap();
+                assert_eq!(admitted.schedule_nanos, expected_nanos);
+                assert_eq!(admitted.schedule_time, expected_time);
+            }
+        }
     }
 
     // ---- a duration of any length is refused, never a panic or a wrap (review S1 of 2026-11-12) ------------------------------

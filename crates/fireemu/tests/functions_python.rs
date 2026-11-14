@@ -25,10 +25,17 @@ fn interpreter() -> PathBuf {
 }
 
 fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("fireemu-py-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    loop {
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("fireemu-py-{name}-{}-{id}", std::process::id()));
+        match std::fs::create_dir(&dir) {
+            Ok(()) => return dir,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => panic!("cannot create scratch directory: {error}"),
+        }
+    }
 }
 
 fn runner_script() -> PathBuf {
@@ -645,5 +652,212 @@ fn function_isolation_gives_each_python_function_its_own_process_and_identity() 
         assert_eq!(answer["cached"], serde_json::json!([name]));
     }
     assert_ne!(answers[0]["pid"], answers[1]["pid"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Source reload uses the real venv for each candidate, rejects invalid Python without replacing
+/// the active generation, and accepts a later repair.
+#[allow(clippy::too_many_lines)] // Keep the native reload lifecycle in one executable scenario.
+fn run_python_source_reload_scenario(with_fixed_inspector: bool) {
+    let dir = scratch("source-reload");
+    let source = dir.join("code");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(source.join("requirements.txt"), "firebase-functions\n").unwrap();
+    std::os::unix::fs::symlink(fixture().join("venv"), source.join("venv")).unwrap();
+    std::fs::write(source.join("helper.py"), "VALUE = 'last-good'\n").unwrap();
+    // The nested package exists before startup: creating a directory is a source change (an empty
+    // directory is an importable namespace package), so only its `__pycache__` may appear later.
+    std::fs::create_dir(source.join("nested")).unwrap();
+    std::fs::write(source.join("nested").join("module.py"), "VALUE = 1\n").unwrap();
+    std::fs::write(source.join("main.py"), "import os\nfrom firebase_functions import https_fn\n@https_fn.on_request()\ndef hello(request):\n    import helper\n    return {'revision': helper.VALUE, 'source': __file__, 'cwd': os.getcwd()}\n").unwrap();
+    let firebase = firebase_json(&dir, &source, None);
+    let controller = r#"
+import json, os, pathlib, sys, time, urllib.request
+source = pathlib.Path(sys.argv[1])
+url = 'http://' + os.environ['FIREEMU_FUNCTIONS_HOST'] + '/demo-py/us-central1/hello'
+def get():
+    with urllib.request.urlopen(url, timeout=2) as response:
+        return json.load(response)
+def wait_dead(pid):
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(.1)
+    raise AssertionError('runner process is still alive: ' + str(pid))
+def wait_revision(revision, old_pid=None):
+    deadline = time.monotonic() + 12
+    while time.monotonic() < deadline:
+        try:
+            value = get()
+            if value.get('revision') == revision and (old_pid is None or value.get('pid') != old_pid):
+                return value
+        except Exception:
+            pass
+        time.sleep(.1)
+    raise AssertionError('timed out waiting for revision ' + revision)
+(source / 'main.py').write_text("def broken(:\n")
+time.sleep(3)
+(source / 'helper.py').write_text("VALUE =\n")
+generation_zero = get()
+assert generation_zero['revision'] == 'last-good', 'generation 0 read a later edit through a lazy import'
+captured_source = pathlib.Path(generation_zero['source']).resolve().parent
+assert captured_source != source.resolve(), 'generation 0 runs from the live source directory'
+assert pathlib.Path(generation_zero['cwd']).resolve() == captured_source, 'generation 0 cwd is not its snapshot'
+(source / 'helper.py').write_text("VALUE = 'last-good'\n")
+(source / 'main.py').write_text("import os\nfrom firebase_functions import https_fn\n@https_fn.on_request()\ndef hello(request):\n    return {'revision': 'initial', 'pid': os.getpid()}\n")
+initial = wait_revision('initial')
+marker = source / 'venv' / ('.fireemu-cache-marker-' + source.parent.name)
+with marker.open('x') as file:
+    file.write('changed')
+(source / '__pycache__').mkdir(exist_ok=True)
+(source / '__pycache__' / 'module.pyc').write_text('root cache')
+(source / 'nested' / '__pycache__').mkdir()
+(source / 'nested' / '__pycache__' / 'module.pyo').write_text('nested cache')
+time.sleep(2)
+assert get()['pid'] == initial['pid'], 'a venv or Python cache change restarted the Python process'
+marker.unlink()
+(source / 'main.py').write_text("import os\nfrom firebase_functions import https_fn\n@https_fn.on_request()\ndef hello(request):\n    return {'revision': 'revised', 'pid': os.getpid()}\n")
+valid = wait_revision('revised', initial['pid'])
+wait_dead(initial['pid'])
+rejected_pid_file = pathlib.Path(sys.argv[2])
+(source / 'main.py').write_text("import os, pathlib\npathlib.Path(%r).write_text(str(os.getpid()))\nraise RuntimeError('candidate rejected')\n" % str(rejected_pid_file))
+deadline = time.monotonic() + 8
+while time.monotonic() < deadline and not rejected_pid_file.exists():
+    time.sleep(.1)
+assert rejected_pid_file.exists(), 'the rejected Python candidate never ran'
+rejected_pid = int(rejected_pid_file.read_text())
+wait_dead(rejected_pid)
+assert get()['pid'] == valid['pid'], 'invalid source replaced the last-known-good generation'
+(source / 'main.py').write_text("import os\nfrom firebase_functions import https_fn\n@https_fn.on_request()\ndef hello(request):\n    return {'revision': 'recovered', 'pid': os.getpid()}\n")
+recovered = wait_revision('recovered', valid['pid'])
+assert recovered['pid'] != valid['pid']
+print(json.dumps({'initial': initial, 'valid': valid, 'recovered': recovered}))
+"#;
+    let mut extra: Vec<String> = Vec::new();
+    let inspector_listener =
+        with_fixed_inspector.then(|| std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap());
+    if let Some(listener) = &inspector_listener {
+        let inspector_port = listener.local_addr().unwrap().port().to_string();
+        extra.push("--inspect-functions".to_owned());
+        extra.push(inspector_port);
+    }
+    let extra: Vec<&str> = extra.iter().map(String::as_str).collect();
+    let output = exec(
+        &firebase,
+        &extra,
+        &[
+            "python3",
+            "-c",
+            controller,
+            &source.display().to_string(),
+            &dir.join("rejected-runner.pid").display().to_string(),
+        ],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(stderr.contains("reloaded generation"), "{stderr}");
+    assert!(
+        stderr.contains("keeping the last-known-good generation"),
+        "{stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+#[ignore = "requires the fixture virtual environment; CI creates it"]
+fn python_source_edits_reload_reject_and_recover_without_watching_the_venv() {
+    run_python_source_reload_scenario(false);
+}
+
+#[test]
+#[ignore = "requires the fixture virtual environment; CI creates it"]
+fn python_source_edits_keep_last_good_generation_with_fixed_inspector_option() {
+    run_python_source_reload_scenario(true);
+}
+
+#[test]
+#[ignore = "requires the fixture virtual environment; CI creates it"]
+fn python_sibling_symlink_edits_reload_and_bad_linked_source_keeps_last_good() {
+    let dir = scratch("sibling-source-reload");
+    let source = dir.join("code");
+    let shared = dir.join("shared");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::write(source.join("requirements.txt"), "firebase-functions\n").unwrap();
+    std::os::unix::fs::symlink(fixture().join("venv"), source.join("venv")).unwrap();
+    std::os::unix::fs::symlink("../shared", source.join("shared")).unwrap();
+    std::fs::write(shared.join("__init__.py"), "\n").unwrap();
+    std::fs::write(shared.join("version.py"), "VALUE = 'initial'\n").unwrap();
+    std::fs::write(
+        source.join("main.py"),
+        "import os\nfrom firebase_functions import https_fn\nfrom shared.version import VALUE\n@https_fn.on_request()\ndef hello(request):\n    return {'revision': 'initial', 'value': VALUE, 'feature': os.path.isdir('shared/feature'), 'pid': os.getpid()}\n",
+    )
+    .unwrap();
+    let firebase = firebase_json(&dir, &source, None);
+    let controller = r#"
+import json, pathlib, sys, time, urllib.request
+source = pathlib.Path(sys.argv[1])
+shared = pathlib.Path(sys.argv[2])
+url = 'http://' + __import__('os').environ['FIREEMU_FUNCTIONS_HOST'] + '/demo-py/us-central1/hello'
+def get():
+    with urllib.request.urlopen(url, timeout=2) as response:
+        return json.load(response)
+def wait_value(value, old_pid=None, revision=None, feature=None):
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        try:
+            result = get()
+            if result.get('value') == value and (old_pid is None or result.get('pid') != old_pid) and (revision is None or result.get('revision') == revision) and (feature is None or result.get('feature') == feature):
+                return result
+        except Exception:
+            pass
+        time.sleep(.1)
+    raise AssertionError('timed out waiting for linked value ' + value)
+initial = wait_value('initial', feature=False)
+(shared / 'version.py').write_text("VALUE = 'linked-edit'\n")
+linked = wait_value('linked-edit', initial['pid'], feature=False)
+(shared / 'feature').mkdir()
+feature = wait_value('linked-edit', linked['pid'], feature=True)
+(source / 'main.py').write_text("import os\nfrom firebase_functions import https_fn\nfrom shared.version import VALUE\n@https_fn.on_request()\ndef hello(request):\n    return {'revision': 'main-edit', 'value': VALUE, 'feature': os.path.isdir('shared/feature'), 'pid': os.getpid()}\n")
+main = wait_value('linked-edit', feature['pid'], 'main-edit', True)
+(shared / 'version.py').write_text("VALUE =\n")
+time.sleep(2)
+assert get() == main, 'an invalid linked target replaced the last-known-good generation'
+(shared / 'version.py').write_text("VALUE = 'recovered'\n")
+recovered = wait_value('recovered', main['pid'], 'main-edit', True)
+assert recovered['pid'] != main['pid']
+print(json.dumps({'initial': initial, 'linked': linked, 'feature': feature, 'main': main, 'recovered': recovered}))
+"#;
+    let output = exec(
+        &firebase,
+        &[],
+        &[
+            "python3",
+            "-c",
+            controller,
+            &source.display().to_string(),
+            &shared.display().to_string(),
+        ],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(stderr.contains("reloaded generation"), "{stderr}");
+    assert!(
+        stderr.contains("keeping the last-known-good generation"),
+        "{stderr}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

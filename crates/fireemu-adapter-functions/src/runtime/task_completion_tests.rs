@@ -3165,3 +3165,86 @@ async fn reload_replaces_manual_eventarc_registrations_with_the_manifest_generat
     assert!(table.contains("us-central1-customEvent-1-locations/us-central1/channels/custom"));
     runtime.shutdown().await;
 }
+
+#[test]
+fn task_timestamps_preserve_exact_utc_microseconds() {
+    let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::from_nanos(0))));
+    let runtime = FunctionsRuntime::new(
+        super::FunctionManifest::default(),
+        FunctionsConfig {
+            clock_policy: crate::application_clock::ApplicationClockPolicy {
+                tasks_virtual: true,
+                ..Default::default()
+            },
+            ..FunctionsConfig::for_tests(1, "test-only".to_owned())
+        },
+        clock.clone(),
+        Arc::new(Runner::unstarted("timestamp-test")),
+        None,
+    );
+    for (nanos, expected) in [
+        (0, "1970-01-01T00:00:00.000000Z"),
+        (-1_000, "1969-12-31T23:59:59.999999Z"),
+        (1_234_567_890, "1970-01-01T00:00:01.234567Z"),
+        (1_788_004_860_123_456_789, "2026-08-29T12:01:00.123456Z"),
+    ] {
+        clock
+            .lock()
+            .unwrap()
+            .set_allow_backwards(LogicalInstant::from_nanos(nanos));
+        assert_eq!(super::task_timestamp_from_nanos(nanos), expected);
+        assert_eq!(runtime.task_timestamp(), expected);
+    }
+}
+
+#[test]
+fn strict_get_rejects_unserved_resources_before_accessing_scheduler_state() {
+    let mut manifest = parse_manifest(&json!({"functions": [
+        {"name": "q", "trigger": {"type": "http", "callable": false}},
+        {"name": "http", "trigger": {"type": "http", "callable": false}}
+    ]}))
+    .unwrap();
+    manifest.functions[0].trigger = Trigger::TaskQueue {
+        retry: TaskRetryConfig::default(),
+        rate_limits: TaskRateLimits::default(),
+    };
+    let runtime = FunctionsRuntime::new(
+        manifest,
+        FunctionsConfig::for_tests(1, "test-only".to_owned()),
+        Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::from_nanos(0)))),
+        Arc::new(Runner::unstarted("strict-get-test")),
+        None,
+    );
+    // Resource validation must still return NOT_FOUND when scheduler state is unavailable.
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _state = runtime.inner.lock().unwrap();
+        panic!("poison scheduler state for the validation-order test");
+    }))
+    .is_err());
+    for (project, region, queue) in [
+        ("demo-app", "europe-west1", "q"),
+        ("other", "us-central1", "q"),
+        ("demo-app", "us-central1", "http"),
+        ("demo-app", "us-central1", "missing"),
+    ] {
+        for full in [false, true] {
+            let error = runtime
+                .get_task_strict(project, region, queue, "missing", full)
+                .unwrap_err();
+            assert_eq!(error.status, 404, "{project}/{region}/{queue}, full={full}");
+            assert_eq!(
+                error.body,
+                crate::tasks_production::Refusal::task_not_found()
+                    .body()
+                    .to_string()
+            );
+        }
+    }
+    assert_eq!(
+        runtime
+            .get_task_strict("demo-app", "us-central1", "q", "missing", false)
+            .unwrap_err()
+            .status,
+        500
+    );
+}

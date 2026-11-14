@@ -1272,6 +1272,7 @@ pub(crate) fn strict_callable_bearer_unverified(
 /// There is no queue to create: the official emulator creates one per `onTaskDispatched`
 /// function at load time and fireemu's queue *is* the function, so the create route reports
 /// what the queue already is rather than storing a second copy of it.
+#[allow(clippy::too_many_lines)]
 fn task_route(
     runtime: &Arc<FunctionsRuntime>,
     route: &crate::tasks::Route,
@@ -1348,6 +1349,36 @@ fn task_route(
             queue,
             task,
         } => {
+            if method == hyper::Method::GET {
+                if !runtime.is_strict() {
+                    let escaped = target
+                        .replace('&', "&amp;")
+                        .replace('<', "&lt;")
+                        .replace('>', "&gt;")
+                        .replace('"', "&quot;")
+                        .replace('\'', "&#39;");
+                    return typed(StatusCode::NOT_FOUND, "text/html; charset=utf-8", &format!("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot {method} {escaped}</pre>\n</body>\n</html>\n"));
+                }
+                let Ok(full) = crate::tasks::response_view(target) else {
+                    let refusal = crate::tasks::EnqueueRefusal {
+                        status: 400,
+                        body: crate::tasks_production::Refusal::invalid(
+                            "Invalid value for responseView.",
+                        )
+                        .body()
+                        .to_string(),
+                    };
+                    return refusal_response(runtime, &refusal);
+                };
+                return match runtime.get_task_strict(project, location, queue, task, full) {
+                    Ok(answer) => typed(
+                        StatusCode::OK,
+                        PRODUCTION_JSON,
+                        &crate::tasks_production::pretty(&answer),
+                    ),
+                    Err(refusal) => refusal_response(runtime, &refusal),
+                };
+            }
             if method != hyper::Method::DELETE {
                 if runtime.is_strict() {
                     return simple(StatusCode::METHOD_NOT_ALLOWED, "Method Not Allowed");

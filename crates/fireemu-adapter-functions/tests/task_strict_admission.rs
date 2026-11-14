@@ -696,11 +696,17 @@ async fn the_strict_listener_deletes_with_json_and_refuses_other_methods() {
         200
     );
     let path = format!("{TASKS}/wire-del");
-    assert_eq!(wire(addr, "GET", &path, b"").await.0, 405);
+    let (get_status, _, get_text) = wire(addr, "GET", &path, b"").await;
+    assert_eq!(get_status, 200, "{get_text}");
+    let get_task: Value = serde_json::from_str(&get_text).unwrap();
+    assert_eq!(get_task["dispatchCount"], 0);
+    assert_eq!(get_task["responseCount"], 0);
+    assert!(get_task["httpRequest"].get("body").is_none());
     assert_eq!(wire(addr, "PUT", &path, b"").await.0, 405);
     assert_eq!(wire(addr, "POST", &path, b"{}").await.0, 405);
     let (status, head, body) = wire(addr, "DELETE", &path, b"").await;
     assert_eq!((status, body.as_str()), (200, "{}\n"));
+    assert_eq!(wire(addr, "GET", &path, b"").await.0, 404);
     assert!(head
         .to_ascii_lowercase()
         .contains("content-type: application/json; charset=utf-8"));
@@ -1445,4 +1451,341 @@ async fn the_retry_gaps_of_a_failing_task_follow_production_after_a_dozen_failur
         }
         h.stop().await;
     }
+}
+
+#[tokio::test]
+async fn strict_get_task_returns_pending_task_with_basic_and_full_views() {
+    let h = start(
+        "strict-get",
+        FunctionsHttpProfile::Strict,
+        NameReuse::Immediate,
+        600,
+    )
+    .await;
+    let (addr, server) = tasks_listener(&h).await;
+    std::fs::remove_file(h.probe.with_file_name("entries.taskA.release")).unwrap();
+    let name = format!("{BASE}/tasks/get-me");
+    let schedule_time = (chrono::Utc::now() + chrono::Duration::days(7))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let raw = [0xff, 0x00, b'{', b'}'];
+    let encoded = {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(raw)
+    };
+    let create = json!({"task": {"name": name, "scheduleTime": schedule_time, "httpRequest": {
+        "url": "", "body": encoded, "headers": {"Content-Type": "application/octet-stream"},
+        "oauthToken": {"serviceAccountEmail": "tasks@example.test", "scope": "scope-a"}
+    }, "dispatchDeadline": "15.500s"}, "responseView": "FULL"});
+    let (status, _, text) = wire(addr, "POST", TASKS, create.to_string().as_bytes()).await;
+    assert_eq!(status, 200, "{text}");
+    let task_path = format!("{TASKS}/get-me");
+    let (pending_status, _, pending_text) = wire(addr, "GET", &task_path, b"").await;
+    assert_eq!(pending_status, 200, "{pending_text}");
+    let pending: Value = serde_json::from_str(&pending_text).unwrap();
+    assert_eq!(pending["dispatchCount"], 0);
+    assert_eq!(pending["responseCount"], 0);
+    assert!(pending.get("firstAttempt").is_none());
+    assert_eq!(pending["scheduleTime"], schedule_time);
+    assert_eq!(pending["dispatchDeadline"], "15.500s");
+    assert_eq!(pending["httpRequest"]["oauthToken"]["scope"], "scope-a");
+    h.runtime.run_tasks_now("taskA", Some("get-me"));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !std::fs::read_to_string(&h.probe)
+            .unwrap_or_default()
+            .contains("taskA")
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let (basic_status, _, basic_text) = wire(addr, "GET", &task_path, b"").await;
+    assert_eq!(basic_status, 200, "{basic_text}");
+    let basic: Value = serde_json::from_str(&basic_text).unwrap();
+    assert_eq!(basic["name"], name);
+    assert_eq!(basic["dispatchCount"], 1);
+    assert_eq!(basic["responseCount"], 0);
+    assert!(basic["firstAttempt"].get("dispatchTime").is_some());
+    assert!(basic["lastAttempt"].get("responseTime").is_none());
+    assert!(basic["httpRequest"].get("body").is_none());
+    let full_path = format!("{task_path}?responseView=%46ULL");
+    let (full_status, _, full_text) = wire(addr, "GET", &full_path, b"").await;
+    assert_eq!(full_status, 200, "{full_text}");
+    let full: Value = serde_json::from_str(&full_text).unwrap();
+    assert_eq!(full["httpRequest"]["body"], encoded);
+    let invalid_path = format!("{task_path}?responseView=bad");
+    let (invalid_status, _, _) = wire(addr, "GET", &invalid_path, b"").await;
+    assert_eq!(invalid_status, 400);
+    std::fs::write(h.probe.with_file_name("entries.taskA.release"), "").unwrap();
+    h.idle().await;
+    let (missing_status, _, _) = wire(addr, "GET", &task_path, b"").await;
+    assert_eq!(missing_status, 404);
+    server.abort();
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn strict_get_task_returns_a_task_while_it_waits_for_retry() {
+    let h = start_full(
+        "strict-get-retry",
+        FunctionsHttpProfile::Strict,
+        NameReuse::Immediate,
+        600,
+        retry(2, 2_000),
+        false,
+        false,
+    )
+    .await;
+    let (addr, server) = tasks_listener(&h).await;
+    let name = format!("{BASE}/tasks/failing-get");
+    let mut body = body_of(&json!({"name": name}));
+    body["task"]["httpRequest"]["body"] = json!(base64(br#"{"data":1}"#));
+    let (status, _, text) = wire(addr, "POST", TASKS, body.to_string().as_bytes()).await;
+    assert_eq!(status, 200, "{text}");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while std::fs::read_to_string(&h.probe)
+            .unwrap_or_default()
+            .lines()
+            .count()
+            == 0
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let path = format!("{TASKS}/failing-get?responseView=FULL");
+    let got = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let (get_status, _, get_text) = wire(addr, "GET", &path, b"").await;
+            assert_eq!(get_status, 200, "{get_text}");
+            let got: Value = serde_json::from_str(&get_text).unwrap();
+            if got["responseCount"] == 1
+                && got["lastAttempt"].get("responseTime").is_some()
+                && got["scheduleTime"] != got["lastAttempt"]["scheduleTime"]
+            {
+                break got;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        got["httpRequest"]["body"],
+        body["task"]["httpRequest"]["body"]
+    );
+    assert_eq!(got["dispatchCount"], 1);
+    assert_eq!(got["responseCount"], 1);
+    assert_eq!(got["lastAttempt"]["responseStatus"]["code"], 13);
+    assert_eq!(
+        got["lastAttempt"]["responseStatus"]["message"],
+        "HTTP response status 500"
+    );
+    assert!(got["lastAttempt"].get("responseTime").is_some());
+    assert_ne!(got["scheduleTime"], got["lastAttempt"]["scheduleTime"]);
+    assert_eq!(
+        std::fs::read_to_string(&h.probe).unwrap().lines().count(),
+        1
+    );
+    server.abort();
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn strict_get_counts_fault_injected_http_response_as_a_task_attempt() {
+    use fireemu_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule, FaultState};
+
+    let h = start_full(
+        "strict-get-fault-attempt",
+        FunctionsHttpProfile::Strict,
+        NameReuse::Immediate,
+        600,
+        retry(2, 2_000),
+        false,
+        false,
+    )
+    .await;
+    let (addr, server) = tasks_listener(&h).await;
+    let faults = Arc::new(Mutex::new(FaultState::default()));
+    faults.lock().unwrap().install(FaultPlan {
+        seed: 1,
+        rules: vec![FaultRule {
+            matches: FaultMatch {
+                operation: "functions.invoke".into(),
+                nth: Some(1),
+                function: Some("taskA".into()),
+                event_type: None,
+            },
+            action: FaultAction::ReturnError { code: "500".into() },
+        }],
+    });
+    h.runtime.set_faults(faults);
+    let name = format!("{BASE}/tasks/fault-attempt");
+    let (status, _, text) = wire(
+        addr,
+        "POST",
+        TASKS,
+        body_of(&json!({"name": name})).to_string().as_bytes(),
+    )
+    .await;
+    assert_eq!(status, 200, "{text}");
+    let path = format!("{TASKS}/fault-attempt?responseView=FULL");
+    let got = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let (status, _, text) = wire(addr, "GET", &path, b"").await;
+            assert_eq!(status, 200, "{text}");
+            let got: Value = serde_json::from_str(&text).unwrap();
+            if got["responseCount"] == 1 {
+                break got;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(got["dispatchCount"], 1);
+    assert_eq!(got["responseCount"], 1);
+    assert!(got["firstAttempt"].get("dispatchTime").is_some());
+    assert_eq!(got["lastAttempt"]["responseStatus"]["code"], 13);
+    assert!(got["lastAttempt"].get("responseTime").is_some());
+    assert!(got["lastAttempt"].get("scheduleTime").is_some());
+    server.abort();
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn emulator_profile_still_rejects_non_json_task_bodies() {
+    let h = start(
+        "emulator-raw-rejected",
+        FunctionsHttpProfile::Emulator,
+        NameReuse::Immediate,
+        600,
+    )
+    .await;
+    let mut body = body_of(&json!({"name": format!("{BASE}/tasks/raw-rejected")}));
+    body["task"]["httpRequest"]["body"] = json!(base64(&[0xff, 0x00]));
+    let error = h
+        .runtime
+        .enqueue_task("demo-app", "us-central1", "taskA", &body)
+        .expect_err("the emulator profile retains its current JSON-only behavior");
+    assert_eq!(error.status, 400);
+    let parse_error = serde_json::from_slice::<Value>(&[0xff, 0x00]).unwrap_err();
+    assert_eq!(
+        error.body,
+        format!("the task's httpRequest body is not JSON: {parse_error}")
+    );
+    let mut valid_null = body_of(&json!({"name": format!("{BASE}/tasks/json-null")}));
+    valid_null["task"]["httpRequest"]["body"] = json!(base64(b"null"));
+    h.runtime
+        .enqueue_task("demo-app", "us-central1", "taskA", &valid_null)
+        .expect("valid JSON null remains valid in the emulator profile");
+    h.idle().await;
+    let (addr, server) = tasks_listener(&h).await;
+    let path = format!("{TASKS}/missing");
+    let (status, _, _) = wire(addr, "GET", &path, b"").await;
+    assert_eq!(status, 404);
+    server.abort();
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn capacity_waits_are_not_counted_as_task_attempts() {
+    let h = start(
+        "strict-get-capacity",
+        FunctionsHttpProfile::Strict,
+        NameReuse::Immediate,
+        600,
+    )
+    .await;
+    let (addr, server) = tasks_listener(&h).await;
+    let release_task_a = h.probe.with_file_name("entries.taskA.release");
+    let release_task_b = h.probe.with_file_name("entries.taskB.release");
+    std::fs::remove_file(&release_task_a).unwrap();
+    std::fs::remove_file(&release_task_b).unwrap();
+
+    let target = h
+        .runtime
+        .http_target("demo-app", "us-central1", "taskB")
+        .unwrap();
+    let blockers = (0..4)
+        .map(|_| {
+            let runtime = h.runtime.clone();
+            let target = target.clone();
+            tokio::spawn(async move {
+                runtime
+                    .invoke_http(
+                        &target,
+                        "POST",
+                        "/demo-app/us-central1/taskB",
+                        &[(
+                            "X-CloudTasks-TaskName".to_owned(),
+                            "capacity-blocker".to_owned(),
+                        )],
+                        b"{}",
+                    )
+                    .await
+                    .unwrap()
+            })
+        })
+        .collect::<Vec<_>>();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while std::fs::read_to_string(&h.probe)
+            .unwrap_or_default()
+            .lines()
+            .count()
+            < 4
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let name = format!("{BASE}/tasks/capacity-wait");
+    let body = body_of(&json!({"name": name}));
+    h.runtime
+        .enqueue_task("demo-app", "us-central1", "taskA", &body)
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while h.runtime.status()["tasksInFlight"] != 1 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    let path = format!("{TASKS}/capacity-wait");
+    let (status, _, text) = wire(addr, "GET", &path, b"").await;
+    assert_eq!(status, 200, "{text}");
+    let blocked: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(blocked["dispatchCount"], 0);
+    assert_eq!(blocked["responseCount"], 0);
+
+    std::fs::write(release_task_b, "").unwrap();
+    for blocker in blockers {
+        blocker.await.unwrap();
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while std::fs::read_to_string(&h.probe)
+            .unwrap_or_default()
+            .lines()
+            .count()
+            < 5
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let (status, _, text) = wire(addr, "GET", &path, b"").await;
+    assert_eq!(status, 200, "{text}");
+    let delivered: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(delivered["dispatchCount"], 1);
+    assert_eq!(delivered["responseCount"], 0);
+
+    std::fs::write(release_task_a, "").unwrap();
+    h.idle().await;
+    server.abort();
+    h.stop().await;
 }

@@ -26,3 +26,6 @@ mod task_scheduler;
 pub mod tasks;
 pub mod tasks_production;
 pub mod zone;
+
+#[cfg(test)]
+mod task_raw_body_tests;

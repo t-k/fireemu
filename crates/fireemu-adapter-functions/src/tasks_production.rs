@@ -43,7 +43,7 @@ pub struct Refusal {
 }
 
 impl Refusal {
-    fn invalid(message: impl Into<String>) -> Self {
+    pub(crate) fn invalid(message: impl Into<String>) -> Self {
         Self {
             http: 400,
             status: "INVALID_ARGUMENT",
@@ -797,6 +797,115 @@ pub fn answer(
         "dispatchDeadline": admitted.deadline_text,
         "view": admitted.view,
     })
+}
+
+/// Returns the stored HTTP task in the requested Cloud Tasks response view.
+#[must_use]
+pub(crate) fn get_answer(
+    observation: &crate::task_scheduler::TaskObservation,
+    full: bool,
+) -> Value {
+    let task = &observation.task;
+    let mut headers = Map::new();
+    for (name, value) in &task.headers {
+        let lower = name.to_ascii_lowercase();
+        if lower == "user-agent"
+            || lower.starts_with("x-google-")
+            || lower.starts_with("x-appengine-")
+        {
+            continue;
+        }
+        headers.insert(name.clone(), json!(value));
+    }
+    headers.insert("User-Agent".to_owned(), json!("Google-Cloud-Tasks"));
+    let mut http = Map::new();
+    http.insert("url".to_owned(), json!(task.url));
+    http.insert("httpMethod".to_owned(), json!("POST"));
+    http.insert("headers".to_owned(), Value::Object(headers));
+    if full {
+        http.insert(
+            "body".to_owned(),
+            json!(crate::tasks::encode_base64(task.delivery_body())),
+        );
+    }
+    if let Some(oidc) = &task.oidc {
+        http.insert(
+            "oidcToken".to_owned(),
+            json!({
+                "serviceAccountEmail": oidc.service_account_email,
+                "audience": oidc.audience,
+            }),
+        );
+    }
+    if let Some(oauth_token) = &task.oauth_token {
+        http.insert("oauthToken".to_owned(), oauth_token.clone());
+    }
+    let mut result = Map::new();
+    result.insert("name".to_owned(), json!(task.name));
+    result.insert("httpRequest".to_owned(), Value::Object(http));
+    if let Some(schedule_time) = &observation.schedule_time {
+        result.insert("scheduleTime".to_owned(), json!(schedule_time));
+    }
+    if let Some(create_time) = &task.create_time {
+        result.insert("createTime".to_owned(), json!(create_time));
+    }
+    result.insert("dispatchDeadline".to_owned(), json!(task.dispatch_deadline));
+    result.insert(
+        "dispatchCount".to_owned(),
+        json!(observation.dispatch_count),
+    );
+    result.insert(
+        "responseCount".to_owned(),
+        json!(observation.response_count),
+    );
+    if let Some(attempt) = &observation.first_attempt {
+        result.insert(
+            "firstAttempt".to_owned(),
+            json!({"dispatchTime": attempt.dispatch_time}),
+        );
+    }
+    if let Some(attempt) = &observation.last_attempt {
+        let mut last = Map::new();
+        if let Some(schedule_time) = &attempt.schedule_time {
+            last.insert("scheduleTime".to_owned(), json!(schedule_time));
+        }
+        last.insert("dispatchTime".to_owned(), json!(attempt.dispatch_time));
+        if let Some(response_time) = &attempt.response_time {
+            last.insert("responseTime".to_owned(), json!(response_time));
+        }
+        if let Some(status) = attempt.response_status {
+            last.insert(
+                "responseStatus".to_owned(),
+                json!({
+                    "code": rpc_code_for_http(status),
+                    "message": format!("HTTP response status {status}"),
+                }),
+            );
+        }
+        result.insert("lastAttempt".to_owned(), Value::Object(last));
+    }
+    result.insert(
+        "view".to_owned(),
+        json!(if full { "FULL" } else { "BASIC" }),
+    );
+    Value::Object(result)
+}
+
+fn rpc_code_for_http(status: u16) -> u8 {
+    match status {
+        200..=299 => 0, // OK
+        400 => 3,       // INVALID_ARGUMENT
+        401 => 16,      // UNAUTHENTICATED
+        403 => 7,       // PERMISSION_DENIED
+        404 => 5,       // NOT_FOUND
+        409 => 6,       // ALREADY_EXISTS
+        429 => 8,       // RESOURCE_EXHAUSTED
+        500 => 13,      // INTERNAL
+        501 => 12,      // UNIMPLEMENTED
+        503 => 14,      // UNAVAILABLE
+        504 => 4,       // DEADLINE_EXCEEDED
+        _ => 2,         // UNKNOWN
+    }
 }
 
 #[cfg(test)]

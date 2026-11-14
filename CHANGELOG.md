@@ -8,6 +8,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.52.0] - 2026-11-14
+
 ### Added
 
 - Hosting supports multiple firebase.json sites, including .firebaserc deploy targets, with separate local listeners and content roots. Startup and Hub discovery expose the additional endpoints.
@@ -1356,7 +1358,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/fireemu/fireemu/compare/v0.51.0...HEAD
+[Unreleased]: https://github.com/fireemu/fireemu/compare/v0.52.0...HEAD
+[0.52.0]: https://github.com/fireemu/fireemu/compare/v0.51.0...v0.52.0
 [0.51.0]: https://github.com/fireemu/fireemu/compare/v0.50.0...v0.51.0
 [0.50.0]: https://github.com/fireemu/fireemu/compare/v0.49.0...v0.50.0
 [0.49.0]: https://github.com/fireemu/fireemu/compare/v0.48.0...v0.49.0

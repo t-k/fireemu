@@ -4188,15 +4188,16 @@ pub(crate) fn is_recorded_json_cors_shape(method: &str, path: &str) -> bool {
     matches!(method, "GET" | "OPTIONS") && matches!(route("GET", path), Ok(Route::GcsObject { .. }))
 }
 
-/// Whether a request path names the Cloud Storage JSON API, independent of bucket configuration.
-/// Preflights do not name their intended method, so resolve them through the API verbs they may ask
-/// the server to allow.
-pub(crate) fn is_json_api_request(method: &str, path: &str) -> bool {
-    if is_json_api_namespace(path) {
-        return true;
-    }
-    let methods: &[&str] = if method == "OPTIONS" {
-        &["POST", "GET", "PUT", "DELETE", "PATCH"]
+/// Whether a path resolves to the Cloud Storage JSON API, independent of bucket configuration.
+/// Canonical namespaces are identified by route shape under a supported JSON verb, so an XML
+/// fallback object such as `/storage/v1/a.txt` is not mistaken for the API. HEAD and unsupported
+/// endpoint methods use another supported verb to identify the named JSON route. Short aliases
+/// retain method-based classification because paths such as `PUT /b/foo` are ambiguous.
+pub(crate) fn is_json_api_endpoint(method: &str, path: &str) -> bool {
+    let methods: &[&str] = if is_canonical_json_api_path(path) {
+        &["GET", "POST", "PUT", "PATCH", "DELETE"]
+    } else if method == "OPTIONS" {
+        &["POST", "GET", "PUT", "DELETE"]
     } else {
         std::slice::from_ref(&method)
     };
@@ -4206,9 +4207,9 @@ pub(crate) fn is_json_api_request(method: &str, path: &str) -> bool {
         .any(|route| is_json_api_route(&route))
 }
 
-/// Canonical JSON API endpoint prefixes. Check segment boundaries so `/storage/v10/...` remains
-/// eligible for the XML-style fallback route.
-pub(crate) fn is_json_api_namespace(path: &str) -> bool {
+/// Whether a path uses a canonical JSON API namespace, with segment boundaries so
+/// `/storage/v10/...` remains eligible for the XML-style fallback route.
+pub(crate) fn is_canonical_json_api_path(path: &str) -> bool {
     ["/storage/v1", "/upload/storage/v1", "/download/storage/v1"]
         .into_iter()
         .any(|prefix| {

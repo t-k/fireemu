@@ -311,7 +311,7 @@ fn bucket_cors_for(
     if !state.is_strict() {
         return None;
     }
-    if crate::storage::is_json_api_namespace(path) {
+    if crate::storage::is_json_api_endpoint(method, path) {
         return None;
     }
     let (bucket, firebase, json_api) = crate::storage::cors_bucket(method, path)?;
@@ -508,7 +508,7 @@ async fn respond(
         req.uri().query().unwrap_or(""),
     );
     let json_api_cors = state.is_strict()
-        && crate::storage::is_json_api_request(req.method().as_str(), req.uri().path());
+        && crate::storage::is_json_api_endpoint(req.method().as_str(), req.uri().path());
     if req.method() == hyper::Method::OPTIONS {
         if json_api_cors {
             // The JSON API's built-in CORS policy applies regardless of bucket storage.cors.

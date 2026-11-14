@@ -74,6 +74,21 @@ fn seed(s: &StorageState, bucket: &str) {
         .unwrap();
 }
 
+fn seed_named(s: &StorageState, bucket: &str, name: &str, body: &[u8]) {
+    s.store
+        .lock()
+        .unwrap()
+        .put(
+            &BucketName::try_new(bucket).unwrap(),
+            &ObjectName::try_new(name).unwrap(),
+            body.to_vec(),
+            NewMetadata::default(),
+            Precondition::default(),
+            START,
+        )
+        .unwrap();
+}
+
 fn configured(acceptance: TokenAcceptance, cors: &Value) -> StorageState {
     let s = state(acceptance);
     seed(&s, CONFIGURED);
@@ -904,6 +919,58 @@ async fn json_resumable_upload_exposes_location_independently_of_bucket_cors() {
             "{config}: {:?}",
             response.headers
         );
+        task.abort();
+        let _ = task.await;
+    }
+}
+
+#[tokio::test]
+async fn xml_fallback_paths_that_resemble_json_namespaces_keep_bucket_cors() {
+    for config in ["empty", "matching"] {
+        let s = state(TokenAcceptance::Verified);
+        seed_named(&s, "storage", "v1/a.txt", b"storage XML bytes");
+        seed_named(&s, "upload", "storage/v1/a.txt", b"upload XML bytes");
+        let cors = if config == "empty" {
+            BucketCors::default()
+        } else {
+            BucketCors::from_json(&rule()).unwrap()
+        };
+        s.rules.set_bucket_cors(BTreeMap::from([
+            ("storage".to_owned(), cors.clone()),
+            ("upload".to_owned(), cors),
+        ]));
+        let (addr, task) = serve(s).await;
+        for (path, expected_body) in [
+            ("/storage/v1/a.txt", b"storage XML bytes".as_slice()),
+            ("/upload/storage/v1/a.txt", b"upload XML bytes".as_slice()),
+        ] {
+            let answer = send(addr, "GET", path, &[("Origin", ORIGIN)]).await;
+            assert_eq!(answer.status, 200, "{config} {path}");
+            assert_eq!(answer.body, expected_body, "{config} {path}");
+            assert_eq!(
+                answer.header("access-control-allow-origin"),
+                (config == "matching").then_some(ORIGIN),
+                "{config} {path}"
+            );
+            assert_eq!(
+                answer.header("access-control-allow-credentials"),
+                None,
+                "{config} {path}"
+            );
+            let preflight = send(
+                addr,
+                "OPTIONS",
+                path,
+                &[("Origin", ORIGIN), ("Access-Control-Request-Method", "GET")],
+            )
+            .await;
+            assert_eq!(preflight.status, 200, "{config} OPTIONS {path}");
+            assert_eq!(
+                preflight.header("access-control-allow-origin"),
+                (config == "matching").then_some(ORIGIN),
+                "{config} OPTIONS {path}"
+            );
+        }
         task.abort();
         let _ = task.await;
     }

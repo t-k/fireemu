@@ -4,7 +4,7 @@
   "alias": "strict",
   "profile": "strict",
   "productionExact": true,
-  "binarySha256": "edf1396254676143143341be5029d014332799f074061d150335a85a2a01ce60",
+  "binarySha256": "4b046f2b9adda877c3f1c8e74fd07914c40e72d40bc6011d9805536050f2dc01",
   "corpusSha256": "899fd699884992c7f96f8437d749237f16bbeafcc75ee5d41683373a741579e9",
   "cases": {
     "retry-ladder": {
@@ -24,7 +24,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqretry/tasks/tqrun-RUN-retry-ladder",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqretry",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqretry",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -389,12 +389,12 @@
         }
       ],
       "timing": {
-        "firstMs": 1126,
-        "gapsMs": [1006, 2021, 4011, 6010, 6016],
-        "lateMs": [1100, 2106, 4127, 8138, 14148, 20164],
-        "startsAtMs": [119, 1125, 3146, 7157, 13167, 19183],
-        "endsAtMs": [119, 1125, 3146, 7157, 13167, 19184],
-        "holdMs": [0, 0, 0, 0, 0, 1]
+        "firstMs": 1260,
+        "gapsMs": [1005, 2006, 4005, 6006, 6006],
+        "lateMs": [448, 1453, 3459, 7464, 13470, 19476],
+        "startsAtMs": [4, 1009, 3015, 7020, 13026, 19032],
+        "endsAtMs": [4, 1010, 3015, 7020, 13027, 19033],
+        "holdMs": [0, 1, 0, 0, 1, 1]
       }
     },
     "retry-exhaust": {
@@ -414,7 +414,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqretry/tasks/tqrun-RUN-retry-exhaust",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqretry",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqretry",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -779,12 +779,12 @@
         }
       ],
       "timing": {
-        "firstMs": 1113,
-        "gapsMs": [1016, 2022, 4007, 6011, 6018],
-        "lateMs": [850, 1866, 3888, 7895, 13906, 19924],
-        "startsAtMs": [106, 1122, 3144, 7151, 13162, 19180],
-        "endsAtMs": [106, 1122, 3144, 7151, 13163, 19180],
-        "holdMs": [0, 0, 0, 0, 1, 0]
+        "firstMs": 256,
+        "gapsMs": [1008, 2006, 4008, 6006, 6004],
+        "lateMs": [233, 1241, 3247, 7255, 13261, 19265],
+        "startsAtMs": [0, 1008, 3014, 7022, 13028, 19032],
+        "endsAtMs": [0, 1008, 3014, 7022, 13028, 19032],
+        "holdMs": [0, 0, 0, 0, 0, 0]
       }
     },
     "limit-two": {
@@ -804,7 +804,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqlimit/tasks/tqrun-RUN-limit-two",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqlimit",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqlimit",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -949,12 +949,12 @@
         }
       ],
       "timing": {
-        "firstMs": 1007,
-        "gapsMs": [1073],
-        "lateMs": [522, 1595],
-        "startsAtMs": [0, 1073],
-        "endsAtMs": [2, 1074],
-        "holdMs": [2, 1]
+        "firstMs": 692,
+        "gapsMs": [1009],
+        "lateMs": [466, 1475],
+        "startsAtMs": [436, 1445],
+        "endsAtMs": [436, 1445],
+        "holdMs": [0, 0]
       }
     },
     "window-six": {
@@ -974,7 +974,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqwindow/tasks/tqrun-RUN-window-six",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqwindow",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqwindow",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -2109,24 +2109,24 @@
         }
       ],
       "timing": {
-        "firstMs": 1069,
+        "firstMs": 962,
         "gapsMs": [
-          1049, 2023, 2029, 2013, 2016, 2006, 2005, 2006, 2004, 2005, 2017, 4018, 4008, 4007, 8008,
-          8028, 10021, 10013, 10009
+          1010, 2007, 2007, 2005, 2007, 2005, 2006, 2005, 2006, 2006, 2003, 4003, 4003, 4005, 8005,
+          8006, 10006, 10004, 10004
         ],
         "lateMs": [
-          352, 1401, 3424, 5453, 7466, 9482, 11488, 13493, 15499, 17503, 19508, 21525, 25543, 29551,
-          33558, 41566, 49594, 59615, 69628, 79637
+          531, 1541, 3548, 5555, 7560, 9567, 11572, 13578, 15583, 17589, 19595, 21598, 25601, 29604,
+          33609, 41614, 49620, 59626, 69630, 79634
         ],
         "startsAtMs": [
-          62, 1111, 3134, 5163, 7176, 9192, 11198, 13203, 15209, 17213, 19218, 21235, 25253, 29261,
-          33268, 41276, 49304, 59325, 69338, 79347
+          706, 1716, 3723, 5730, 7735, 9742, 11747, 13753, 15758, 17764, 19770, 21773, 25776, 29779,
+          33784, 41789, 49795, 59801, 69805, 79809
         ],
         "endsAtMs": [
-          102, 1111, 3135, 5164, 7176, 9192, 11198, 13203, 15209, 17213, 19218, 21235, 25253, 29261,
-          33269, 41276, 49304, 59325, 69339, 79347
+          707, 1716, 3723, 5730, 7735, 9742, 11747, 13753, 15758, 17764, 19770, 21773, 25776, 29780,
+          33784, 41789, 49795, 59801, 69805, 79809
         ],
-        "holdMs": [40, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0]
+        "holdMs": [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]
       }
     },
     "dead-15": {
@@ -2146,7 +2146,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdead/tasks/tqrun-RUN-dead-15",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdead",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdead",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -2291,12 +2291,12 @@
         }
       ],
       "timing": {
-        "firstMs": 1129,
-        "gapsMs": [15849],
-        "lateMs": [180, 16029],
-        "startsAtMs": [122, 15971],
-        "endsAtMs": [20128, 15971],
-        "holdMs": [20006, 0]
+        "firstMs": 1256,
+        "gapsMs": [15993],
+        "lateMs": [621, 16614],
+        "startsAtMs": [1000, 16993],
+        "endsAtMs": [21003, 16993],
+        "holdMs": [20003, 0]
       }
     },
     "conc1-a": {
@@ -2316,7 +2316,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqconc1/tasks/tqrun-RUN-conc1-a",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqconc1",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqconc1",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -2406,12 +2406,12 @@
         }
       ],
       "timing": {
-        "firstMs": 169,
+        "firstMs": 1499,
         "gapsMs": [],
-        "lateMs": [9],
-        "startsAtMs": [162],
-        "endsAtMs": [3164],
-        "holdMs": [3002]
+        "lateMs": [657],
+        "startsAtMs": [1243],
+        "endsAtMs": [4247],
+        "holdMs": [3004]
       }
     },
     "conc1-b": {
@@ -2431,7 +2431,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqconc1/tasks/tqrun-RUN-conc1-b",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqconc1",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqconc1",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -2521,11 +2521,11 @@
         }
       ],
       "timing": {
-        "firstMs": 3179,
+        "firstMs": 3509,
         "gapsMs": [],
-        "lateMs": [2811],
-        "startsAtMs": [3172],
-        "endsAtMs": [6175],
+        "lateMs": [3461],
+        "startsAtMs": [4253],
+        "endsAtMs": [7256],
         "holdMs": [3003]
       }
     },
@@ -2546,7 +2546,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqconc1/tasks/tqrun-RUN-conc1-c",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqconc1",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqconc1",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -2636,12 +2636,12 @@
         }
       ],
       "timing": {
-        "firstMs": 6211,
+        "firstMs": 6516,
         "gapsMs": [],
-        "lateMs": [5630],
-        "startsAtMs": [6204],
-        "endsAtMs": [9219],
-        "holdMs": [3015]
+        "lateMs": [6262],
+        "startsAtMs": [7260],
+        "endsAtMs": [10263],
+        "holdMs": [3003]
       }
     },
     "conc1-d": {
@@ -2661,7 +2661,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqconc1/tasks/tqrun-RUN-conc1-d",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqconc1",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqconc1",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -2751,12 +2751,12 @@
         }
       ],
       "timing": {
-        "firstMs": 9230,
+        "firstMs": 9522,
         "gapsMs": [],
-        "lateMs": [8430],
-        "startsAtMs": [9223],
-        "endsAtMs": [12227],
-        "holdMs": [3004]
+        "lateMs": [9063],
+        "startsAtMs": [10266],
+        "endsAtMs": [13269],
+        "holdMs": [3003]
       }
     },
     "conc2-a": {
@@ -2776,7 +2776,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqconc2/tasks/tqrun-RUN-conc2-a",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqconc2",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqconc2",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -2866,12 +2866,12 @@
         }
       ],
       "timing": {
-        "firstMs": 39,
+        "firstMs": 1283,
         "gapsMs": [],
-        "lateMs": [16],
-        "startsAtMs": [1032],
-        "endsAtMs": [4034],
-        "holdMs": [3002]
+        "lateMs": [618],
+        "startsAtMs": [2027],
+        "endsAtMs": [5031],
+        "holdMs": [3004]
       }
     },
     "conc2-b": {
@@ -2891,7 +2891,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqconc2/tasks/tqrun-RUN-conc2-b",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqconc2",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqconc2",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -2981,12 +2981,12 @@
         }
       ],
       "timing": {
-        "firstMs": 257,
+        "firstMs": 1281,
         "gapsMs": [],
-        "lateMs": [10],
-        "startsAtMs": [1250],
-        "endsAtMs": [4252],
-        "holdMs": [3002]
+        "lateMs": [411],
+        "startsAtMs": [2025],
+        "endsAtMs": [5028],
+        "holdMs": [3003]
       }
     },
     "conc2-c": {
@@ -3006,7 +3006,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqconc2/tasks/tqrun-RUN-conc2-c",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqconc2",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqconc2",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -3096,12 +3096,12 @@
         }
       ],
       "timing": {
-        "firstMs": 3043,
+        "firstMs": 3290,
         "gapsMs": [],
-        "lateMs": [2588],
-        "startsAtMs": [4036],
-        "endsAtMs": [7047],
-        "holdMs": [3011]
+        "lateMs": [3215],
+        "startsAtMs": [5034],
+        "endsAtMs": [8035],
+        "holdMs": [3001]
       }
     },
     "conc2-d": {
@@ -3121,7 +3121,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqconc2/tasks/tqrun-RUN-conc2-d",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqconc2",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqconc2",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -3211,12 +3211,12 @@
         }
       ],
       "timing": {
-        "firstMs": 3261,
+        "firstMs": 3291,
         "gapsMs": [],
-        "lateMs": [2583],
-        "startsAtMs": [4254],
-        "endsAtMs": [7260],
-        "holdMs": [3006]
+        "lateMs": [3011],
+        "startsAtMs": [5035],
+        "endsAtMs": [8036],
+        "holdMs": [3001]
       }
     },
     "conc2-e": {
@@ -3236,7 +3236,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqconc2/tasks/tqrun-RUN-conc2-e",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqconc2",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqconc2",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -3326,12 +3326,12 @@
         }
       ],
       "timing": {
-        "firstMs": 6056,
+        "firstMs": 6294,
         "gapsMs": [],
-        "lateMs": [5140],
-        "startsAtMs": [7049],
-        "endsAtMs": [10052],
-        "holdMs": [3003]
+        "lateMs": [5809],
+        "startsAtMs": [8038],
+        "endsAtMs": [11039],
+        "holdMs": [3001]
       }
     },
     "rate-a": {
@@ -3351,7 +3351,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqrate/tasks/tqrun-RUN-rate-a",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqrate",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqrate",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -3441,11 +3441,11 @@
         }
       ],
       "timing": {
-        "firstMs": 180,
+        "firstMs": 1253,
         "gapsMs": [],
-        "lateMs": [7],
-        "startsAtMs": [2173],
-        "endsAtMs": [2173],
+        "lateMs": [563],
+        "startsAtMs": [2997],
+        "endsAtMs": [2997],
         "holdMs": [0]
       }
     },
@@ -3466,7 +3466,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqrate/tasks/tqrun-RUN-rate-b",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqrate",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqrate",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -3556,11 +3556,11 @@
         }
       ],
       "timing": {
-        "firstMs": 978,
+        "firstMs": 1257,
         "gapsMs": [],
-        "lateMs": [572],
-        "startsAtMs": [2971],
-        "endsAtMs": [2971],
+        "lateMs": [362],
+        "startsAtMs": [3001],
+        "endsAtMs": [3001],
         "holdMs": [0]
       }
     },
@@ -3581,7 +3581,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqrate/tasks/tqrun-RUN-rate-c",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqrate",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqrate",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -3671,11 +3671,11 @@
         }
       ],
       "timing": {
-        "firstMs": 1957,
+        "firstMs": 260,
         "gapsMs": [],
-        "lateMs": [1320],
-        "startsAtMs": [3950],
-        "endsAtMs": [3950],
+        "lateMs": [161],
+        "startsAtMs": [3004],
+        "endsAtMs": [3004],
         "holdMs": [0]
       }
     },
@@ -3696,7 +3696,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqrate/tasks/tqrun-RUN-rate-d",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqrate",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqrate",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -3786,12 +3786,12 @@
         }
       ],
       "timing": {
-        "firstMs": 2964,
+        "firstMs": 304,
         "gapsMs": [],
-        "lateMs": [2110],
-        "startsAtMs": [4957],
-        "endsAtMs": [4957],
-        "holdMs": [0]
+        "lateMs": [1],
+        "startsAtMs": [3048],
+        "endsAtMs": [3049],
+        "holdMs": [1]
       }
     },
     "rate-e": {
@@ -3811,7 +3811,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqrate/tasks/tqrun-RUN-rate-e",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqrate",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqrate",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -3901,11 +3901,11 @@
         }
       ],
       "timing": {
-        "firstMs": 2984,
+        "firstMs": 509,
         "gapsMs": [],
-        "lateMs": [2902],
-        "startsAtMs": [5977],
-        "endsAtMs": [5977],
+        "lateMs": [2],
+        "startsAtMs": [3253],
+        "endsAtMs": [3253],
         "holdMs": [0]
       }
     },
@@ -3926,7 +3926,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqrate/tasks/tqrun-RUN-rate-f",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqrate",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqrate",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -4016,11 +4016,11 @@
         }
       ],
       "timing": {
-        "firstMs": 3994,
+        "firstMs": 713,
         "gapsMs": [],
-        "lateMs": [3694],
-        "startsAtMs": [6987],
-        "endsAtMs": [6987],
+        "lateMs": [2],
+        "startsAtMs": [3457],
+        "endsAtMs": [3457],
         "holdMs": [0]
       }
     },
@@ -4041,7 +4041,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqrate/tasks/tqrun-RUN-rate-g",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqrate",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqrate",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -4131,12 +4131,12 @@
         }
       ],
       "timing": {
-        "firstMs": 4986,
+        "firstMs": 918,
         "gapsMs": [],
-        "lateMs": [4481],
-        "startsAtMs": [7979],
-        "endsAtMs": [7980],
-        "holdMs": [1]
+        "lateMs": [2],
+        "startsAtMs": [3662],
+        "endsAtMs": [3662],
+        "holdMs": [0]
       }
     },
     "rate-h": {
@@ -4156,7 +4156,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqrate/tasks/tqrun-RUN-rate-h",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqrate",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqrate",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -4246,12 +4246,12 @@
         }
       ],
       "timing": {
-        "firstMs": 5999,
+        "firstMs": 122,
         "gapsMs": [],
-        "lateMs": [5290],
-        "startsAtMs": [8992],
-        "endsAtMs": [8992],
-        "holdMs": [0]
+        "lateMs": [1],
+        "startsAtMs": [3866],
+        "endsAtMs": [3867],
+        "holdMs": [1]
       }
     },
     "env-default": {
@@ -4271,7 +4271,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/ID(19)",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -4361,12 +4361,12 @@
         }
       ],
       "timing": {
-        "firstMs": 929,
+        "firstMs": 1201,
         "gapsMs": [],
-        "lateMs": [3],
-        "startsAtMs": [3922],
-        "endsAtMs": [3922],
-        "holdMs": [0]
+        "lateMs": [875],
+        "startsAtMs": [4945],
+        "endsAtMs": [4946],
+        "holdMs": [1]
       }
     },
     "env-named": {
@@ -4386,7 +4386,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-env-named",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -4476,11 +4476,11 @@
         }
       ],
       "timing": {
-        "firstMs": 161,
+        "firstMs": 1207,
         "gapsMs": [],
-        "lateMs": [6],
-        "startsAtMs": [4154],
-        "endsAtMs": [4154],
+        "lateMs": [677],
+        "startsAtMs": [4951],
+        "endsAtMs": [4951],
         "holdMs": [0]
       }
     },
@@ -4501,7 +4501,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-env-headers",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Authorization": "Bearer not-a-token",
@@ -4598,12 +4598,12 @@
         }
       ],
       "timing": {
-        "firstMs": 391,
+        "firstMs": 1211,
         "gapsMs": [],
-        "lateMs": [17],
-        "startsAtMs": [4384],
-        "endsAtMs": [4385],
-        "holdMs": [1]
+        "lateMs": [476],
+        "startsAtMs": [4955],
+        "endsAtMs": [4955],
+        "holdMs": [0]
       }
     },
     "env-utf8": {
@@ -4623,7 +4623,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-env-utf8",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -4713,12 +4713,12 @@
         }
       ],
       "timing": {
-        "firstMs": 582,
+        "firstMs": 1213,
         "gapsMs": [],
-        "lateMs": [2],
-        "startsAtMs": [4575],
-        "endsAtMs": [4575],
-        "holdMs": [0]
+        "lateMs": [272],
+        "startsAtMs": [4957],
+        "endsAtMs": [4958],
+        "holdMs": [1]
       }
     },
     "env-unordered": {
@@ -4738,7 +4738,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-env-unordered",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -4828,11 +4828,11 @@
         }
       ],
       "timing": {
-        "firstMs": 807,
+        "firstMs": 217,
         "gapsMs": [],
-        "lateMs": [2],
-        "startsAtMs": [4800],
-        "endsAtMs": [4800],
+        "lateMs": [71],
+        "startsAtMs": [4961],
+        "endsAtMs": [4961],
         "holdMs": [0]
       }
     },
@@ -4853,7 +4853,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-env-minimal",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -4943,11 +4943,11 @@
         }
       ],
       "timing": {
-        "firstMs": 20,
+        "firstMs": 353,
         "gapsMs": [],
-        "lateMs": [4],
-        "startsAtMs": [5013],
-        "endsAtMs": [5013],
+        "lateMs": [2],
+        "startsAtMs": [5097],
+        "endsAtMs": [5097],
         "holdMs": [0]
       }
     },
@@ -4968,7 +4968,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-env-large",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -5058,11 +5058,11 @@
         }
       ],
       "timing": {
-        "firstMs": 229,
+        "firstMs": 594,
         "gapsMs": [],
-        "lateMs": [6],
-        "startsAtMs": [5222],
-        "endsAtMs": [5222],
+        "lateMs": [36],
+        "startsAtMs": [5338],
+        "endsAtMs": [5338],
         "holdMs": [0]
       }
     },
@@ -5083,7 +5083,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-env-view-full",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -5177,11 +5177,11 @@
         }
       ],
       "timing": {
-        "firstMs": 443,
+        "firstMs": 799,
         "gapsMs": [],
-        "lateMs": [1],
-        "startsAtMs": [5436],
-        "endsAtMs": [5436],
+        "lateMs": [2],
+        "startsAtMs": [5543],
+        "endsAtMs": [5543],
         "holdMs": [0]
       }
     },
@@ -5202,7 +5202,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-sch-past",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -5292,11 +5292,11 @@
         }
       ],
       "timing": {
-        "firstMs": 705,
+        "firstMs": 5,
         "gapsMs": [],
-        "lateMs": [5],
-        "startsAtMs": [5698],
-        "endsAtMs": [5698],
+        "lateMs": [2],
+        "startsAtMs": [5749],
+        "endsAtMs": [5749],
         "holdMs": [0]
       }
     },
@@ -5317,7 +5317,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-sch-now",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -5407,11 +5407,11 @@
         }
       ],
       "timing": {
-        "firstMs": 909,
+        "firstMs": 212,
         "gapsMs": [],
-        "lateMs": [1],
-        "startsAtMs": [5902],
-        "endsAtMs": [5902],
+        "lateMs": [2],
+        "startsAtMs": [5956],
+        "endsAtMs": [5956],
         "holdMs": [0]
       }
     },
@@ -5432,7 +5432,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-sch-20s",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -5522,11 +5522,11 @@
         }
       ],
       "timing": {
-        "firstMs": 20138,
+        "firstMs": 20415,
         "gapsMs": [],
-        "lateMs": [24],
-        "startsAtMs": [26131],
-        "endsAtMs": [26132],
+        "lateMs": [3],
+        "startsAtMs": [26159],
+        "endsAtMs": [26160],
         "holdMs": [1]
       }
     },
@@ -5547,7 +5547,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-sch-nanos",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -5637,12 +5637,12 @@
         }
       ],
       "timing": {
-        "firstMs": 5351,
+        "firstMs": 5622,
         "gapsMs": [],
-        "lateMs": [13],
-        "startsAtMs": [11344],
-        "endsAtMs": [11345],
-        "holdMs": [1]
+        "lateMs": [4],
+        "startsAtMs": [11366],
+        "endsAtMs": [11366],
+        "holdMs": [0]
       }
     },
     "sch-offset": {
@@ -5662,7 +5662,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-sch-offset",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -5752,11 +5752,11 @@
         }
       ],
       "timing": {
-        "firstMs": 5578,
+        "firstMs": 5828,
         "gapsMs": [],
-        "lateMs": [9],
-        "startsAtMs": [11571],
-        "endsAtMs": [11571],
+        "lateMs": [5],
+        "startsAtMs": [11572],
+        "endsAtMs": [11572],
         "holdMs": [0]
       }
     },
@@ -5777,7 +5777,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-sch-30d-less",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -6337,7 +6337,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-id_ok-1",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -6427,11 +6427,11 @@
         }
       ],
       "timing": {
-        "firstMs": 41,
+        "firstMs": 107,
         "gapsMs": [],
-        "lateMs": [3],
-        "startsAtMs": [10034],
-        "endsAtMs": [10034],
+        "lateMs": [2],
+        "startsAtMs": [9851],
+        "endsAtMs": [9851],
         "holdMs": [0]
       }
     },
@@ -6452,7 +6452,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-id-500xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -6542,11 +6542,11 @@
         }
       ],
       "timing": {
-        "firstMs": 248,
+        "firstMs": 312,
         "gapsMs": [],
         "lateMs": [2],
-        "startsAtMs": [10241],
-        "endsAtMs": [10241],
+        "startsAtMs": [10056],
+        "endsAtMs": [10056],
         "holdMs": [0]
       }
     },
@@ -6696,7 +6696,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-dl-15s",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -6786,11 +6786,11 @@
         }
       ],
       "timing": {
-        "firstMs": 271,
+        "firstMs": 336,
         "gapsMs": [],
-        "lateMs": [1],
-        "startsAtMs": [11264],
-        "endsAtMs": [11264],
+        "lateMs": [2],
+        "startsAtMs": [11080],
+        "endsAtMs": [11080],
         "holdMs": [0]
       }
     },
@@ -6811,7 +6811,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-dl-1800s",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -6901,11 +6901,11 @@
         }
       ],
       "timing": {
-        "firstMs": 489,
+        "firstMs": 541,
         "gapsMs": [],
-        "lateMs": [6],
-        "startsAtMs": [11482],
-        "endsAtMs": [11482],
+        "lateMs": [2],
+        "startsAtMs": [11285],
+        "endsAtMs": [11285],
         "holdMs": [0]
       }
     },
@@ -6955,7 +6955,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-dl-fraction",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -7045,11 +7045,11 @@
         }
       ],
       "timing": {
-        "firstMs": 906,
+        "firstMs": 951,
         "gapsMs": [],
         "lateMs": [1],
-        "startsAtMs": [11899],
-        "endsAtMs": [11899],
+        "startsAtMs": [11695],
+        "endsAtMs": [11695],
         "holdMs": [0]
       }
     },
@@ -7141,7 +7141,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-dl-zero",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -7231,11 +7231,11 @@
         }
       ],
       "timing": {
-        "firstMs": 572,
+        "firstMs": 567,
         "gapsMs": [],
-        "lateMs": [7],
-        "startsAtMs": [12565],
-        "endsAtMs": [12565],
+        "lateMs": [2],
+        "startsAtMs": [12311],
+        "endsAtMs": [12311],
         "holdMs": [0]
       }
     },
@@ -7256,7 +7256,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-size-1000k",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -7346,11 +7346,11 @@
         }
       ],
       "timing": {
-        "firstMs": 855,
+        "firstMs": 1089,
         "gapsMs": [],
-        "lateMs": [28],
-        "startsAtMs": [12848],
-        "endsAtMs": [12848],
+        "lateMs": [304],
+        "startsAtMs": [12833],
+        "endsAtMs": [12833],
         "holdMs": [0]
       }
     },
@@ -7400,7 +7400,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/ID(19)",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -7490,11 +7490,11 @@
         }
       ],
       "timing": {
-        "firstMs": 340,
+        "firstMs": 510,
         "gapsMs": [],
-        "lateMs": [8],
-        "startsAtMs": [13333],
-        "endsAtMs": [13333],
+        "lateMs": [1],
+        "startsAtMs": [13254],
+        "endsAtMs": [13254],
         "holdMs": [0]
       }
     },
@@ -7515,7 +7515,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-pw-02xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -7822,7 +7822,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-pw-09",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -7912,12 +7912,12 @@
         }
       ],
       "timing": {
-        "firstMs": 201,
+        "firstMs": 179,
         "gapsMs": [],
-        "lateMs": [3],
-        "startsAtMs": [15194],
-        "endsAtMs": [15194],
-        "holdMs": [0]
+        "lateMs": [1],
+        "startsAtMs": [14923],
+        "endsAtMs": [14924],
+        "holdMs": [1]
       }
     },
     "pw-10": {
@@ -8276,7 +8276,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/ID(19)",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -8423,7 +8423,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/ID(19)",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -8513,11 +8513,11 @@
         }
       ],
       "timing": {
-        "firstMs": 5096,
+        "firstMs": 5873,
         "gapsMs": [],
-        "lateMs": [40],
-        "startsAtMs": [23089],
-        "endsAtMs": [23089],
+        "lateMs": [2],
+        "startsAtMs": [22617],
+        "endsAtMs": [22617],
         "holdMs": [0]
       }
     },
@@ -8664,7 +8664,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-pw-26xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -8754,12 +8754,12 @@
         }
       ],
       "timing": {
-        "firstMs": 5954,
+        "firstMs": 5718,
         "gapsMs": [],
-        "lateMs": [5],
-        "startsAtMs": [23947],
-        "endsAtMs": [23947],
-        "holdMs": [0]
+        "lateMs": [3],
+        "startsAtMs": [23462],
+        "endsAtMs": [23463],
+        "holdMs": [1]
       }
     },
     "pw-27": {
@@ -9076,7 +9076,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/ID(19)",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -9166,12 +9166,12 @@
         }
       ],
       "timing": {
-        "firstMs": 927,
+        "firstMs": 597,
         "gapsMs": [],
-        "lateMs": [14],
-        "startsAtMs": [20920],
-        "endsAtMs": [20921],
-        "holdMs": [1]
+        "lateMs": [21],
+        "startsAtMs": [20341],
+        "endsAtMs": [20341],
+        "holdMs": [0]
       }
     },
     "pw-36": {
@@ -9191,7 +9191,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-pw-36",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -9281,11 +9281,11 @@
         }
       ],
       "timing": {
-        "firstMs": 139,
+        "firstMs": 801,
         "gapsMs": [],
-        "lateMs": [3],
-        "startsAtMs": [21132],
-        "endsAtMs": [21132],
+        "lateMs": [1],
+        "startsAtMs": [20545],
+        "endsAtMs": [20545],
         "holdMs": [0]
       }
     },
@@ -9306,7 +9306,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-dup-first",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -9396,11 +9396,11 @@
         }
       ],
       "timing": {
-        "firstMs": 345,
+        "firstMs": 6,
         "gapsMs": [],
-        "lateMs": [3],
-        "startsAtMs": [21338],
-        "endsAtMs": [21338],
+        "lateMs": [1],
+        "startsAtMs": [20750],
+        "endsAtMs": [20750],
         "holdMs": [0]
       }
     },
@@ -9421,7 +9421,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-dup-sched",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqdef",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -9500,14 +9500,54 @@
       "kind": "get-task",
       "sent": true,
       "admission": {
-        "status": 405,
+        "status": 200,
         "layout": {
-          "contentType": "text/plain; charset=utf-8",
-          "style": "not-json",
-          "keyOrder": {}
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["name", "httpRequest", "scheduleTime", "createTime", "dispatchDeadline", "view"],
+            "/httpRequest": ["url", "httpMethod", "headers", "oidcToken"],
+            "/httpRequest/oidcToken": ["serviceAccountEmail", "audience"]
+          }
         },
-        "body": null,
-        "shape": "null"
+        "body": {
+          "name": "projects/demo-task-queue/locations/us-central1/queues/tqdef/tasks/tqrun-RUN-dup-sched",
+          "httpRequest": {
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqdef",
+            "httpMethod": "POST",
+            "headers": {
+              "Content-Type": "application/json",
+              "User-Agent": "Google-Cloud-Tasks"
+            },
+            "oidcToken": {
+              "serviceAccountEmail": "123456789012-compute@developer.gserviceaccount.com",
+              "audience": "https://tqdef-HOST-uc.a.run.app"
+            }
+          },
+          "scheduleTime": "TIME(f3,Z)",
+          "createTime": "TIME(f0,Z)",
+          "dispatchDeadline": "600s",
+          "view": "BASIC"
+        },
+        "shape": {
+          "name": "string",
+          "httpRequest": {
+            "url": "string",
+            "httpMethod": "string",
+            "headers": {
+              "Content-Type": "string",
+              "User-Agent": "string"
+            },
+            "oidcToken": {
+              "serviceAccountEmail": "string",
+              "audience": "string"
+            }
+          },
+          "scheduleTime": "string",
+          "createTime": "string",
+          "dispatchDeadline": "string",
+          "view": "string"
+        }
       },
       "deliveries": [],
       "timing": {
@@ -9619,7 +9659,7 @@
         "body": {
           "name": "projects/demo-task-queue/locations/us-central1/queues/tqconc1/tasks/tqrun-RUN-dup-sched",
           "httpRequest": {
-            "url": "http://127.0.0.1:51754/demo-task-queue/us-central1/tqconc1",
+            "url": "http://127.0.0.1:62673/demo-task-queue/us-central1/tqconc1",
             "httpMethod": "POST",
             "headers": {
               "Content-Type": "application/json",
@@ -9709,12 +9749,12 @@
         }
       ],
       "timing": {
-        "firstMs": 819,
+        "firstMs": 436,
         "gapsMs": [],
-        "lateMs": [2],
-        "startsAtMs": [22812],
-        "endsAtMs": [22813],
-        "holdMs": [1]
+        "lateMs": [1],
+        "startsAtMs": [22180],
+        "endsAtMs": [22180],
+        "holdMs": [0]
       }
     },
     "del-missing": {
@@ -9779,14 +9819,20 @@
       "kind": "get-task",
       "sent": true,
       "admission": {
-        "status": 405,
+        "status": 404,
         "layout": {
-          "contentType": "text/plain; charset=utf-8",
-          "style": "not-json",
-          "keyOrder": {}
+          "contentType": "application/json; charset=UTF-8",
+          "style": "indent2-newline",
+          "keyOrder": {
+            "": ["error"],
+            "/error": ["code", "message", "status"]
+          }
         },
-        "body": null,
-        "shape": "null"
+        "error": {
+          "code": 404,
+          "status": "NOT_FOUND",
+          "message": "The task no longer exists, though a task with this name existed recently. The task either successfully completed or was deleted."
+        }
       },
       "deliveries": [],
       "timing": {

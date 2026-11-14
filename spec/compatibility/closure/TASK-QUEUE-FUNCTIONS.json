@@ -394,8 +394,7 @@
       "knownDifferences": [
         "KD-LOCAL-PATH",
         "KD-LOCAL-URL",
-        "KD-PLATFORM-HEADERS",
-        "KD-QUEUE-READS"
+        "KD-PLATFORM-HEADERS"
       ],
       "profiles": {
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
@@ -444,9 +443,9 @@
         "strictVsPass1": {
           "rows": 4,
           "counts": {
-            "MATCH": 2,
+            "MATCH": 3,
             "MATCH_LAYOUT": 0,
-            "KNOWN_DIFFERENCE": 2,
+            "KNOWN_DIFFERENCE": 1,
             "MISMATCH": 0,
             "UNKNOWN": 0
           }
@@ -454,9 +453,9 @@
         "strictVsPass2": {
           "rows": 4,
           "counts": {
-            "MATCH": 2,
+            "MATCH": 3,
             "MATCH_LAYOUT": 0,
-            "KNOWN_DIFFERENCE": 2,
+            "KNOWN_DIFFERENCE": 1,
             "MISMATCH": 0,
             "UNKNOWN": 0
           }
@@ -465,8 +464,7 @@
       "knownDifferences": [
         "KD-LOCAL-PATH",
         "KD-LOCAL-URL",
-        "KD-PLATFORM-HEADERS",
-        "KD-QUEUE-READS"
+        "KD-PLATFORM-HEADERS"
       ],
       "profiles": {
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
@@ -1479,9 +1477,9 @@
         "strictVsPass1": {
           "rows": 6,
           "counts": {
-            "MATCH": 4,
+            "MATCH": 5,
             "MATCH_LAYOUT": 0,
-            "KNOWN_DIFFERENCE": 2,
+            "KNOWN_DIFFERENCE": 1,
             "MISMATCH": 0,
             "UNKNOWN": 0
           }
@@ -1489,16 +1487,16 @@
         "strictVsPass2": {
           "rows": 6,
           "counts": {
-            "MATCH": 4,
+            "MATCH": 5,
             "MATCH_LAYOUT": 0,
-            "KNOWN_DIFFERENCE": 2,
+            "KNOWN_DIFFERENCE": 1,
             "MISMATCH": 0,
             "UNKNOWN": 0
           }
         }
       },
       "knownDifferences": [
-        "KD-QUEUE-READS"
+        "KD-LOCAL-URL"
       ],
       "profiles": {
         "strict": "MATCHES_RECORDED_CASES_WITH_PRODUCTION_EXACT",
@@ -1759,37 +1757,37 @@
     },
     "strictVsPass1": {
       "path": "conformance/task-queue-production-strict-vs-pass-1.json",
-      "sha256": "1150f3f0a123df2025f65009759a41a16a6dc90044098ffacb1675af022e6d35",
+      "sha256": "68e7757e3646a592e2d3864728532996f964a40ba5442657e729c367d28b5275",
       "rows": 122,
       "summary": {
-        "MATCH": 57,
+        "MATCH": 58,
         "MATCH_LAYOUT": 0,
-        "KNOWN_DIFFERENCE": 65,
+        "KNOWN_DIFFERENCE": 64,
         "MISMATCH": 0,
         "UNKNOWN": 0
       }
     },
     "strictVsPass2": {
       "path": "conformance/task-queue-production-strict-vs-pass-2.json",
-      "sha256": "86816c298482262a6953f62242cf9a82ef7eb57d0e2dbeafc0d05512e60fae6e",
+      "sha256": "c665056aaa3783920fa8eb7ff8276c7b82884837d685ebded847df30922343b5",
       "rows": 122,
       "summary": {
-        "MATCH": 57,
+        "MATCH": 58,
         "MATCH_LAYOUT": 0,
-        "KNOWN_DIFFERENCE": 65,
+        "KNOWN_DIFFERENCE": 64,
         "MISMATCH": 0,
         "UNKNOWN": 0
       }
     },
     "localStrictReplay": {
       "path": "conformance/task-queue-production-local-strict.json",
-      "sha256": "a8189faebb9514d049a7b30e14fe59b08045880f06ecc180ef663e6d0b0b6302",
-      "binarySha256": "edf1396254676143143341be5029d014332799f074061d150335a85a2a01ce60"
+      "sha256": "eb4646dd9c23531f9db5df04f06015500193965fdc75389bb9cb0eca0a437cab",
+      "binarySha256": "4b046f2b9adda877c3f1c8e74fd07914c40e72d40bc6011d9805536050f2dc01"
     }
   },
   "knownDifferences": {
     "path": "conformance/src/task-queue-production/known-differences.mjs",
-    "sha256": "d8c7aa4e58201cf0290d069ec862bf4dfef2b9de573b26d432e7e2a8d22d882e",
+    "sha256": "9a067def6fe3bfc73ed0f914d19c45393d7675fe4bc6c19916858e388e8a99e5",
     "entries": [
       "KD-LOCAL-URL",
       "KD-QUEUE-READS",
@@ -1818,24 +1816,24 @@
       },
       {
         "path": "conformance/task-queue-production-strict-vs-pass-1.json",
-        "sha256": "1150f3f0a123df2025f65009759a41a16a6dc90044098ffacb1675af022e6d35",
+        "sha256": "68e7757e3646a592e2d3864728532996f964a40ba5442657e729c367d28b5275",
         "rows": 122,
         "summary": {
-          "MATCH": 57,
+          "MATCH": 58,
           "MATCH_LAYOUT": 0,
-          "KNOWN_DIFFERENCE": 65,
+          "KNOWN_DIFFERENCE": 64,
           "MISMATCH": 0,
           "UNKNOWN": 0
         }
       },
       {
         "path": "conformance/task-queue-production-strict-vs-pass-2.json",
-        "sha256": "86816c298482262a6953f62242cf9a82ef7eb57d0e2dbeafc0d05512e60fae6e",
+        "sha256": "c665056aaa3783920fa8eb7ff8276c7b82884837d685ebded847df30922343b5",
         "rows": 122,
         "summary": {
-          "MATCH": 57,
+          "MATCH": 58,
           "MATCH_LAYOUT": 0,
-          "KNOWN_DIFFERENCE": 65,
+          "KNOWN_DIFFERENCE": 64,
           "MISMATCH": 0,
           "UNKNOWN": 0
         }

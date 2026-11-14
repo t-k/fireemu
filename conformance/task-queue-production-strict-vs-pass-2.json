@@ -38,13 +38,11 @@
       "ruling": 3,
       "what": "The task's httpRequest.url in an answer is the function's own URL: a Cloud Run URL in production, the daemon's route here. The daemon refuses a task that names another URL, so this is the one address it can echo.",
       "paths": ["/^\\/body\\/httpRequest\\/url$/"],
-      "rows": 54
+      "rows": 55
     },
     {
       "id": "KD-QUEUE-READS",
       "cases": [
-        "get-dup-sched",
-        "get-dup-first",
         "queue-tqdef",
         "queue-tqretry",
         "queue-tqlimit",
@@ -57,9 +55,9 @@
       ],
       "part": "admission",
       "ruling": 3,
-      "what": "getTask and getQueue are the Cloud Tasks management API, which neither fireemu nor the official emulator serves (405 here); the recordings are read-back evidence of the queue settings and of the task states, not a claim.",
+      "what": "getQueue is a Cloud Tasks management API that neither fireemu nor the official emulator serves (405 here); these cases are read-back evidence of queue settings. The recorded getTask cases are compared, with only httpRequest.url covered by KD-LOCAL-URL.",
       "paths": ["/.*/"],
-      "rows": 11
+      "rows": 9
     },
     {
       "id": "KD-PLATFORM-HEADERS",
@@ -110,12 +108,12 @@
   ],
   "summary": {
     "structure": {
-      "KNOWN_DIFFERENCE": 65,
-      "MATCH": 57
+      "KNOWN_DIFFERENCE": 64,
+      "MATCH": 58
     },
     "admission": {
-      "KNOWN_DIFFERENCE": 65,
-      "MATCH": 57
+      "KNOWN_DIFFERENCE": 64,
+      "MATCH": 58
     },
     "deliveries": {
       "KNOWN_DIFFERENCE": 50,
@@ -1802,7 +1800,7 @@
       "parts": {
         "admission": {
           "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-QUEUE-READS"]
+          "knownDifferences": ["KD-LOCAL-URL"]
         },
         "deliveries": {
           "verdict": "MATCH"
@@ -1906,11 +1904,10 @@
     },
     {
       "case": "get-dup-first",
-      "structure": "KNOWN_DIFFERENCE",
+      "structure": "MATCH",
       "parts": {
         "admission": {
-          "verdict": "KNOWN_DIFFERENCE",
-          "knownDifferences": ["KD-QUEUE-READS"]
+          "verdict": "MATCH"
         },
         "deliveries": {
           "verdict": "MATCH"
@@ -2080,5 +2077,5 @@
       }
     }
   ],
-  "digest": "b06986dd4e46ecee733a3ead398cbcec6d81802f310e6082ca98fde384852b7a"
+  "digest": "6a63f20976f3d9e9658438f2fd24c06ee2380ffee88bfdc1401f1c6eabf2cbd8"
 }

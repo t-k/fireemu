@@ -684,12 +684,8 @@ fn path_rows(cfg: &RuntimeConfig, facts: &Facts, starts: &ServiceStarts) -> Vec<
         }
     }
     for (target, file) in &cfg.storage_rules_by_target {
-        rows.push(path_row(
-            &format!("storage[{target}].rules"),
-            file,
-            None,
-            facts,
-        ));
+        let setting = format!("storage[{target}].rules");
+        rows.push(path_row(&setting, file, None, facts));
     }
     for entry in &cfg.database_rules {
         let scope = match &entry.scope {
@@ -710,12 +706,15 @@ fn path_rows(cfg: &RuntimeConfig, facts: &Facts, starts: &ServiceStarts) -> Vec<
         }
     }
     if let Some(hosting) = &cfg.hosting {
-        rows.push(path_row(
-            "hosting.public",
-            &hosting[0].public().to_string_lossy(),
-            None,
-            facts,
-        ));
+        for (index, site) in hosting.iter().enumerate() {
+            let setting = if hosting.len() == 1 {
+                "hosting.public".to_owned()
+            } else {
+                format!("hosting[{index}].public")
+            };
+            let public = site.public().to_string_lossy();
+            rows.push(path_row(&setting, &public, None, facts));
+        }
     }
     rows
 }

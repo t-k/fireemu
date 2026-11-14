@@ -2,7 +2,11 @@ use super::*;
 
 #[test]
 fn pict_policy_rows_run_against_real_auth_store_and_registry() {
-    let rows = include_str!("../../tests/fixtures/auth_startup_policy.tsv");
+    let rows = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/auth_startup_policy.tsv"),
+    )
+    .expect("read startup policy fixture");
     for (line, row) in rows.lines().enumerate().skip(1) {
         let fields = row.split('\t').collect::<Vec<_>>();
         assert_eq!(fields.len(), 5, "row {}: {row}", line + 1);
@@ -12,7 +16,7 @@ fn pict_policy_rows_run_against_real_auth_store_and_registry() {
         };
         let mut auth = serde_json::json!({});
         if *root_setting == "Explicit" {
-            auth["signIn"] = serde_json::json!({"allowDuplicateEmails": false});
+            auth["signIn"] = serde_json::json!({"allowDuplicateEmails": *phase == "Initial"});
         }
         if *tenant_state != "NoTenant" {
             auth["multiTenant"] = serde_json::json!({"allowTenants": true});
@@ -52,12 +56,13 @@ fn pict_policy_rows_run_against_real_auth_store_and_registry() {
         if *phase == "Initial" {
             initialize_initial_store(&cfg, &mut default_store.lock().unwrap())
                 .expect("initial store phase");
-            assert!(
-                !default_store
+            assert_eq!(
+                default_store
                     .lock()
                     .unwrap()
                     .config()
                     .allow_duplicate_emails,
+                *root_setting == "Explicit",
                 "row {}: {row}",
                 line + 1
             );

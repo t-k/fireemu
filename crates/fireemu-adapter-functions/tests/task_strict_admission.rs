@@ -699,8 +699,8 @@ async fn the_strict_listener_deletes_with_json_and_refuses_other_methods() {
     let (get_status, _, get_text) = wire(addr, "GET", &path, b"").await;
     assert_eq!(get_status, 200, "{get_text}");
     let get_task: Value = serde_json::from_str(&get_text).unwrap();
-    assert_eq!(get_task["dispatchCount"], 0);
-    assert_eq!(get_task["responseCount"], 0);
+    assert!(get_task.get("dispatchCount").is_none());
+    assert!(get_task.get("responseCount").is_none());
     assert!(get_task["httpRequest"].get("body").is_none());
     assert_eq!(wire(addr, "PUT", &path, b"").await.0, 405);
     assert_eq!(wire(addr, "POST", &path, b"{}").await.0, 405);
@@ -1838,7 +1838,7 @@ async fn strict_get_distinguishes_recent_completion_and_deletion_from_unknown_na
                     wire(addr, "GET", &format!("{TASKS}/{id}"), b"").await;
                 assert_eq!(
                     status,
-                    expected["status"].as_u64().unwrap() as u16,
+                    u16::try_from(expected["status"].as_u64().unwrap()).unwrap(),
                     "{reuse:?}: {id}"
                 );
                 assert!(
@@ -1905,7 +1905,11 @@ async fn strict_raw_bodies_reach_the_function_with_exact_bytes_and_content_type(
             .collect();
         assert_eq!(received.len(), index + 1);
         let received = &received[index];
-        let expected_hex: String = raw.iter().map(|byte| format!("{byte:02x}")).collect();
+        let expected_hex = raw.iter().fold(String::new(), |mut hex, byte| {
+            use std::fmt::Write as _;
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        });
         assert_eq!(received["bodyHex"], expected_hex);
         assert_eq!(received["headers"]["content-type"], content_type);
     }

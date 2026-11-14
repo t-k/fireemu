@@ -4039,7 +4039,7 @@ impl FunctionsRuntime {
             .map_err(|state| {
                 let mut refusal = Refusal::task_not_found();
                 if state == crate::task_scheduler::NameState::Finished {
-                    refusal.message = "The task no longer exists, though a task with this name existed recently. The task either successfully completed or was deleted.".to_owned();
+                    "The task no longer exists, though a task with this name existed recently. The task either successfully completed or was deleted.".clone_into(&mut refusal.message);
                 }
                 EnqueueRefusal {
                     status: refusal.http,

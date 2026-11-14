@@ -3031,7 +3031,9 @@ mod tests {
                 .enqueue_at("queue", task("p"), TaskRetryConfig::default(), 8, start)
                 .unwrap();
             assert!(scheduler.delete_pending("queue", |name| name == "p", start));
-            let before = start + Duration::from_secs(3600) - Duration::from_nanos(1);
+            let before = (start + Duration::from_secs(3600))
+                .checked_sub(Duration::from_nanos(1))
+                .unwrap();
             assert_eq!(
                 scheduler.get_task("queue", "p", before).unwrap_err(),
                 NameState::Finished

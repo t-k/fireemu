@@ -2364,6 +2364,9 @@ impl RuntimeConfig {
         };
         for site in sites {
             let Some(target) = site.target().map(str::to_owned) else {
+                if site.site().is_none() {
+                    site.resolve_target(project.to_owned());
+                }
                 continue;
             };
             let matches = rc

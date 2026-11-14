@@ -45,119 +45,203 @@ fn get_path(address: &str, path: &str) -> String {
 #[test]
 #[allow(clippy::too_many_lines)] // One end-to-end test verifies both listeners and shutdown cleanup.
 fn hosting_array_resolves_targets_and_serves_each_site_on_its_own_endpoint() {
-    let dir = Scratch::new("hosting", "multisite");
-    std::fs::create_dir_all(dir.join("public-a")).unwrap();
-    std::fs::create_dir_all(dir.join("public-b")).unwrap();
-    std::fs::write(dir.join("public-a/index.html"), "site-a").unwrap();
-    std::fs::write(dir.join("public-b/index.html"), "site-b").unwrap();
-    std::fs::write(
+    for (profile, single) in [("emulator", false), ("strict", false), ("emulator", true)] {
+        let dir = Scratch::new("hosting", &format!("multisite-{profile}-{single}"));
+        std::fs::create_dir_all(dir.join("public-a")).unwrap();
+        std::fs::create_dir_all(dir.join("public-b")).unwrap();
+        std::fs::write(dir.join("public-a/index.html"), "site-a").unwrap();
+        std::fs::write(dir.join("public-b/index.html"), "site-b").unwrap();
+        std::fs::write(dir.join("public-a/rewrite-a.html"), "rewrite-a").unwrap();
+        std::fs::write(dir.join("public-b/rewrite-b.html"), "rewrite-b").unwrap();
+        std::fs::write(dir.join("outside.txt"), "outside-private-sentinel").unwrap();
+        #[cfg(unix)]
+        for root in ["public-a", "public-b"] {
+            std::os::unix::fs::symlink(
+                "../outside.txt",
+                dir.join(format!("{root}/outside-link.txt")),
+            )
+            .unwrap();
+        }
+        #[cfg(windows)]
+        for root in ["public-a", "public-b"] {
+            std::os::windows::fs::symlink_file(
+                "../outside.txt",
+                dir.join(format!("{root}/outside-link.txt")),
+            )
+            .unwrap();
+        }
+        std::fs::write(
         dir.join("firebase.json"),
-        r#"{"hosting":[{"target":"web","public":"public-a"},{"site":"demo-hosting-web","public":"public-b"}],"emulators":{"hosting":{"port":0},"ui":{"enabled":false},"hub":{"port":0},"logging":{"port":0}}}"#,
+        if single {
+            r#"{"hosting":{"public":"public-a"},"emulators":{"hosting":{"port":0},"ui":{"enabled":false},"hub":{"port":0},"logging":{"port":0}}}"#
+        } else {
+            r#"{"hosting":[{"target":"web","public":"public-a","rewrites":[{"source":"/rewrite-a","destination":"/rewrite-a.html"}],"redirects":[{"source":"/redirect-a","destination":"/destination-a","type":302}],"headers":[{"source":"**","headers":[{"key":"X-Site","value":"site-a"}]}]},{"site":"demo-hosting-web","public":"public-b","rewrites":[{"source":"/rewrite-b","destination":"/rewrite-b.html"}],"redirects":[{"source":"/redirect-b","destination":"/destination-b","type":301}],"headers":[{"source":"**","headers":[{"key":"X-Site","value":"site-b"}]}]}],"emulators":{"hosting":{"port":0},"ui":{"enabled":false},"hub":{"port":0},"logging":{"port":0}}}"#
+        },
     )
     .unwrap();
-    std::fs::write(
+        std::fs::write(
         dir.join(".firebaserc"),
         r#"{"projects":{"default":"demo-hosting"},"targets":{"demo-hosting":{"hosting":{"web":["demo-hosting-web"]}}}}"#,
     )
     .unwrap();
-    std::fs::write(
-        dir.join("fireemu.json"),
-        r#"{"schemaVersion":1,"profile":"emulator"}"#,
-    )
-    .unwrap();
-    let ready = dir.join("ready.json");
-    let mut child = OwnedChild(
-        Command::new(env!("CARGO_BIN_EXE_fireemu"))
-            .args(["up", "--config"])
-            .arg(dir.join("fireemu.json"))
-            .args([
-                "--only",
-                "hosting",
-                "--project",
-                "default",
-                "--firebase-json",
-            ])
-            .arg(dir.join("firebase.json"))
-            .arg("--ready-file")
-            .arg(&ready)
-            .args([
-                "--owner-stdin",
-                "--log-verbosity",
-                "quiet",
-                "--hub-port",
-                "auto",
-            ])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap(),
-    );
-    let deadline = Instant::now() + Duration::from_secs(15);
-    let descriptor = loop {
-        if let Some(status) = child.0.try_wait().unwrap() {
-            let mut stderr = String::new();
-            child
-                .0
-                .stderr
-                .take()
-                .unwrap()
-                .read_to_string(&mut stderr)
-                .unwrap();
-            panic!("multisite Hosting failed to start ({status}): {stderr}");
-        }
-        if let Ok(bytes) = std::fs::read(&ready) {
-            break serde_json::from_slice::<serde_json::Value>(&bytes).unwrap();
-        }
-        assert!(
-            Instant::now() < deadline,
-            "Hosting multisite readiness deadline"
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    let sites = descriptor["hostingSites"]
-        .as_array()
-        .expect("all site URLs are advertised");
-    assert_eq!(sites.len(), 2);
-    let endpoints: Vec<_> = sites
-        .iter()
-        .map(|site| {
-            site["url"]
-                .as_str()
-                .unwrap()
-                .strip_prefix("http://")
-                .unwrap()
-                .trim_end_matches('/')
-                .to_owned()
-        })
-        .collect();
-    assert_ne!(endpoints[0], endpoints[1]);
-    assert!(get(&endpoints[0]).ends_with("site-a"));
-    assert!(get(&endpoints[1]).ends_with("site-b"));
-    let hub = descriptor["environment"]["FIREBASE_EMULATOR_HUB"]
-        .as_str()
+        std::fs::write(
+            dir.join("fireemu.json"),
+            format!(r#"{{"schemaVersion":1,"profile":"{profile}"}}"#),
+        )
         .unwrap();
-    let discovery = get_path(hub, "/emulators");
-    let reserved_port = endpoints[1].rsplit(':').next().unwrap();
-    let discovery_body = discovery.split_once("\r\n\r\n").unwrap().1;
-    let discovery: serde_json::Value = serde_json::from_str(discovery_body).unwrap();
-    assert_eq!(
-        discovery["hosting"]["reservedPorts"][0],
-        reserved_port.parse::<u16>().unwrap()
-    );
-    drop(child);
-    assert!(
-        !ready.exists(),
-        "shutdown withdraws the readiness descriptor"
-    );
-    assert!(
-        TcpStream::connect(&endpoints[0]).is_err(),
-        "first listener is released"
-    );
-    assert!(
-        TcpStream::connect(&endpoints[1]).is_err(),
-        "second listener is released"
-    );
+        let ready = dir.join("ready.json");
+        let mut child = OwnedChild(
+            Command::new(env!("CARGO_BIN_EXE_fireemu"))
+                .args(["up", "--config"])
+                .arg(dir.join("fireemu.json"))
+                .args([
+                    "--only",
+                    "hosting",
+                    "--project",
+                    "default",
+                    "--firebase-json",
+                ])
+                .arg(dir.join("firebase.json"))
+                .arg("--ready-file")
+                .arg(&ready)
+                .args([
+                    "--owner-stdin",
+                    "--log-verbosity",
+                    "quiet",
+                    "--hub-port",
+                    "auto",
+                ])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let descriptor = loop {
+            if let Some(status) = child.0.try_wait().unwrap() {
+                let mut stderr = String::new();
+                child
+                    .0
+                    .stderr
+                    .take()
+                    .unwrap()
+                    .read_to_string(&mut stderr)
+                    .unwrap();
+                panic!("multisite Hosting failed to start ({status}): {stderr}");
+            }
+            if let Ok(bytes) = std::fs::read(&ready) {
+                break serde_json::from_slice::<serde_json::Value>(&bytes).unwrap();
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Hosting multisite readiness deadline"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let sites = descriptor["hostingSites"]
+            .as_array()
+            .expect("all site URLs are advertised");
+        assert_eq!(sites.len(), if single { 1 } else { 2 });
+        assert_eq!(
+            sites[0]["site"],
+            if single {
+                "demo-hosting"
+            } else {
+                "demo-hosting-web"
+            }
+        );
+        let endpoints: Vec<_> = sites
+            .iter()
+            .map(|site| {
+                site["url"]
+                    .as_str()
+                    .unwrap()
+                    .strip_prefix("http://")
+                    .unwrap()
+                    .trim_end_matches('/')
+                    .to_owned()
+            })
+            .collect();
+        assert!(get(&endpoints[0]).ends_with("site-a"));
+        if !single {
+            assert_ne!(endpoints[0], endpoints[1]);
+            assert!(get(&endpoints[1]).ends_with("site-b"));
+            for (index, own, other, status) in [(0, "a", "b", "302"), (1, "b", "a", "301")] {
+                let address = &endpoints[index];
+                let rewritten = get_path(address, &format!("/rewrite-{own}"));
+                assert!(
+                    rewritten.ends_with(&format!("rewrite-{own}")),
+                    "{rewritten}"
+                );
+                assert!(
+                    rewritten
+                        .to_ascii_lowercase()
+                        .contains(&format!("x-site: site-{own}\r\n")),
+                    "{rewritten}"
+                );
+                let other_rewrite = get_path(address, &format!("/rewrite-{other}"));
+                assert!(other_rewrite.starts_with("HTTP/1.1 404"), "{other_rewrite}");
+                let redirect = get_path(address, &format!("/redirect-{own}"));
+                assert!(
+                    redirect.starts_with(&format!("HTTP/1.1 {status}")),
+                    "{redirect}"
+                );
+                assert!(
+                    redirect
+                        .to_ascii_lowercase()
+                        .contains(&format!("location: /destination-{own}\r\n")),
+                    "{redirect}"
+                );
+                let other_redirect = get_path(address, &format!("/redirect-{other}"));
+                assert!(
+                    !other_redirect
+                        .to_ascii_lowercase()
+                        .contains(&format!("location: /destination-{other}")),
+                    "{other_redirect}"
+                );
+                for path in [
+                    "/../outside.txt",
+                    "/%2e%2e/outside.txt",
+                    "/..%2foutside.txt",
+                    "/%2e%2e%2foutside.txt",
+                    "/outside-link.txt",
+                ] {
+                    let response = get_path(address, path);
+                    assert!(
+                        !response.contains("outside-private-sentinel"),
+                        "{profile} {address} {path}: {response}"
+                    );
+                }
+            }
+            let hub = descriptor["environment"]["FIREBASE_EMULATOR_HUB"]
+                .as_str()
+                .unwrap();
+            let discovery = get_path(hub, "/emulators");
+            let reserved_port = endpoints[1].rsplit(':').next().unwrap();
+            let discovery_body = discovery.split_once("\r\n\r\n").unwrap().1;
+            let discovery: serde_json::Value = serde_json::from_str(discovery_body).unwrap();
+            assert_eq!(
+                discovery["hosting"]["reservedPorts"][0],
+                reserved_port.parse::<u16>().unwrap()
+            );
+        }
+        drop(child);
+        assert!(
+            !ready.exists(),
+            "shutdown withdraws the readiness descriptor"
+        );
+        assert!(
+            TcpStream::connect(&endpoints[0]).is_err(),
+            "first listener is released"
+        );
+        if !single {
+            assert!(
+                TcpStream::connect(&endpoints[1]).is_err(),
+                "second listener is released"
+            );
+        }
+    }
 }
 
 #[test]
@@ -331,19 +415,9 @@ fn every_pict_hosting_selector_row_is_exercised_by_the_plan_parser() {
         )
         .unwrap();
         let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
-            .args([
-                "up",
-                "--plan",
-                "--json",
-                "--only",
-                "hosting",
-                "--project",
-                "default",
-                "--firebase-json",
-                "firebase.json",
-                "--config",
-                "fireemu.json",
-            ])
+            .args(["up", "--plan", "--json", "--only", "hosting"])
+            .args(["--project", "default", "--firebase-json", "firebase.json"])
+            .args(["--config", "fireemu.json"])
             .current_dir(dir.to_path_buf())
             .output()
             .unwrap();
@@ -363,6 +437,41 @@ fn every_pict_hosting_selector_row_is_exercised_by_the_plan_parser() {
                 .find(|service| service["name"] == "hosting")
                 .unwrap();
             assert_eq!(hosting["start"], true, "PICT row {row}");
+            if form == "array" {
+                let paths = plan["paths"].as_array().unwrap();
+                for (index, root) in ["public-a", "public-b"].iter().enumerate() {
+                    let setting = format!("hosting[{index}].public");
+                    let path = paths
+                        .iter()
+                        .find(|path| path["setting"] == setting)
+                        .unwrap();
+                    assert!(
+                        path["resolved"].as_str().unwrap().ends_with(*root),
+                        "PICT row {row}: {path}"
+                    );
+                }
+                let text = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+                    .args(["up", "--plan", "--only", "hosting"])
+                    .args(["--project", "default", "--firebase-json", "firebase.json"])
+                    .args(["--config", "fireemu.json"])
+                    .current_dir(dir.to_path_buf())
+                    .output()
+                    .unwrap();
+                assert!(
+                    text.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&text.stderr)
+                );
+                let text = String::from_utf8(text.stdout).unwrap();
+                for (index, root) in ["public-a", "public-b"].iter().enumerate() {
+                    assert!(
+                        text.lines()
+                            .any(|line| line.contains(&format!("hosting[{index}].public:"))
+                                && line.contains(*root)),
+                        "{text}"
+                    );
+                }
+            }
         }
     }
 }

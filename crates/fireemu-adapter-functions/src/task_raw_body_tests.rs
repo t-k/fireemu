@@ -112,8 +112,12 @@ proptest::proptest! {
 
 #[tokio::test]
 async fn generated_pict_rows_drive_body_and_view_contracts() {
-    const CASES: &str = include_str!("../tests/data/task-get-raw-body-pict.tsv");
-    let mut lines = CASES.lines();
+    let cases = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/data/task-get-raw-body-pict.tsv"
+    ))
+    .unwrap();
+    let mut lines = cases.lines();
     assert_eq!(lines.next(), Some("Operation\tBody\tView\tProfile"));
     let mut rows = 0;
     for line in lines {

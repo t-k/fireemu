@@ -661,15 +661,15 @@ fn function_isolation_gives_each_python_function_its_own_process_and_identity() 
 fn run_python_source_reload_scenario(with_fixed_inspector: bool) {
     let dir = scratch("source-reload");
     let source = dir.join("code");
-    std::fs::create_dir_all(&source).unwrap();
+    std::fs::create_dir(&source).unwrap();
     std::fs::write(source.join("requirements.txt"), "firebase-functions\n").unwrap();
     std::os::unix::fs::symlink(fixture().join("venv"), source.join("venv")).unwrap();
     std::fs::write(source.join("helper.py"), "VALUE = 'last-good'\n").unwrap();
     // The nested package exists before startup: creating a directory is a source change (an empty
     // directory is an importable namespace package), so only its `__pycache__` may appear later.
-    std::fs::create_dir_all(source.join("nested")).unwrap();
+    std::fs::create_dir(source.join("nested")).unwrap();
     std::fs::write(source.join("nested").join("module.py"), "VALUE = 1\n").unwrap();
-    std::fs::write(source.join("main.py"), "from firebase_functions import https_fn\n@https_fn.on_request()\ndef hello(request):\n    import helper\n    return {'revision': helper.VALUE}\n").unwrap();
+    std::fs::write(source.join("main.py"), "import os\nfrom firebase_functions import https_fn\n@https_fn.on_request()\ndef hello(request):\n    import helper\n    return {'revision': helper.VALUE, 'source': __file__, 'cwd': os.getcwd()}\n").unwrap();
     let firebase = firebase_json(&dir, &source, None);
     let controller = r#"
 import json, os, pathlib, sys, time, urllib.request
@@ -701,7 +701,11 @@ def wait_revision(revision, old_pid=None):
 (source / 'main.py').write_text("def broken(:\n")
 time.sleep(3)
 (source / 'helper.py').write_text("VALUE =\n")
-assert get()['revision'] == 'last-good', 'generation 0 read a later edit through a lazy import'
+generation_zero = get()
+assert generation_zero['revision'] == 'last-good', 'generation 0 read a later edit through a lazy import'
+captured_source = pathlib.Path(generation_zero['source']).resolve().parent
+assert captured_source != source.resolve(), 'generation 0 runs from the live source directory'
+assert pathlib.Path(generation_zero['cwd']).resolve() == captured_source, 'generation 0 cwd is not its snapshot'
 (source / 'helper.py').write_text("VALUE = 'last-good'\n")
 (source / 'main.py').write_text("import os\nfrom firebase_functions import https_fn\n@https_fn.on_request()\ndef hello(request):\n    return {'revision': 'initial', 'pid': os.getpid()}\n")
 initial = wait_revision('initial')
@@ -733,10 +737,10 @@ assert recovered['pid'] != valid['pid']
 print(json.dumps({'initial': initial, 'valid': valid, 'recovered': recovered}))
 "#;
     let mut extra: Vec<String> = Vec::new();
-    if with_fixed_inspector {
-        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let inspector_listener =
+        with_fixed_inspector.then(|| std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap());
+    if let Some(listener) = &inspector_listener {
         let inspector_port = listener.local_addr().unwrap().port().to_string();
-        drop(listener);
         extra.push("--inspect-functions".to_owned());
         extra.push(inspector_port);
     }

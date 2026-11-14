@@ -86,6 +86,30 @@ async fn python_reload_snapshot_links_the_venv_and_excludes_it_from_the_copy() {
 }
 
 #[test]
+fn python_reload_preserves_existing_ignores_and_adds_only_a_missing_venv_pattern() {
+    for (patterns, expected) in [
+        (vec!["dist"], vec!["dist", "venv"]),
+        (vec!["venv"], vec!["venv"]),
+        (vec!["./venv"], vec!["./venv"]),
+        (vec!["**/venv"], vec!["**/venv"]),
+        (vec!["dist", "./**/venv"], vec!["dist", "./**/venv"]),
+        (vec!["venv-backup"], vec!["venv-backup", "venv"]),
+    ] {
+        let codebase = crate::config::FunctionsCodebase {
+            codebase: "py".to_owned(),
+            source: "/unused/functions".to_owned(),
+            runtime: Some("python312".to_owned()),
+            ignore: patterns.iter().map(|pattern| (*pattern).to_owned()).collect(),
+        };
+        assert_eq!(
+            super::super::reload_ignore_patterns(&codebase),
+            expected,
+            "existing ignores: {patterns:?}"
+        );
+    }
+}
+
+#[test]
 fn python_reload_excludes_runtime_environment_and_cache_artifacts() {
     let codebase = crate::config::FunctionsCodebase {
         codebase: "py".to_owned(),

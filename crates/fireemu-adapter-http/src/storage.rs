@@ -5380,7 +5380,7 @@ fn fb_resumable_command(
             Err(e) => Ok(fb_core_err(e)),
         };
     }
-    let mut checkpoint = None;
+    let mut finalizing_chunk = None;
     if commands.contains(&"upload") {
         let offset: u64 = match req.header("x-goog-upload-offset") {
             None => 0,
@@ -5388,27 +5388,24 @@ fn fb_resumable_command(
                 .parse()
                 .map_err(|_| fb_json_error(400, &format!("invalid X-Goog-Upload-Offset {v:?}")))?,
         };
-        // A finalizing chunk the stored-byte bound refuses is taken back, so the offset does
-        // not advance and the client can resend it once there is room.
         if commands.contains(&"finalize") {
-            checkpoint = store.upload_checkpoint(&id);
-        }
-        match store.append_upload_owned(&id, offset, chunk, now) {
-            Ok(_) => {}
-            Err(StorageError::UploadFinalized) => return Ok(plain_status(400)),
-            Err(StorageError::UploadNotFound) => return Ok(plain_status(404)),
-            // Production (recorded, lean-v5) answers a chunk at the wrong offset with this text.
-            Err(StorageError::UploadOffset { expected }) if state.is_strict() => {
-                return Ok(plain_text(
-                    400,
-                    &format!(
-                        "Client uploaded to the wrong offset ({offset} instead of {expected})."
-                    ),
-                ));
+            finalizing_chunk = Some((offset, chunk));
+        } else {
+            match store.append_upload_owned(&id, offset, chunk, now) {
+                Ok(_) => {}
+                Err(StorageError::UploadFinalized) => return Ok(plain_status(400)),
+                Err(StorageError::UploadNotFound) => return Ok(plain_status(404)),
+                // Production (recorded, lean-v5) answers a chunk at the wrong offset with this text.
+                Err(StorageError::UploadOffset { expected }) if state.is_strict() => {
+                    return Ok(plain_text(
+                        400,
+                        &format!(
+                            "Client uploaded to the wrong offset ({offset} instead of {expected})."
+                        ),
+                    ));
+                }
+                Err(e) => return Ok(fb_core_err(e)),
             }
-            Err(e) => return Ok(fb_core_err(e)),
-        }
-        if !commands.contains(&"finalize") {
             if state.is_strict() {
                 return Ok(plain_text(200, "").with_header("x-goog-upload-status", "active"));
             }
@@ -5420,32 +5417,49 @@ fn fb_resumable_command(
     if commands.contains(&"finalize") {
         // A repeated finalize answers with the outcome of the first one, as upstream
         // replays its recorded response code.
-        match store.upload_phase(&id, now) {
-            Ok(UploadPhase::Finalized(_)) => {
-                return Ok(plain_status(200).with_header("x-goog-upload-status", "final"));
+        let finalized = if let Some(chunk) = finalizing_chunk {
+            finalize_resumable_with_chunk(state, &mut store, &id, chunk, &req, now, signature)
+        } else {
+            // Finalize-only requests retain terminal replay handling in the Firebase caller.
+            match store.upload_phase(&id, now) {
+                Ok(UploadPhase::Finalized(_)) => {
+                    return Ok(plain_status(200).with_header("x-goog-upload-status", "final"));
+                }
+                Ok(UploadPhase::Denied(_)) => {
+                    return Ok(plain_status(403).with_header("x-goog-upload-status", "final"));
+                }
+                Ok(UploadPhase::Cancelled(_)) => return Ok(plain_status(400)),
+                Ok(UploadPhase::Active(_)) => {}
+                Err(e) => return Ok(fb_core_err(e)),
             }
-            Ok(UploadPhase::Denied(_)) => {
-                return Ok(plain_status(403).with_header("x-goog-upload-status", "final"));
-            }
-            Ok(UploadPhase::Cancelled(_)) => return Ok(plain_status(400)),
-            Ok(UploadPhase::Active(_)) => {}
-            Err(e) => return Ok(fb_core_err(e)),
-        }
-        let finalized = finalize_resumable(state, &mut store, &id, &req, now, signature);
-        if let (Err(FinalizeError::Store(StorageError::StoredBytesLimit)), Some(checkpoint)) =
-            (&finalized, checkpoint)
-        {
-            // The offset must not advance for a chunk that was refused: when the session
-            // cannot be taken back, say so instead of the bound.
-            if let Err(error) = store.rollback_upload(&id, checkpoint) {
-                return Ok(fb_core_err(error));
-            }
-        }
+            finalize_resumable(state, &mut store, &id, &req, now, signature)
+                .map_err(FinalizingChunkError::Finalize)
+        };
         let m = finalized.map_err(|e| match e {
-            FinalizeError::Denied(denial) => denial.with_header("x-goog-upload-status", "final"),
-            FinalizeError::Store(StorageError::UploadNotFound) => plain_status(404),
-            FinalizeError::Store(err) => fb_core_err(err),
-            FinalizeError::Auth((status, message)) => {
+            FinalizingChunkError::Append {
+                error: StorageError::UploadFinalized,
+                ..
+            } => plain_status(400),
+            FinalizingChunkError::Append {
+                error: StorageError::UploadNotFound,
+                ..
+            } => plain_status(404),
+            FinalizingChunkError::Append {
+                offset,
+                error: StorageError::UploadOffset { expected },
+            } if state.is_strict() => plain_text(
+                400,
+                &format!("Client uploaded to the wrong offset ({offset} instead of {expected})."),
+            ),
+            FinalizingChunkError::Append { error, .. } => fb_core_err(error),
+            FinalizingChunkError::Finalize(FinalizeError::Denied(denial)) => {
+                denial.with_header("x-goog-upload-status", "final")
+            }
+            FinalizingChunkError::Finalize(FinalizeError::Store(StorageError::UploadNotFound)) => {
+                plain_status(404)
+            }
+            FinalizingChunkError::Finalize(FinalizeError::Store(err)) => fb_core_err(err),
+            FinalizingChunkError::Finalize(FinalizeError::Auth((status, message))) => {
                 principal_refusal_response(Dialect::Firebase, status, &message)
             }
         })?;
@@ -5464,6 +5478,38 @@ enum FinalizeError {
     Denied(StorageResponse),
     Store(StorageError),
     Auth((u16, String)),
+}
+
+enum FinalizingChunkError {
+    Append { offset: u64, error: StorageError },
+    Finalize(FinalizeError),
+}
+
+/// Appends and finalizes one chunk, rolling it back only when the stored-byte bound refuses the commit; transport callers keep their error rendering.
+fn finalize_resumable_with_chunk(
+    state: &StorageState,
+    store: &mut StoreGuard<'_>,
+    id: &UploadId,
+    finalizing_chunk: (u64, Vec<u8>),
+    req: &StorageRequest,
+    now: LogicalInstant,
+    signature: &mut Option<SignatureCheckedToken>,
+) -> Result<ObjectMetadata, FinalizingChunkError> {
+    let (offset, chunk) = finalizing_chunk;
+    let checkpoint = store.upload_checkpoint(id);
+    store
+        .append_upload_owned(id, offset, chunk, now)
+        .map_err(|error| FinalizingChunkError::Append { offset, error })?;
+
+    let finalized = finalize_resumable(state, store, id, req, now, signature);
+    if let (Err(FinalizeError::Store(StorageError::StoredBytesLimit)), Some(checkpoint)) =
+        (&finalized, checkpoint)
+    {
+        store
+            .rollback_upload(id, checkpoint)
+            .map_err(|error| FinalizingChunkError::Finalize(FinalizeError::Store(error)))?;
+    }
+    finalized.map_err(FinalizingChunkError::Finalize)
 }
 
 /// Authorizes and commits a resumable upload against the bytes actually received (the
@@ -7094,26 +7140,22 @@ fn gcs_resumable_put(
         (Some(_), None) => false,
         (None, _) => true,
     };
-    // A finalizing chunk the stored-byte bound refuses is taken back (see the Firebase
-    // dialect's upload command).
-    let checkpoint = finalize.then(|| store.upload_checkpoint(&id)).flatten();
-    store
-        .append_upload_owned(&id, start, chunk, now)
-        .map_err(gcs_core_err)?;
     if finalize {
-        let finalized = finalize_resumable(state, &mut store, &id, &req, now, &mut None);
-        if let (Err(FinalizeError::Store(StorageError::StoredBytesLimit)), Some(checkpoint)) =
-            (&finalized, checkpoint)
-        {
-            store
-                .rollback_upload(&id, checkpoint)
-                .map_err(gcs_core_err)?;
-        }
+        let finalized = finalize_resumable_with_chunk(
+            state,
+            &mut store,
+            &id,
+            (start, chunk),
+            &req,
+            now,
+            &mut None,
+        );
         let m = finalized.map_err(|e| match e {
+            FinalizingChunkError::Append { error, .. } => gcs_core_err(error),
             // The JSON API dialect runs no rules, so a denial cannot happen here.
-            FinalizeError::Denied(denial) => denial,
-            FinalizeError::Store(err) => gcs_core_err(err),
-            FinalizeError::Auth((status, message)) => {
+            FinalizingChunkError::Finalize(FinalizeError::Denied(denial)) => denial,
+            FinalizingChunkError::Finalize(FinalizeError::Store(err)) => gcs_core_err(err),
+            FinalizingChunkError::Finalize(FinalizeError::Auth((status, message))) => {
                 principal_refusal_response(Dialect::Gcs, status, &message)
             }
         })?;
@@ -7121,6 +7163,9 @@ fn gcs_resumable_put(
         apply_predefined_acl(state, &mut store, params, &m);
         return Ok(StorageResponse::json(200, &gcs_json(&m, host)));
     }
+    store
+        .append_upload_owned(&id, start, chunk, now)
+        .map_err(gcs_core_err)?;
     let (received, _) = store.upload_status(&id, now).map_err(gcs_core_err)?;
     Ok(incomplete(
         received,

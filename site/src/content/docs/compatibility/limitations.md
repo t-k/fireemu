@@ -35,6 +35,7 @@ App Hosting and Data Connect are not currently supported. Firebase Extensions su
 - Verifying the signature of a signed URL or a POST policy (their expiry and conditions are checked).
 - Object ACLs other than `allUsers` read, IAM and bucket-level public access.
 - Object composition (`compose`) and notification configuration.
+- **Unrecorded Storage CORS difference under `strict`.** `conformance/storage-strictness-obs/recordings/run-1.json` records JSON API object metadata/media GET and an object URL preflight with configured bucket CORS (C6–C8). The JSON API and upload CORS header set remains unverified against production for absent or empty bucket CORS configuration, bucket, list and ACL endpoints, upload preflights with requested headers, and exposing `Location` on resumable uploads. Fireemu retains its current behavior for those cases; see [Bucket CORS](../../products/storage/#bucket-cors).
 
 ### Realtime Database
 

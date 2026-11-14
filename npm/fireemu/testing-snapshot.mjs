@@ -319,7 +319,18 @@ export async function snapshotInputs(options, root, signal=options.signal) {
       if(config[section]?.[key])config[section][key]=await copyFile(config[section][key],cwd);
     }
     if(Array.isArray(config.storage?.signedUrlKeys)){
-      for(let index=0;index<config.storage.signedUrlKeys.length;index++)config.storage.signedUrlKeys[index]=await copyFile(config.storage.signedUrlKeys[index],cwd);
+      for(let index=0;index<config.storage.signedUrlKeys.length;index++){
+        const value=config.storage.signedUrlKeys[index];
+        if(typeof value!=='string')continue;
+        const source=resolve(cwd,value),destination=join(baseline,`input-${sequence++}-${basename(value)}`);
+        const info=await checked(signal,()=>stat(source));
+        if(!info.isFile())throw Error(`Cannot copy unsupported non-regular input ${JSON.stringify(source)}`);
+        // Key files must be private from creation; cloning would inherit the caller's mode.
+        try{await streamCopy(source,destination,{mode:0o600},signal);}
+        catch(error){await rm(destination,{force:true}).catch(()=>{});throw error;}
+        stats.files++;stats.bytes+=info.size;
+        config.storage.signedUrlKeys[index]=destination;
+      }
     }
     if(withFunctions&&config.functions?.source)config.functions.source=await copySource(config.functions.source,cwd);
   }

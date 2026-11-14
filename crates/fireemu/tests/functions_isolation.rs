@@ -37,9 +37,16 @@ fn have_sdk() -> bool {
 }
 
 fn scratch_codebase(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("fireemu-iso-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let mut id = 0;
+    let dir = loop {
+        let dir =
+            std::env::temp_dir().join(format!("fireemu-iso-{name}-{}-{id}", std::process::id()));
+        match std::fs::create_dir(&dir) {
+            Ok(()) => break dir,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => id += 1,
+            Err(error) => panic!("cannot create scratch directory: {error}"),
+        }
+    };
     // The runners are started with the canonical path, and the scenario finds them by it.
     let dir = std::fs::canonicalize(&dir).unwrap();
     std::os::unix::fs::symlink(
@@ -531,9 +538,16 @@ fn exec_with_inspector(dir: &Path, isolation: &str, inspect: &[&str]) -> Output 
 
 #[test]
 fn a_fixed_debugger_port_cannot_be_shared_by_the_runners_of_one_codebase() {
-    let dir = std::env::temp_dir().join(format!("fireemu-iso-port-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let mut id = 0;
+    let dir = loop {
+        let dir =
+            std::env::temp_dir().join(format!("fireemu-iso-port-{}-{id}", std::process::id()));
+        match std::fs::create_dir(&dir) {
+            Ok(()) => break dir,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => id += 1,
+            Err(error) => panic!("cannot create scratch directory: {error}"),
+        }
+    };
     std::fs::write(dir.join("index.js"), "exports.alpha = () => {};\n").unwrap();
     let output = exec_with_inspector(&dir, "function", &["--inspect-functions", "9330"]);
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();

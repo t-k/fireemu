@@ -36,10 +36,14 @@ The Firestore database field offers the current project's known databases and re
 
 The query panel's **Node.js SDK reproduction** section generates a script using the low-level Firestore Node.js SDK. This preserves typed query values, including 64-bit integers and timestamp nanoseconds. Install the packages listed in the script, save it as `query.cjs`, and set `FIRESTORE_EMULATOR_HOST` to your local Firestore port before running it. The script refuses non-loopback endpoints. Like console queries, it uses local administrator access rather than testing client Security Rules.
 
+Query drafts are retained per database. Firestore views refresh affected documents by their changed paths, with a membership refresh when a row lacks a usable update time.
+
 ## Connection checks and shareable Functions filters
 
 The header's connection badge describes responses from the control API, not the health of every product listener. Its last successful check uses wall-clock time, independently of the emulator's virtual clock. A failed check retains the previous successful timestamp; changing the selected session clears it until that target answers.
 
 Functions function-name and log-level filters are kept in the URL. Search text stays in the tab's session storage, scoped to the selected session and project, unless you explicitly select **Include search text in the shared link** and use **Copy filter link**. Review search text before sharing it. Links contain filter settings, not a saved copy of log records; records may no longer be retained when another reader opens the link. When browser storage is unavailable, private text is retained only while the page remains mounted.
+
+An event link selects its session, including when revisited with browser Back or Forward. If the event is no longer retained, the page reports that it expired. Connection changes are announced to assistive technology.
 
 When clipboard access fails, the Overview page offers a focused, read-only text field for manual keyboard copying instead of reporting success.

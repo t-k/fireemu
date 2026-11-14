@@ -639,7 +639,7 @@
     },
     "crates/fireemu-adapter-functions/src/runtime/task_completion_tests.rs": {
       "kind": "sha256",
-      "value": "7128943751dac57ef3119ab5649aaca5d7e716bcd70e9a70beca7afa5779f030"
+      "value": "4dabdba26f0172cb9fbc17d1e30f92831b32b3e8327ecde981088f2cf2c5516c"
     },
     "crates/fireemu-adapter-functions/src/task_raw_body_tests.rs": {
       "kind": "sha256",
@@ -651,7 +651,7 @@
     },
     "crates/fireemu-adapter-functions/src/tasks.rs": {
       "kind": "sha256",
-      "value": "ec047ba906c39214544d2132c17d31d699ca95c7645b6f2ed728ff01354cdaf1"
+      "value": "812b52a8d6a8ec8c30e5a65d7411462f1a681eddc6fda300b3df58ab1e0627b0"
     },
     "crates/fireemu-adapter-functions/src/tasks_production.rs": {
       "kind": "sha256",
@@ -2019,7 +2019,7 @@
     },
     "crates/fireemu/src/functions_python_reload_tests.rs": {
       "kind": "sha256",
-      "value": "a961ef4d379ac9dced72626eb4840f3792285a051c6beac30d0e6bcd95406b2a"
+      "value": "9f16ba23ec5e8cd32f9e6a8a5ada4bc8dc77ee13d3dfbe5149926ed5aac3cfaa"
     },
     "crates/fireemu/src/functions_python_symlink_tests.rs": {
       "kind": "sha256",
@@ -2031,7 +2031,7 @@
     },
     "crates/fireemu/src/hosting.rs": {
       "kind": "sha256",
-      "value": "6fbd0fcad2a59e2876140e906e20fdac62d2b303638fe78fdb5534a05308c0e4"
+      "value": "7e498f22bfb7b1db8a7bf7122e5ec2d3641c76084a2f61631ae55cc271fd860d"
     },
     "crates/fireemu/src/hosting/content-type-samples.json": {
       "kind": "json-semantic",
@@ -2091,7 +2091,7 @@
     },
     "crates/fireemu/src/main_hosting_multisite_tests.rs": {
       "kind": "sha256",
-      "value": "409815c92b5e35da215452ca2d8cbeab6cf1acbb267035e918fcabd6964095ed"
+      "value": "5172120d3c4a3917a5d96ec9b5ad7bef799df956ddc3f6ee9649b3fc2993b5a1"
     },
     "crates/fireemu/src/managed_storage.rs": {
       "kind": "sha256",

@@ -318,6 +318,9 @@ export async function snapshotInputs(options, root, signal=options.signal) {
     for(const [section,key] of [['rules','source'],['firestore','indexFile'],['firestore','textIndexDefinitionFile'],['storage','rules'],...(withFunctions?[['functions','manifest']]:[])]){
       if(config[section]?.[key])config[section][key]=await copyFile(config[section][key],cwd);
     }
+    if(Array.isArray(config.storage?.signedUrlKeys)){
+      for(let index=0;index<config.storage.signedUrlKeys.length;index++)config.storage.signedUrlKeys[index]=await copyFile(config.storage.signedUrlKeys[index],cwd);
+    }
     if(withFunctions&&config.functions?.source)config.functions.source=await copySource(config.functions.source,cwd);
   }
   if(!withFunctions&&config.functions)config.functions=config.functions.clock===undefined?undefined:{clock:config.functions.clock};

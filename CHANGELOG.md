@@ -10,7 +10,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Added
 
-- Python Functions source changes reload through a fresh runner while retaining the codebase virtual environment. Invalid candidates keep the last working generation; Python bytecode caches do not trigger reloads.
+- Python Functions source changes reload through a fresh runner while retaining the codebase virtual environment. Invalid candidates keep the last working generation; Python bytecode caches do not trigger reloads. Ordinary source symlinks to files or directories are watched and materialized in each snapshot, including targets outside the source directory; cyclic, dangling and special-file targets are refused.
 
 - Task queues: under the strict profile a queue with `maxDispatchesPerSecond` 1 starts with a burst of 10 dispatches and then refills at 1 per second, as a production recording of 120 tasks due at one instant showed (2026-11-13); a rate of 500 has a burst of 100 (production's read-back). Other rates and the emulator profile keep the official emulator's bucket.
 - Task queues: the emulator profile deletes pending tasks and returns the official emulator's success response; GET and PUT on task routes return its 404 response. A task already dispatched can also be deleted once, as in firebase-tools 15.28.2; the second delete of a name returns 404.

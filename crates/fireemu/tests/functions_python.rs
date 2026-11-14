@@ -766,3 +766,82 @@ fn python_source_edits_reload_reject_and_recover_without_watching_the_venv() {
 fn python_source_edits_keep_last_good_generation_with_fixed_inspector_option() {
     run_python_source_reload_scenario(true);
 }
+
+#[test]
+#[ignore = "requires the fixture virtual environment; CI creates it"]
+fn python_sibling_symlink_edits_reload_and_bad_linked_source_keeps_last_good() {
+    let dir = scratch("sibling-source-reload");
+    let source = dir.join("code");
+    let shared = dir.join("shared");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::write(source.join("requirements.txt"), "firebase-functions\n").unwrap();
+    std::os::unix::fs::symlink(fixture().join("venv"), source.join("venv")).unwrap();
+    std::os::unix::fs::symlink("../shared", source.join("shared")).unwrap();
+    std::fs::write(shared.join("__init__.py"), "\n").unwrap();
+    std::fs::write(shared.join("version.py"), "VALUE = 'initial'\n").unwrap();
+    std::fs::write(
+        source.join("main.py"),
+        "import os\nfrom firebase_functions import https_fn\nfrom shared.version import VALUE\n@https_fn.on_request()\ndef hello(request):\n    return {'revision': 'initial', 'value': VALUE, 'feature': os.path.isdir('shared/feature'), 'pid': os.getpid()}\n",
+    )
+    .unwrap();
+    let firebase = firebase_json(&dir, &source, None);
+    let controller = r#"
+import json, pathlib, sys, time, urllib.request
+source = pathlib.Path(sys.argv[1])
+shared = pathlib.Path(sys.argv[2])
+url = 'http://' + __import__('os').environ['FIREEMU_FUNCTIONS_HOST'] + '/demo-py/us-central1/hello'
+def get():
+    with urllib.request.urlopen(url, timeout=2) as response:
+        return json.load(response)
+def wait_value(value, old_pid=None, revision=None, feature=None):
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        try:
+            result = get()
+            if result.get('value') == value and (old_pid is None or result.get('pid') != old_pid) and (revision is None or result.get('revision') == revision) and (feature is None or result.get('feature') == feature):
+                return result
+        except Exception:
+            pass
+        time.sleep(.1)
+    raise AssertionError('timed out waiting for linked value ' + value)
+initial = wait_value('initial', feature=False)
+(shared / 'version.py').write_text("VALUE = 'linked-edit'\n")
+linked = wait_value('linked-edit', initial['pid'], feature=False)
+(shared / 'feature').mkdir()
+feature = wait_value('linked-edit', linked['pid'], feature=True)
+(source / 'main.py').write_text("import os\nfrom firebase_functions import https_fn\nfrom shared.version import VALUE\n@https_fn.on_request()\ndef hello(request):\n    return {'revision': 'main-edit', 'value': VALUE, 'feature': os.path.isdir('shared/feature'), 'pid': os.getpid()}\n")
+main = wait_value('linked-edit', feature['pid'], 'main-edit', True)
+(shared / 'version.py').write_text("VALUE =\n")
+time.sleep(2)
+assert get() == main, 'an invalid linked target replaced the last-known-good generation'
+(shared / 'version.py').write_text("VALUE = 'recovered'\n")
+recovered = wait_value('recovered', main['pid'], 'main-edit', True)
+assert recovered['pid'] != main['pid']
+print(json.dumps({'initial': initial, 'linked': linked, 'feature': feature, 'main': main, 'recovered': recovered}))
+"#;
+    let output = exec(
+        &firebase,
+        &[],
+        &[
+            "python3",
+            "-c",
+            controller,
+            &source.display().to_string(),
+            &shared.display().to_string(),
+        ],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(stderr.contains("reloaded generation"), "{stderr}");
+    assert!(
+        stderr.contains("keeping the last-known-good generation"),
+        "{stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

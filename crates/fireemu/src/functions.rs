@@ -567,6 +567,15 @@ fn hash_source_stamp_metadata(
     hash
 }
 
+fn hash_source_stamp_typed_path(hash: u64, relative: &Path, tag: u8) -> u64 {
+    relative
+        .to_string_lossy()
+        .bytes()
+        .chain([0, tag])
+        .fold(hash, update_watch_hash)
+}
+
+#[cfg(test)]
 fn hash_source_file(
     child: &Path,
     relative: &Path,
@@ -574,6 +583,23 @@ fn hash_source_file(
     stamp: &mut FunctionsSourceStamp,
     charge: &mut dyn FnMut(u64, u64) -> Result<(), String>,
     cancelled: &AtomicBool,
+) -> Result<(), String> {
+    let (mut file, _) = open_source_regular_file(child, "watch")?;
+    hash_open_source_file(
+        child, relative, &mut file, version, stamp, charge, cancelled, false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)] // Keep the shared streaming inputs explicit.
+fn hash_open_source_file(
+    child: &Path,
+    relative: &Path,
+    file: &mut std::fs::File,
+    version: FunctionsSourceFileVersion,
+    stamp: &mut FunctionsSourceStamp,
+    charge: &mut dyn FnMut(u64, u64) -> Result<(), String>,
+    cancelled: &AtomicBool,
+    python_signature_tags: bool,
 ) -> Result<(), String> {
     stamp.change_guard = hash_source_stamp_metadata(
         stamp.change_guard,
@@ -583,14 +609,17 @@ fn hash_source_file(
         version.changed_seconds,
         version.changed_nanos,
     );
-    for byte in relative.to_string_lossy().bytes().chain([0]) {
-        stamp.content_signature = update_watch_hash(stamp.content_signature, byte);
+    if python_signature_tags {
+        stamp.content_signature =
+            hash_source_stamp_typed_path(stamp.content_signature, relative, b'F');
+    } else {
+        for byte in relative.to_string_lossy().bytes().chain([0]) {
+            stamp.content_signature = update_watch_hash(stamp.content_signature, byte);
+        }
     }
-    let mut file = std::fs::File::open(child)
-        .map_err(|error| format!("watch {}: {error}", child.display()))?;
     let mut read_bytes = 0_u64;
     stream_source_chunks(
-        &mut file,
+        file,
         |bytes| {
             for byte in bytes {
                 stamp.change_guard = update_watch_hash(stamp.change_guard, *byte);
@@ -611,6 +640,70 @@ fn hash_source_file(
     stamp.tracked_files = stamp.tracked_files.saturating_add(1);
     stamp.tracked_bytes = stamp.tracked_bytes.saturating_add(version.len);
     Ok(())
+}
+
+fn open_source_regular_file(
+    path: &Path,
+    operation: &str,
+) -> Result<(std::fs::File, std::fs::Metadata), String> {
+    open_source_regular_file_after(path, operation, || Ok(()))
+}
+
+fn open_source_regular_file_after(
+    path: &Path,
+    operation: &str,
+    before_open: impl FnOnce() -> Result<(), String>,
+) -> Result<(std::fs::File, std::fs::Metadata), String> {
+    before_open()?;
+    #[cfg(unix)]
+    let file = {
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        let mut options = std::fs::OpenOptions::new();
+        options
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+        options
+            .open(path)
+            .map_err(|error| format!("{operation} {}: {error}", path.display()))?
+    };
+    #[cfg(not(unix))]
+    let file = std::fs::File::open(path)
+        .map_err(|error| format!("{operation} {}: {error}", path.display()))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("{operation} {}: {error}", path.display()))?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "{operation} {}: source target is not a regular file",
+            path.display()
+        ));
+    }
+    Ok((file, metadata))
+}
+
+fn resolve_source_entry(
+    path: &Path,
+    is_symlink: bool,
+    follow_symlinks: bool,
+    operation: &str,
+) -> Result<PathBuf, String> {
+    if is_symlink && !follow_symlinks {
+        return Err(format!(
+            "{operation} {}: symbolic links outside node_modules are not supported",
+            path.display()
+        ));
+    }
+    if is_symlink {
+        path.canonicalize().map_err(|error| {
+            format!(
+                "{operation} {}: cannot resolve source link: {error}",
+                path.display()
+            )
+        })
+    } else {
+        Ok(path.to_path_buf())
+    }
 }
 
 #[cfg(test)]
@@ -634,7 +727,6 @@ fn functions_source_stamp_with_file_version(
 }
 
 struct FunctionsSourceTraversal<'a> {
-    root: &'a Path,
     ignores: &'a [String],
     entry_budget: FunctionsSourceEntryBudget,
     byte_budget: FunctionsSourceByteBudget,
@@ -642,6 +734,8 @@ struct FunctionsSourceTraversal<'a> {
     cancelled: &'a AtomicBool,
     exclude_python_cache_artifacts: bool,
     exclude_python_venv: bool,
+    follow_source_symlinks: bool,
+    active_directories: Vec<PathBuf>,
 }
 
 impl FunctionsSourceTraversal<'_> {
@@ -669,55 +763,89 @@ impl FunctionsSourceTraversal<'_> {
     fn scan_directory(
         &mut self,
         directory: &Path,
+        relative_directory: &Path,
         stamp: &mut FunctionsSourceStamp,
         depth: usize,
         file_version: &dyn Fn(&std::fs::Metadata) -> FunctionsSourceFileVersion,
     ) -> Result<(), String> {
-        for entry in self.entries(directory, "watch", depth)? {
-            ensure_source_work_active(self.cancelled)?;
-            let child = entry.path();
-            let relative = child.strip_prefix(self.root).unwrap_or(&child);
-            if ignored_reload_path(relative, self.ignores)
-                || (self.exclude_python_cache_artifacts && is_python_cache_path(relative))
-            {
-                continue;
-            }
-            let kind = entry
-                .file_type()
-                .map_err(|error| format!("watch {}: {error}", child.display()))?;
-            if kind.is_dir() {
-                self.scan_directory(&child, stamp, depth.saturating_add(1), file_version)?;
-            } else if kind.is_file() {
-                self.hash_file(&entry, &child, relative, stamp, file_version)?;
-            } else if kind.is_symlink() {
-                return Err(format!(
-                    "watch {}: symbolic links outside node_modules are not supported",
-                    child.display()
-                ));
-            }
+        let identity = directory
+            .canonicalize()
+            .map_err(|error| format!("watch {}: {error}", directory.display()))?;
+        if self.active_directories.contains(&identity) {
+            return Err(format!(
+                "watch {}: source directory link creates a cycle",
+                relative_directory.display()
+            ));
         }
-        Ok(())
+        self.active_directories.push(identity);
+        let result = (|| {
+            for entry in self.entries(directory, "watch", depth)? {
+                ensure_source_work_active(self.cancelled)?;
+                let child = entry.path();
+                let relative = relative_directory.join(entry.file_name());
+                if ignored_reload_path(&relative, self.ignores)
+                    || (self.exclude_python_cache_artifacts && is_python_cache_path(&relative))
+                {
+                    continue;
+                }
+                let kind = entry
+                    .file_type()
+                    .map_err(|error| format!("watch {}: {error}", child.display()))?;
+                let resolved = resolve_source_entry(
+                    &child,
+                    kind.is_symlink(),
+                    self.follow_source_symlinks,
+                    "watch",
+                )?;
+                let metadata = std::fs::metadata(&resolved)
+                    .map_err(|error| format!("watch {}: {error}", child.display()))?;
+                if metadata.is_dir() {
+                    if self.follow_source_symlinks {
+                        stamp.content_signature =
+                            hash_source_stamp_typed_path(stamp.content_signature, &relative, b'D');
+                        stamp.change_guard =
+                            hash_source_stamp_typed_path(stamp.change_guard, &relative, b'D');
+                    }
+                    self.scan_directory(
+                        &resolved,
+                        &relative,
+                        stamp,
+                        depth.saturating_add(1),
+                        file_version,
+                    )?;
+                } else if metadata.is_file() {
+                    self.hash_file(&resolved, &relative, stamp, file_version)?;
+                } else if self.follow_source_symlinks {
+                    return Err(format!(
+                        "watch {}: source target is neither a regular file nor a directory",
+                        child.display()
+                    ));
+                }
+            }
+            Ok(())
+        })();
+        self.active_directories.pop();
+        result
     }
 
     fn hash_file(
         &mut self,
-        entry: &std::fs::DirEntry,
         child: &Path,
         relative: &Path,
         stamp: &mut FunctionsSourceStamp,
         file_version: &dyn Fn(&std::fs::Metadata) -> FunctionsSourceFileVersion,
     ) -> Result<(), String> {
-        let metadata = entry
-            .metadata()
-            .map_err(|error| format!("watch {}: {error}", child.display()))?;
+        let (mut file, metadata) = open_source_regular_file(child, "watch")?;
         self.byte_budget.claim(child, metadata.len())?;
-        hash_source_file(
+        hash_open_source_file(
             child,
             relative,
+            &mut file,
             file_version(&metadata),
             stamp,
             self.charge,
             self.cancelled,
+            self.follow_source_symlinks,
         )
     }
 
@@ -725,41 +853,69 @@ impl FunctionsSourceTraversal<'_> {
         &mut self,
         source: &Path,
         destination: &Path,
+        relative_directory: &Path,
         depth: usize,
     ) -> Result<(), String> {
-        for entry in self.entries(source, "snapshot", depth)? {
-            ensure_source_work_active(self.cancelled)?;
-            let path = entry.path();
-            let relative = path.strip_prefix(self.root).unwrap_or(&path);
-            // Watcher/deploy ignores must not remove files required by the runtime.
-            if ignored_reload_path(relative, &[])
-                || (self.exclude_python_venv
-                    && relative
-                        .components()
-                        .next()
-                        .is_some_and(|component| component.as_os_str() == "venv"))
-                || (self.exclude_python_cache_artifacts && is_python_cache_path(relative))
-            {
-                continue;
-            }
-            let kind = entry
-                .file_type()
-                .map_err(|error| format!("snapshot {}: {error}", path.display()))?;
-            let target = destination.join(relative);
-            if kind.is_dir() {
-                std::fs::create_dir_all(&target)
-                    .map_err(|error| format!("snapshot {}: {error}", target.display()))?;
-                self.copy_directory(&path, destination, depth.saturating_add(1))?;
-            } else if kind.is_file() {
-                self.copy_file(&path, &target)?;
-            } else if kind.is_symlink() {
-                return Err(format!(
-                    "snapshot {}: symbolic links outside node_modules are not supported",
-                    path.display()
-                ));
-            }
+        let identity = source
+            .canonicalize()
+            .map_err(|error| format!("snapshot {}: {error}", source.display()))?;
+        if self.active_directories.contains(&identity) {
+            return Err(format!(
+                "snapshot {}: source directory link creates a cycle",
+                relative_directory.display()
+            ));
         }
-        Ok(())
+        self.active_directories.push(identity);
+        let result = (|| {
+            for entry in self.entries(source, "snapshot", depth)? {
+                ensure_source_work_active(self.cancelled)?;
+                let path = entry.path();
+                let relative = relative_directory.join(entry.file_name());
+                // Watcher/deploy ignores must not remove files required by the runtime.
+                if ignored_reload_path(&relative, &[])
+                    || (self.exclude_python_venv
+                        && relative
+                            .components()
+                            .next()
+                            .is_some_and(|component| component.as_os_str() == "venv"))
+                    || (self.exclude_python_cache_artifacts && is_python_cache_path(&relative))
+                {
+                    continue;
+                }
+                let kind = entry
+                    .file_type()
+                    .map_err(|error| format!("snapshot {}: {error}", path.display()))?;
+                let resolved = resolve_source_entry(
+                    &path,
+                    kind.is_symlink(),
+                    self.follow_source_symlinks,
+                    "snapshot",
+                )?;
+                let metadata = std::fs::metadata(&resolved)
+                    .map_err(|error| format!("snapshot {}: {error}", path.display()))?;
+                let target = destination.join(&relative);
+                if metadata.is_dir() {
+                    std::fs::create_dir_all(&target)
+                        .map_err(|error| format!("snapshot {}: {error}", target.display()))?;
+                    self.copy_directory(
+                        &resolved,
+                        destination,
+                        &relative,
+                        depth.saturating_add(1),
+                    )?;
+                } else if metadata.is_file() {
+                    self.copy_file(&resolved, &target)?;
+                } else if self.follow_source_symlinks {
+                    return Err(format!(
+                        "snapshot {}: source target is neither a regular file nor a directory",
+                        path.display()
+                    ));
+                }
+            }
+            Ok(())
+        })();
+        self.active_directories.pop();
+        result
     }
 
     fn copy_file(&mut self, source: &Path, target: &Path) -> Result<(), String> {
@@ -767,12 +923,8 @@ impl FunctionsSourceTraversal<'_> {
             std::fs::create_dir_all(parent)
                 .map_err(|error| format!("snapshot {}: {error}", parent.display()))?;
         }
-        let mut source_file = std::fs::File::open(source)
-            .map_err(|error| format!("snapshot {}: {error}", source.display()))?;
-        let expected_len = source_file
-            .metadata()
-            .map_err(|error| format!("snapshot {}: {error}", source.display()))?
-            .len();
+        let (mut source_file, metadata) = open_source_regular_file(source, "snapshot")?;
+        let expected_len = metadata.len();
         self.byte_budget.claim(source, expected_len)?;
         let mut target_file = std::fs::File::create(target)
             .map_err(|error| format!("snapshot {}: {error}", target.display()))?;
@@ -860,7 +1012,6 @@ fn functions_source_stamp_with_charge_and_file_version_and_python_cache(
     };
     charge(1, 0)?;
     FunctionsSourceTraversal {
-        root,
         ignores,
         entry_budget: FunctionsSourceEntryBudget::default(),
         byte_budget: FunctionsSourceByteBudget::default(),
@@ -868,8 +1019,10 @@ fn functions_source_stamp_with_charge_and_file_version_and_python_cache(
         cancelled,
         exclude_python_cache_artifacts,
         exclude_python_venv: false,
+        follow_source_symlinks: exclude_python_cache_artifacts,
+        active_directories: Vec::new(),
     }
-    .scan_directory(root, &mut stamp, 0, file_version)?;
+    .scan_directory(root, Path::new(""), &mut stamp, 0, file_version)?;
     Ok(stamp)
 }
 
@@ -1414,7 +1567,6 @@ exit 0
     std::fs::create_dir_all(&source_path)
         .map_err(|error| format!("snapshot {}: {error}", source_path.display()))?;
     FunctionsSourceTraversal {
-        root: &source_root,
         ignores,
         entry_budget: FunctionsSourceEntryBudget::default(),
         byte_budget: FunctionsSourceByteBudget::default(),
@@ -1422,8 +1574,10 @@ exit 0
         cancelled,
         exclude_python_cache_artifacts: link_python_venv,
         exclude_python_venv: link_python_venv,
+        follow_source_symlinks: link_python_venv,
+        active_directories: Vec::new(),
     }
-    .copy_directory(&source_root, &source_path, 0)
+    .copy_directory(&source_root, &source_path, Path::new(""), 0)
     .and_then(|()| {
         for (level, dependencies) in dependencies {
             let ancestor = source_path
@@ -7928,6 +8082,10 @@ mod tests {
     mod python_reload_tests {
         include!("functions_python_reload_tests.rs");
     }
+    #[cfg(unix)]
+    mod python_reload_symlink_tests {
+        include!("functions_python_symlink_tests.rs");
+    }
     use std::collections::{BTreeMap, BTreeSet};
     #[cfg(unix)]
     use std::ffi::OsString;
@@ -10002,7 +10160,6 @@ root	unchanged	small	firstGen";
         };
         let cancelled = AtomicBool::new(false);
         let mut traversal = FunctionsSourceTraversal {
-            root: &root,
             ignores: &[],
             entry_budget: FunctionsSourceEntryBudget::default(),
             byte_budget: FunctionsSourceByteBudget::default(),
@@ -10010,6 +10167,8 @@ root	unchanged	small	firstGen";
             cancelled: &cancelled,
             exclude_python_cache_artifacts: false,
             exclude_python_venv: false,
+            follow_source_symlinks: false,
+            active_directories: Vec::new(),
         };
 
         let error = traversal.copy_file(&source, &target).unwrap_err();

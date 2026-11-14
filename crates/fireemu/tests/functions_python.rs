@@ -665,6 +665,10 @@ fn run_python_source_reload_scenario(with_fixed_inspector: bool) {
     std::fs::write(source.join("requirements.txt"), "firebase-functions\n").unwrap();
     std::os::unix::fs::symlink(fixture().join("venv"), source.join("venv")).unwrap();
     std::fs::write(source.join("helper.py"), "VALUE = 'last-good'\n").unwrap();
+    // The nested package exists before startup: creating a directory is a source change (an empty
+    // directory is an importable namespace package), so only its `__pycache__` may appear later.
+    std::fs::create_dir_all(source.join("nested")).unwrap();
+    std::fs::write(source.join("nested").join("module.py"), "VALUE = 1\n").unwrap();
     std::fs::write(source.join("main.py"), "from firebase_functions import https_fn\n@https_fn.on_request()\ndef hello(request):\n    import helper\n    return {'revision': helper.VALUE}\n").unwrap();
     let firebase = firebase_json(&dir, &source, None);
     let controller = r#"
@@ -706,7 +710,7 @@ with marker.open('x') as file:
     file.write('changed')
 (source / '__pycache__').mkdir(exist_ok=True)
 (source / '__pycache__' / 'module.pyc').write_text('root cache')
-(source / 'nested' / '__pycache__').mkdir(parents=True, exist_ok=True)
+(source / 'nested' / '__pycache__').mkdir()
 (source / 'nested' / '__pycache__' / 'module.pyo').write_text('nested cache')
 time.sleep(2)
 assert get()['pid'] == initial['pid'], 'a venv or Python cache change restarted the Python process'

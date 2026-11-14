@@ -627,6 +627,31 @@ mod tests {
     use serde_json::Value;
 
     #[test]
+    fn query_components_decode_every_hex_byte_with_prefixes_and_both_cases() {
+        for (prefix, decoded_prefix) in [("", b"".as_slice()), ("x", b"x"), ("+", b" ")] {
+            for byte in 0..=u8::MAX {
+                for escape in [format!("%{byte:02x}"), format!("%{byte:02X}")] {
+                    let input = format!("{prefix}{escape}");
+                    let mut expected = decoded_prefix.to_vec();
+                    expected.push(byte);
+                    assert_eq!(
+                        super::decode_query_component(&input),
+                        Ok(expected),
+                        "{input}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn query_components_reject_truncated_percent_escapes() {
+        for input in ["%", "%0", "x%", "x%0", "%41%", "%41%0"] {
+            assert_eq!(super::decode_query_component(input), Err(()), "{input}");
+        }
+    }
+
+    #[test]
     fn task_identity_filter_removes_mixed_case_and_preserves_order() {
         let headers = vec![
             ("first".into(), "a".into()),
